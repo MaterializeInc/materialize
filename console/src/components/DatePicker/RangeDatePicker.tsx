@@ -7,9 +7,17 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { IconButton } from "@chakra-ui/button";
-import { Grid, GridItem, HStack, VStack } from "@chakra-ui/layout";
-import { ButtonProps, StackProps, Text, useTheme } from "@chakra-ui/react";
+import {
+  ButtonProps,
+  Grid,
+  GridItem,
+  HStack,
+  IconButton,
+  StackProps,
+  Text,
+  useTheme,
+  VStack,
+} from "@chakra-ui/react";
 import { DPDay, useDatePicker } from "@rehookify/datepicker";
 import React from "react";
 

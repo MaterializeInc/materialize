@@ -21,6 +21,9 @@ use anyhow::{Context, Result};
 const AST_DEFS_MOD: &str = "src/ast/defs.rs";
 
 fn main() -> Result<()> {
+    println!("cargo:rerun-if-changed={AST_DEFS_MOD}");
+    println!("cargo:rerun-if-changed=src/ast/defs");
+
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").context("Cannot read OUT_DIR env var")?);
     let ir = mz_walkabout::load(AST_DEFS_MOD)?;
 

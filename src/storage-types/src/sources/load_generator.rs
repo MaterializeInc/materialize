@@ -750,6 +750,9 @@ impl AlterCompatible for LoadGeneratorSourceExportDetails {
     }
 }
 
+/// An update produced by a [`Generator`].
+pub type GeneratorUpdate = (LoadGeneratorOutput, Event<Option<MzOffset>, (Row, Diff)>);
+
 pub trait Generator {
     /// Returns a function that produces rows and batch information.
     fn by_seed(
@@ -758,6 +761,33 @@ pub trait Generator {
         seed: Option<u64>,
         resume_offset: MzOffset,
     ) -> Box<dyn Iterator<Item = (LoadGeneratorOutput, Event<Option<MzOffset>, (Row, Diff)>)>>;
+
+    /// Returns the share of the updates of `by_seed` that worker `worker_index` of
+    /// `worker_count` produces. Worker 0 is the primary worker.
+    ///
+    /// The shares of all workers together contain exactly the messages of
+    /// `by_seed`, possibly in a different order within an offset. The progress
+    /// events of each share are a prefix of those of `by_seed`, and the share
+    /// of the primary worker contains all of them. A share that ends early has
+    /// all its messages before its last progress event, so the worker can drop
+    /// its capabilities once the share ends.
+    ///
+    /// The default produces all updates on the primary worker and none on the
+    /// others.
+    fn by_seed_for_worker(
+        &self,
+        now: NowFn,
+        seed: Option<u64>,
+        resume_offset: MzOffset,
+        worker_index: usize,
+        _worker_count: usize,
+    ) -> Box<dyn Iterator<Item = GeneratorUpdate>> {
+        if worker_index == 0 {
+            self.by_seed(now, seed, resume_offset)
+        } else {
+            Box::new(std::iter::empty())
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Default)]

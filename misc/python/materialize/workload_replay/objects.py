@@ -584,9 +584,8 @@ def run_create_objects_part_2(
             for name, source in items["sources"].items():
                 source_sql = source["create_sql"]
                 if source["type"] == "kafka":
-                    # Locally we recreate Kafka topics with a single partition,
-                    # so drop START OFFSET which lists per-partition offsets.
-                    # TODO: Remove when fixed: SS-161
+                    # Recreated topics have one partition and fresh data, so
+                    # captured per-partition offsets do not apply.
                     source_sql = re.sub(
                         r",?\s*START\s+OFFSET\s*=\s*\([^)]*\)",
                         "",
@@ -607,14 +606,6 @@ def run_create_objects_part_2(
                             r",?\s*DETAILS\s*=\s*'[^']*'",
                             "",
                             child["create_sql"],
-                            flags=re.IGNORECASE,
-                        )
-                        # An empty `TEXT COLUMNS = ()` panics the planner; drop it.
-                        # TODO: Remove when fixed: SS-159
-                        create_sql = re.sub(
-                            r",?\s*TEXT\s+COLUMNS\s*=\s*\(\s*\)",
-                            "",
-                            create_sql,
                             flags=re.IGNORECASE,
                         )
                         # `EXCLUDE COLUMNS` names upstream columns we don't
@@ -683,9 +674,8 @@ def run_create_objects_part_2(
                     fqn = f"{db_name}.{schema_name}.{name}"
                     create_sql = obj["create_sql"]
                     if obj_type == "sinks":
-                        # `VERSION = N` is an internal-only option emitted on
-                        # ALTER SINK; the planner rejects it on CREATE.
-                        # TODO: Remove when fixed: SS-160
+                        # Older captures contain an internal sink VERSION from
+                        # ALTER SINK. Recreate these sinks at their initial version.
                         create_sql = re.sub(
                             r",?\s*VERSION\s*=\s*\d+",
                             "",

@@ -10,7 +10,7 @@
 import { IPostgresInterval } from "~/api/materialize";
 import { LagInfo } from "~/api/materialize/cluster/materializationLag";
 import { ConnectorStatus } from "~/api/materialize/types";
-import { WorkflowGraphNode } from "~/api/materialize/workflowGraphNodes";
+import { WorkflowGraphCanvasNode } from "~/api/materialize/workflowGraphNodes";
 import colors from "~/theme/colors";
 import { kebabToTitleCase } from "~/util";
 
@@ -159,7 +159,7 @@ export function getLagInfoColorScheme(lagInfo: LagInfo) {
   return LAG_STATUS_TO_COLOR_SCHEME.UP_TO_DATE;
 }
 
-export function formatObjectType(node: WorkflowGraphNode) {
+export function formatObjectType(node: WorkflowGraphCanvasNode) {
   if (node.sourceType === "subsource") {
     return "Subsource";
   }

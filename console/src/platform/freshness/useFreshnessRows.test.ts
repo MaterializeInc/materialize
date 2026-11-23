@@ -8,32 +8,25 @@
 // by the Apache License, Version 2.0.
 
 import { renderHook } from "@testing-library/react";
-import parse from "postgres-interval";
 import { describe, expect, it } from "vitest";
 
 import { DataPoint, GraphLineSeries } from "~/components/FreshnessGraph/types";
 import { FreshnessObject } from "~/platform/clusters/queries";
 
-import { HydrationCounts } from "./queries";
+import { HydrationCounts, LagPercentiles } from "./queries";
 import { FreshnessRowsParams, useFreshnessRows } from "./useFreshnessRows";
 
 const KEYS = ["u1", "u2", "u3"];
 
-const historicalData: DataPoint[] = Array.from({ length: 60 }, (_, bin) => ({
-  timestamp: bin,
-  lag: Object.fromEntries(
-    KEYS.map((key, i) => [
+const percentilesByObjectId = new Map<string, LagPercentiles>(
+  KEYS.map((key, i) => {
+    const lag = 400 + i * 1_000;
+    return [
       key,
-      {
-        queryable: true as const,
-        totalMs: 400 + i * 1_000 + (bin % 5) * 10,
-        interval: parse("00:00:01"),
-        schemaName: "public",
-        objectName: key,
-      },
-    ]),
-  ),
-}));
+      { peak: lag + 40, p90: lag + 30, p99: lag + 40, p99_9: lag + 40 },
+    ];
+  }),
+);
 
 const lines: GraphLineSeries[] = KEYS.map((key) => ({
   key,
@@ -71,8 +64,8 @@ const latestByObjectId = new Map<string, number | null>(
 
 const baseParams: FreshnessRowsParams = {
   lines,
-  historicalData,
   latestByObjectId,
+  percentilesByObjectId,
   objectsById,
   hydrationByObjectId,
   typeFilters: [],

@@ -1486,6 +1486,7 @@ mod tests {
                 HollowRollup {
                     key: PartialRollupKey::new(seqno, &RollupId::new()),
                     encoded_size_bytes: None,
+                    finalized: false,
                 },
             );
             leader.collections.trace.roundtrip_structure = false;

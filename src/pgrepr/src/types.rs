@@ -534,6 +534,44 @@ impl Type {
         Type::from_oid_and_typmod(oid, -1)
     }
 
+    /// The name of the type with OID `oid`.
+    ///
+    /// Our existing [`Type::from_oid`] only accepts `oid`s that `rust-postgres`
+    /// knows about, thus we need a match statement to handle our custom `oid`s.
+    ///
+    /// We use this function such that our builtin relation `mz_catalog.mz_columns`
+    /// can get a type's name from its durably stored `oid` using a SQL scalar function.
+    /// However, we can replace the scalar function with a join on `mz_builtin_types` once it's been
+    /// implemented.
+    ///
+    /// TODO(SQL-495): Remove this function once `mz_builtin_types` is merged.
+    pub fn name_from_oid(oid: u32) -> Option<&'static str> {
+        let typ = match oid {
+            oid::TYPE_NAME_OID => Type::Name,
+            oid::TYPE_NAME_ARRAY_OID => Type::Array(Box::new(Type::Name)),
+            o if o == postgres_types::Type::ACLITEM.oid() => Type::AclItem,
+            o if o == postgres_types::Type::ACLITEM_ARRAY.oid() => {
+                Type::Array(Box::new(Type::AclItem))
+            }
+            oid::TYPE_UINT2_OID => Type::UInt2,
+            oid::TYPE_UINT2_ARRAY_OID => Type::Array(Box::new(Type::UInt2)),
+            oid::TYPE_UINT4_OID => Type::UInt4,
+            oid::TYPE_UINT4_ARRAY_OID => Type::Array(Box::new(Type::UInt4)),
+            oid::TYPE_UINT8_OID => Type::UInt8,
+            oid::TYPE_UINT8_ARRAY_OID => Type::Array(Box::new(Type::UInt8)),
+            oid::TYPE_MZ_TIMESTAMP_OID => Type::MzTimestamp,
+            oid::TYPE_MZ_TIMESTAMP_ARRAY_OID => Type::Array(Box::new(Type::MzTimestamp)),
+            oid::TYPE_MZ_ACL_ITEM_OID => Type::MzAclItem,
+            oid::TYPE_MZ_ACL_ITEM_ARRAY_OID => Type::Array(Box::new(Type::MzAclItem)),
+            oid::TYPE_RECORD_OID => Type::Record(vec![]),
+            oid::TYPE_RECORD_ARRAY_OID => Type::Array(Box::new(Type::Record(vec![]))),
+            oid::TYPE_LIST_OID => return Some(LIST.name()),
+            oid::TYPE_MAP_OID => return Some(MAP.name()),
+            _ => Type::from_oid(oid).ok()?,
+        };
+        Some(typ.name())
+    }
+
     /// Returns the `Type` corresponding to the provided OID and packed type
     /// modifier ("typmod").
     ///

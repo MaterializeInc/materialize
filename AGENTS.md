@@ -1,73 +1,14 @@
 # Materialize
 
-## Skills
-
-Canonical agent skills in `.agents/skills/`. `.claude/skills` is compat symlink
-for Claude Code. Check `mz-*` skill before tasks — encodes project conventions,
-saves time.
-
-Use the `mz-test` skill before running ANY tests, even mid-task — the canonical
-commands aren't the obvious ones (e.g. `bin/sqllogictest --optimized`, not
-`cargo build --bin sqllogictest`).
-
-Use the `mz-run` skill before building, running, formatting, or linting. `bin/fmt` and `bin/lint` are the canonical entry points, NOT `cargo fmt`, `rustfmt`, or a bare `cargo clippy`. `bin/environmentd`, not `cargo build --bin environmentd`.
-
-Use the `mz-commit` skill before `git commit`, `git push`, or `gh pr create`.
-
-Use the `mz-debug-ci` skill before the first `bk` or `gh pr checks` command, or when handed a Buildkite URL.
-
-## Code navigation
-
-For operation flow tracing, read first:
-
-* `doc/developer/generated/flows.md` — maps operations (query lifecycle, source ingestion, MV creation, sink lifecycle, catalog DDL, timestamp selection, persist read/write, controller architecture) to `crate::module` paths in execution order.
-* `doc/developer/generated/<crate>/_crate.md` — per-crate overview: modules, key types, dependencies.
-* `doc/developer/generated/<crate>/<module>.md` — per-file docs.
-
-> **READ-ONLY: `doc/developer/generated/` is generated, not authored.**
-> The entire `doc/developer/generated/` tree is maintained exclusively by the
-> recurring documentation agent, which runs the `update-docs` skill/command.
-> That agent is the *only* session permitted to create, edit, or delete files
-> under this directory.
->
-> In any other session: **treat `doc/developer/generated/` as read-only.** Use
-> it for navigation and context, but never edit, create, delete, or regenerate
-> files there — not even to "fix" something you noticed, and not as part of an
-> unrelated change. These files carry `source`/`revision` front-matter that the
-> recurring agent manages; hand edits desync that bookkeeping. If a generated
-> doc is wrong or stale, report it in your response rather than editing it, and
-> leave the correction to the `update-docs` agent. Do not stage or commit any
-> path under `doc/developer/generated/` unless you are explicitly running the
-> `update-docs` workflow.
+## Repository layout
 
 `console/` is the web Console. It was moved in from the standalone
 `MaterializeInc/console` repository, which is now archived and stale.
 
 ## Dependency management
 
-### Workspace dependencies
-
-All third-party versions declared in `[workspace.dependencies]` in root
-`Cargo.toml`. Members use `dep.workspace = true` or
-`dep = { workspace = true, optional = true }`.
-
-* **Add new dep**: add to `[workspace.dependencies]` in root `Cargo.toml` first, then `dep.workspace = true` in member crate.
-* **Never inline version** in member `Cargo.toml` — `bin/lint-cargo` enforces.
-* **Update version**: change once in root `Cargo.toml`.
-* Cargo unifies features workspace-wide, so workspace declaration is union of all features across crates. Members just use `dep.workspace = true`.
-
-### Cargo.lock
-
-Never regenerate full Cargo.lock. When changing deps:
-
-* **Add dep or change features**: run `cargo check` — updates only what changed.
-* **Update specific crate**: `cargo update -p <crate>` (optional `--precise <version>`).
-* **Never bare `cargo update`** — bumps every semver-compatible dep, causes unrelated breakage from transitive changes.
-* **If lock regenerated**, diff before commit (`git diff Cargo.lock | grep '^[+-]version'`) and pin back unintended bumps with `cargo update -p <crate> --precise <old-version>`.
-
-### Licensing
-
-Two files control license policy, **keep in sync**: `deny.toml` (`[licenses].allow`) and `about.toml` (`accepted`). New dep with new license not already allowed: add SPDX identifier to both.
+Use the `mz-dependencies` skill before changing dependencies. Never regenerate
+the full Cargo.lock and never run bare `cargo update`.
 
 ## Merging
 
@@ -88,46 +29,33 @@ authors to squash on merge or to keep every intermediate commit green.
   static snapshot. When you feel tempted to reduce scope or take a shortcut,
   flag it to the user and workshop an alternative together rather than silently
   downgrading the design.
-* When making code changes, run cheap checkers/linters and formatters before
-  reporting success and/or committing changes. For Rust, these would be
-  `bin/fmt` and `cargo check`.
+* Before reporting success on a code change, run the cheap formatters and
+  checkers. For Rust, these are `bin/fmt` and `cargo check`. Before pushing
+  for review, run the pre-push checklist in the `mz-commit` skill.
 * When debugging CI or lint failures, start by reproducing the exact failing
   command locally and reading its output. Do not run generic checks (clippy,
   fmt, grep) in a shotgun approach.
-* We value simplicity and clear abstractions. We especially care about
-  designing the interfaces or boundaries between components well. This includes
-  components, traits, interfaces, modules, and crates.
-* In code comments or inline documentation, we value clearly described
-  contracts and assumptions.
-* In code comments, we don't like "fluff" comments, comments that describe what
-  code does when it is obvious from the code. Good code should be readable. It
-  _is_ okay to call out tricky parts of the code or "nota benes".
-* In code comments and code documentation we value concise but complete
-  comments.
-* In code comments and documentation, don't refer to potential previous states
-  of the code, or things like future PRs, try not to use chronology in there,
-  except when it's needed to explain why a certain thing behaves as it does and
-  we need to record that knowledge. In general comments need to stand on their
-  own and make sense from just looking at them and the code around it, not
-  previous changes.
+* We value simplicity and clear abstractions. Simplicity means fewer concepts
+  and moving parts, not less capability. Take the most care over the boundaries
+  between components: the interfaces that traits, modules, and crates expose.
 * Avoid em-dashes for structuring sentences in any prose: code comments, specs,
   design docs, all of it. Restructure with full stops and commas instead. The
   same goes for semicolons, though one is fine where splitting would mangle the
   sentence.
-* Our guidance applies both when writing new code or designs, or when we notice
-  deviations in code or architecture that we are working on. At the same time,
-  we want to keep our changes minimal so it's good to call out deviations and
-  then we can decide together what to do about it.
+* Apply this guidance to the code and designs you write. When existing code
+  you are working on deviates from it, do not fix it in passing. Keep the
+  change minimal, call out the deviation, and let the user decide what to do
+  about it.
 * Never put a side effect inside `debug_assert!` (or `debug_assert_eq!`, etc.).
   The macro body compiles out whenever debug-assertions are off, which includes
-  `[profile.optimized]` (what `bin/environmentd` and mzcompose use) and
-  `[profile.release]`. Only `[profile.ci]` turns them on. A side effect written
-  there, for example `debug_assert!(map.insert(k, v).is_none())`, runs under
-  `cargo test` but silently vanishes in optimized and release builds, leaving
-  the logic it powered inert and profiler-blind. Bind the effect to a `let`
-  outside the assert, then assert on the bound value. Clippy's
-  `debug_assert_with_mut_call` catches `&mut self` receivers but not `&self` or
-  free-function side effects.
+  `[profile.optimized]` (what `bin/environmentd --optimized` and mzcompose use)
+  and `[profile.release]`. Only the dev profile and `[profile.ci]` turn them on.
+  A side effect written there, for example
+  `debug_assert!(map.insert(k, v).is_none())`, runs under `cargo test` but
+  silently vanishes in optimized and release builds, leaving the logic it
+  powered inert and profiler-blind. Bind the effect to a `let` outside the
+  assert, then assert on the bound value. Clippy's `debug_assert_with_mut_call`
+  catches `&mut self` receivers but not `&self` or free-function side effects.
 * Never write vendor, customer, or account names into durable or user-facing
   surfaces: committed code, comments, column comments, docs, specs, commit
   messages, PR bodies, or test fixtures. Anything persisted to disk gets shared,
@@ -141,32 +69,11 @@ authors to squash on merge or to keep every intermediate commit green.
   iteration. Hash-order iteration is a real nondeterminism source, for example
   an unstable order reaching plan output or persisted state, not a style nit.
 * Choosing whether a new feature flag defaults on or off in production is a
-  product decision that needs context an agent rarely has. When adding a flag,
-  ask a human which default to use. When reviewing a PR, do not question the
-  default it chose. However, in tests, a new flag should usually be on, so that
-  sqllogictest and testdrive exercise the new code path. If
-  its production default is off, turn it on for CI in
-  `misc/python/materialize/mzcompose/__init__.py`
-  (`get_minimal_system_parameters` if tests fail with it off, otherwise
-  `get_variable_system_parameters`), which `bin/sqllogictest` and mzcompose's
-  `Materialized` service pass to environmentd as system parameter defaults.
-  Rust integration tests use `TestHarness::with_system_parameter_default`.
-  A value listed there overrides the compiled-in default in CI, so changing a
-  default means changing both. `bin/lint-test-flags` fails unless every new
-  dyncfg is registered for parallel workload and mzcompose (see the mz-debug-ci
-  skill). A compiled-in default is not evidence of the production value: check
-  whether `test/launchdarkly-flag-consistency/mzcompose.py` lists the flag in
-  `INTENTIONAL_LD_OVERRIDES` or `KNOWN_CROSS_ENV_DIVERGENCES`. A session
-  variable takes a system default only if `SESSION_SYSTEM_VARS` in
-  `src/sql/src/session/vars.rs` lists it. Otherwise `--system-parameter-default`
-  for it only logs a warning at startup. Observed: the LaunchDarkly MCP
-  `create-flag` tool creates boolean flags that serve true in every environment,
-  including production. A human must set each environment's off variation and
-  fallthrough to false.
+  product decision. When adding a flag, ask a human which default to use, and
+  use the `mz-feature-flags` skill. When reviewing a PR, do not question the
+  default it chose.
 
 ## Code comments
-
-Specifics for code comments and documentation:
 
 Spend comments on the non-obvious: concurrency and async hazards (races,
 lease/handle expiry, values that must not be held across an await point),
@@ -188,7 +95,7 @@ Every fact gets exactly one owning comment: the decision point for reasoning,
 the mechanism for mechanism docs, the public setter or constant for config
 semantics. Everywhere else either points at the owner or says nothing. The
 tell is the same clause appearing near-verbatim in a module doc, a struct doc,
-and an inline comment; when that happens, pick the owner and cut the rest. In
+and an inline comment. When that happens, pick the owner and cut the rest. In
 particular: don't restate a callee's documented contract at its call sites,
 don't narrate in one function's doc what a sibling's doc already owns, and
 don't duplicate an assert message in a comment on the same line.
@@ -198,10 +105,14 @@ distinct decision or invariant, not re-argue one documented elsewhere or
 enumerate the item's callers or fields. Skip speculative comments about what
 a future implementation could do (one `TODO` at the owning seam is enough),
 and skip comments explaining an absence when the surrounding docs already
-imply it. No ASCII section-divider banners (`// ----- helpers -----`); item
+imply it. No ASCII section-divider banners (`// ----- helpers -----`). Item
 placement carries the structure. Performance claims in comments should state
 a constraint or a measured number, not unverifiable color ("the compiler can
 autovectorize this").
+
+A comment must make sense from the code around it, not from previous changes.
+Don't refer to earlier states of the code or to future PRs, unless the history
+explains why the code behaves as it does and that knowledge needs recording.
 
 Before keeping a sentence, ask whether a maintainer would get something wrong
 without it. If deleting it changes nothing they would do or believe, delete it,

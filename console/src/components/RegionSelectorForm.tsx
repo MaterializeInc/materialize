@@ -15,6 +15,7 @@ import {
   Text,
   useRadio,
   useRadioGroup,
+  UseRadioProps,
   useTheme,
 } from "@chakra-ui/react";
 import { useAtom } from "jotai";
@@ -69,7 +70,7 @@ export type RegionSelectorProps = RadioProps & {
   value: string;
 };
 
-export const RegionRadioCard = forwardRef<RadioProps, "input">(
+export const RegionRadioCard = forwardRef<UseRadioProps, "input">(
   ({ ...props }, ref) => {
     const { colors, shadows } = useTheme<MaterializeTheme>();
     const { getInputProps, getRadioProps } = useRadio(props);

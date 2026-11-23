@@ -46,3 +46,17 @@ SELECT '12:00:00' COLLATE pg_catalog.de_DE
 
 query error COLLATE not yet supported
 SELECT '12:00:00' COLLATE mz_catalog.default
+
+# Column-level COLLATE
+
+statement error COLLATE not yet supported
+CREATE TABLE bad_name (s text COLLATE nonexistent_collation_12345)
+
+statement error COLLATE not yet supported
+CREATE TABLE bad_type (n integer COLLATE unicode)
+
+statement error COLLATE not yet supported
+CREATE TABLE coll (s text COLLATE unicode)
+
+statement ok
+CREATE TABLE coll (s text COLLATE pg_catalog.default)

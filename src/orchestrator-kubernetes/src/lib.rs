@@ -121,6 +121,9 @@ pub struct KubernetesOrchestratorConfig {
     pub collect_pod_metrics: bool,
     /// Whether to annotate pods for prometheus service discovery.
     pub enable_prometheus_scrape_annotations: bool,
+    /// Whether to run service pods in a Kubernetes user namespace by setting
+    /// `hostUsers: false`.
+    pub enable_user_namespaces: bool,
 }
 
 impl KubernetesOrchestratorConfig {
@@ -592,6 +595,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             other_replicas_selector,
             replicas_selector,
             disk_limit,
+            swap_enabled,
             node_selector,
         }: ServiceConfig,
     ) -> Result<Box<dyn Service>, anyhow::Error> {
@@ -717,6 +721,9 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             listen_addrs: &listen_addrs,
             peer_addrs: &peer_addrs,
         });
+        if !swap_enabled {
+            args.push("--no-swap".into());
+        }
 
         // This constrains the orchestrator (for those orchestrators that support
         // anti-affinity, today just k8s) to never schedule pods for different replicas
@@ -1218,6 +1225,9 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 }],
                 volumes,
                 security_context,
+                // `None` rather than `Some(true)` when disabled, so the pod
+                // template hash is unchanged from before user namespace support.
+                host_users: self.config.enable_user_namespaces.then_some(false),
                 node_selector: Some(node_selector),
                 scheduler_name: self.config.scheduler_name.clone(),
                 priority_class_name: self.config.priority_class_name.clone(),

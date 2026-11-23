@@ -16,6 +16,7 @@ asserting the exact Arrow type per column is what catches a regression here.
 """
 
 import unittest
+from uuid import UUID
 
 # Pinned in `test/adbc/requirements.txt` and installed only inside this
 # composition's test container, so they are absent from the repo-wide virtualenv
@@ -49,8 +50,6 @@ SELECT
     '{"a": 1}'::jsonb AS c_jsonb
 """
 
-# `numeric` and `uuid` have no native Arrow type the driver maps them onto, so it
-# wraps them in an `arrow.opaque` extension type over string or binary storage.
 EXPECTED_SCALAR_TYPES = {
     "c_bool": pa.bool_(),
     "c_int2": pa.int16(),
@@ -67,7 +66,7 @@ EXPECTED_SCALAR_TYPES = {
     "c_timestamp": pa.timestamp("us"),
     "c_timestamptz": pa.timestamp("us", tz="UTC"),
     "c_interval": pa.month_day_nano_interval(),
-    "c_uuid": pa.opaque(pa.binary(), "uuid", "PostgreSQL"),
+    "c_uuid": pa.uuid(),
     "c_jsonb": pa.json_(pa.string()),
 }
 
@@ -123,6 +122,7 @@ class SmokeTest(unittest.TestCase):
         self.assertEqual(row["c_int4"], 2)
         self.assertEqual(row["c_text"], "abc")
         self.assertEqual(row["c_bytea"], b"\x01\x02")
+        self.assertEqual(row["c_uuid"], UUID("00000000-0000-0000-0000-000000000001"))
 
     def test_array_type(self) -> None:
         """An array must arrive as an Arrow list, not as an opaque blob."""

@@ -16,12 +16,19 @@ import {
   IPostgresInterval,
   queryBuilder,
 } from "~/api/materialize";
+import { buildSourceExportsQuery } from "~/api/materialize/expressionBuilders";
 
 import { MAINTAINED_OBJECT_TYPES } from "./constants";
 
 const MAINTAINED_OBJECT_TYPES_SQL = sql.raw(
   MAINTAINED_OBJECT_TYPES.map((t) => `'${t}'`).join(", "),
 );
+
+/** `mz_objects` reports a subsource as `source`. Needs `o` and `se` joined. */
+const EXPORT_OBJECT_TYPE_SQL = sql`CASE
+    WHEN se.export_id IS NOT NULL AND o.type = 'source' THEN 'subsource'
+    ELSE o.type
+  END`;
 
 export interface CriticalPathRow {
   id: string;
@@ -30,6 +37,7 @@ export interface CriticalPathRow {
   objectType: string;
   schemaName: string;
   databaseName: string | null;
+  /** For a subsource or source-fed table, the cluster its source ingests on. */
   clusterId: string | null;
   clusterName: string | null;
   /** This node's lag at the snapshot moment used to draw the chain. */
@@ -37,7 +45,8 @@ export interface CriticalPathRow {
   /** The consumer's lag at the same snapshot moment. */
   targetLag: IPostgresInterval | null;
   isBottleneck: boolean;
-  parentSourceId: string | null;
+  /** The edge runs from a source to one of its subsources or tables. */
+  isIngestion: boolean;
   /** This node's max lag in the lookback window, independent of the chain snapshot. */
   peakLag: IPostgresInterval | null;
   /** Observation time of `peakLag`. */
@@ -76,8 +85,9 @@ const perObjectLagCteAtProbePeak = (
   ),
   per_object_lag(object_id text, lag interval) AS (
     SELECT DISTINCT ON (h.object_id) h.object_id, h.lag
-    FROM mz_wallclock_global_lag_recent_history h, probe_peak_bucket b
-    WHERE h.occurred_at >= b.bucket_start
+    FROM mz_wallclock_global_lag_recent_history h, probe_peak_bucket b, upstream u
+    WHERE h.object_id = u.id
+      AND h.occurred_at >= b.bucket_start
       AND h.occurred_at < b.bucket_start + INTERVAL '${bucketMs} MILLISECONDS'
     ORDER BY h.object_id, h.lag DESC
   )`;
@@ -97,6 +107,7 @@ const perObjectLagCteAtTime = (timestamp: Date, bucketSizeMs: number) => {
   return sql`per_object_lag(object_id text, lag interval) AS (
     SELECT DISTINCT ON (object_id) object_id, lag
     FROM mz_wallclock_global_lag_recent_history
+    JOIN upstream u ON u.id = object_id
     WHERE occurred_at >= date_bin(
         INTERVAL '${bucketMs} MILLISECONDS',
         ${tsLit}::timestamptz,
@@ -121,8 +132,8 @@ const perObjectLagCteAtTime = (timestamp: Date, bucketSizeMs: number) => {
  * 1) For each child, pick its slowest input(s) — the bottlenecks
  * 2) Walk backwards from the queried object along bottleneck edges
  * 3) Restrict to inputs of nodes on the chain (queried object + ancestors)
- * 4) Join object metadata, cluster name, subsource → parent redirection,
- *    and per-node window-pMAX (independent of the chain snapshot)
+ * 4) Join object metadata, cluster name, and per-node window-pMAX
+ *    (independent of the chain snapshot)
  */
 const buildCriticalPathQuery = (
   objectId: string,
@@ -134,14 +145,43 @@ const buildCriticalPathQuery = (
 WITH MUTUALLY RECURSIVE
   -- mz_materialization_dependencies covers sinks (which read from MVs/sources)
   -- as well as compute objects. Restrict both ends of the edge to maintained
-  -- object types so tables drop out of the chain.
-  input_of(source text, target text) AS (
-    SELECT md.dependency_id, md.object_id
+  -- object types so tables written with INSERT drop out of the chain.
+  -- Source-fed tables stay: like subsources, their lag is ingestion lag.
+  --
+  -- The second branch is an ingestion edge: a source's own collection is its
+  -- progress collection, which its tables are reclocked against, so a table
+  -- can't be fresher than its source. A legacy source is just another export
+  -- (its progress lives in a progress subsource), so it gets none.
+  input_of(source text, target text, ingestion bool) AS (
+    SELECT md.dependency_id, md.object_id, false
     FROM mz_materialization_dependencies md
     JOIN mz_objects src ON src.id = md.dependency_id
-      AND src.type IN (${MAINTAINED_OBJECT_TYPES_SQL})
+    LEFT JOIN mz_tables t ON t.id = md.dependency_id
     JOIN mz_objects tgt ON tgt.id = md.object_id
       AND tgt.type IN (${MAINTAINED_OBJECT_TYPES_SQL})
+    WHERE src.type IN (${MAINTAINED_OBJECT_TYPES_SQL})
+      OR t.source_id IS NOT NULL
+    UNION ALL
+    SELECT se.source_id, se.export_id, true
+    FROM source_exports se
+    WHERE se.source_id NOT IN (SELECT id FROM legacy_sources)
+  ),
+  source_exports(export_id text, source_id text) AS (
+    ${buildSourceExportsQuery()}
+  ),
+  -- A legacy source references its progress subsource.
+  legacy_sources(id text) AS (
+    SELECT od.object_id
+    FROM mz_object_dependencies od
+    JOIN mz_sources p ON p.id = od.referenced_object_id AND p.type = 'progress'
+  ),
+  -- Every object the chain can reach. The lag CTEs join to this, so each
+  -- reads only these ids through the (object_id) index. Unscoped, each read
+  -- scans the whole 24h history of every object in the environment.
+  upstream(id text) AS (
+    SELECT ${lit(objectId)}
+    UNION
+    SELECT i.source FROM input_of i JOIN upstream u ON u.id = i.target
   ),
   ${perObjectLag},
   -- Per-node max lag in the lookback window and when it occurred.
@@ -150,6 +190,7 @@ WITH MUTUALLY RECURSIVE
     SELECT DISTINCT ON (object_id)
       object_id, lag, occurred_at::timestamptz
     FROM mz_wallclock_global_lag_recent_history
+    JOIN upstream u ON u.id = object_id
     WHERE occurred_at + INTERVAL '${lookback} MINUTES' >= mz_now()
     ORDER BY object_id, lag DESC NULLS LAST, occurred_at DESC
   ),
@@ -176,21 +217,12 @@ WITH MUTUALLY RECURSIVE
   ),
   chain_targets(target text) AS (
     SELECT DISTINCT target FROM delayed_by
-  ),
-  -- Subsources are filtered out of the maintained-objects list, so the panel
-  -- redirects drawer links to the parent source.
-  subsource_parents(subsource_id text, parent_id text) AS (
-    SELECT od.object_id, od.referenced_object_id
-    FROM mz_object_dependencies od
-    JOIN mz_sources cs ON cs.id = od.object_id AND cs.type = 'subsource'
-    JOIN mz_sources ps ON ps.id = od.referenced_object_id
-      AND ps.id LIKE 'u%'
   )
 SELECT
   i.source AS "id",
   i.target AS "childId",
   fqn.name AS "name",
-  o.type AS "objectType",
+  ${EXPORT_OBJECT_TYPE_SQL} AS "objectType",
   fqn.schema_name AS "schemaName",
   fqn.database_name AS "databaseName",
   c.id AS "clusterId",
@@ -201,17 +233,18 @@ SELECT
     SELECT 1 FROM crit_input ci
     WHERE ci.source = i.source AND ci.target = i.target
   ) AS "isBottleneck",
-  sp.parent_id AS "parentSourceId",
+  i.ingestion AS "isIngestion",
   pk.peak_lag AS "peakLag",
   pk.peak_at AS "peakLagAt"
 FROM input_of i
 JOIN chain_targets ct ON ct.target = i.target
 JOIN mz_objects o ON o.id = i.source
 JOIN mz_object_fully_qualified_names fqn ON fqn.id = i.source
-LEFT JOIN mz_clusters c ON c.id = o.cluster_id
+LEFT JOIN source_exports se ON se.export_id = i.source
+LEFT JOIN mz_sources ps ON ps.id = se.source_id
+LEFT JOIN mz_clusters c ON c.id = coalesce(o.cluster_id, ps.cluster_id)
 LEFT JOIN per_object_lag ls ON ls.object_id = i.source
 LEFT JOIN per_object_lag lt ON lt.object_id = i.target
-LEFT JOIN subsource_parents sp ON sp.subsource_id = i.source
 LEFT JOIN per_object_peak pk ON pk.object_id = i.source
 ORDER BY ls.lag DESC NULLS LAST
   `.compile(queryBuilder);

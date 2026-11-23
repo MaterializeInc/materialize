@@ -7,6 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+const parseOrigins = (origins: string | undefined): string[] =>
+  (origins ?? "")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
 export function getBuildConstants() {
   return {
     basename: __BASENAME__,
@@ -14,6 +20,7 @@ export function getBuildConstants() {
     defaultStack: __DEFAULT_STACK__,
     forceOverrideStack: __FORCE_OVERRIDE_STACK__,
     impersonationHostname: __IMPERSONATION_HOSTNAME__,
+    marketingSiteDevOrigins: parseOrigins(__MARKETING_SITE_DEV_ORIGINS__),
     mzConsoleImageTag: __MZ_CONSOLE_IMAGE_TAG__,
     sentryEnabled: __SENTRY_ENABLED__ === "true",
     sentryRelease: __SENTRY_RELEASE__,
@@ -33,6 +40,7 @@ export const buildConstants: BuildConstants = isBrowser
       defaultStack: "local",
       forceOverrideStack: undefined,
       impersonationHostname: "",
+      marketingSiteDevOrigins: [],
       mzConsoleImageTag: undefined,
       sentryEnabled: false,
       sentryRelease: "sentry-release",

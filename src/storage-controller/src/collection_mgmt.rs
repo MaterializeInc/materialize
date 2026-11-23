@@ -79,7 +79,7 @@ use mz_ore::now::NowFn;
 use mz_ore::retry::Retry;
 use mz_ore::soft_panic_or_log;
 use mz_ore::task::AbortOnDropHandle;
-use mz_persist_client::batch::Added;
+use mz_persist_client::batch::{Added, BatchBuilder};
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::write::WriteHandle;
 use mz_repr::adt::timestamp::CheckedTimestamp;
@@ -1737,6 +1737,39 @@ where
         .collect()
 }
 
+const MONOTONIC_APPEND_YIELD_UPDATES: usize = 1024;
+
+/// Without a byte budget, 1024 large rows, such as webhook bodies, would be
+/// encoded between two yields.
+const MONOTONIC_APPEND_YIELD_BYTES: usize = 1 << 20;
+
+/// Adds `updates` to `builder` at time `ts`, yielding to the Tokio runtime
+/// after every [`MONOTONIC_APPEND_YIELD_UPDATES`] updates or
+/// [`MONOTONIC_APPEND_YIELD_BYTES`] bytes of row data, whichever comes first.
+async fn add_updates_yielding(
+    builder: &mut BatchBuilder<SourceData, (), Timestamp, StorageDiff>,
+    updates: &[TimestamplessUpdate],
+    ts: Timestamp,
+) {
+    let mut updates_since_yield = 0;
+    let mut bytes_since_yield = 0;
+    for TimestamplessUpdate { row, diff } in updates {
+        if updates_since_yield >= MONOTONIC_APPEND_YIELD_UPDATES
+            || bytes_since_yield >= MONOTONIC_APPEND_YIELD_BYTES
+        {
+            tokio::task::yield_now().await;
+            updates_since_yield = 0;
+            bytes_since_yield = 0;
+        }
+        builder
+            .add(&SourceData(Ok(row.clone())), &(), &ts, &diff.into_inner())
+            .await
+            .expect("valid usage");
+        updates_since_yield += 1;
+        bytes_since_yield += row.data().len();
+    }
+}
+
 async fn monotonic_append(
     write_handle: &mut WriteHandle<SourceData, (), Timestamp, StorageDiff>,
     updates: Vec<TimestamplessUpdate>,
@@ -1757,23 +1790,34 @@ async fn monotonic_append(
 
         let lower = std::cmp::max(upper, at_least);
         let new_upper = lower.step_forward();
-        let updates = updates
-            .iter()
-            .map(|TimestamplessUpdate { row, diff }| {
-                ((SourceData(Ok(row.clone())), ()), lower, diff.into_inner())
-            })
-            .collect::<Vec<_>>();
+
+        // This builds the batch itself because `WriteHandle::compare_and_append`
+        // does not yield while encoding (see `WriteHandle::batch`).
+        //
+        // The batch starts at the expected upper, not at `lower`:
+        // `compare_and_append_batch` rejects a batch whose lower is above the
+        // append's lower.
+        let mut builder = write_handle.builder(Antichain::from_elem(upper));
+        add_updates_yielding(&mut builder, &updates, lower).await;
+        let mut batch = builder
+            .finish(Antichain::from_elem(new_upper))
+            .await
+            .expect("valid usage");
+
         let res = write_handle
-            .compare_and_append(
-                updates,
+            .compare_and_append_batch(
+                &mut [&mut batch],
                 Antichain::from_elem(upper),
                 Antichain::from_elem(new_upper),
+                true,
             )
             .await
             .expect("valid usage");
         match res {
             Ok(()) => return,
             Err(err) => {
+                // The batch was built for the stale upper.
+                batch.delete().await;
                 expected_upper = err.current;
                 continue;
             }
@@ -1831,7 +1875,9 @@ mod tests {
 
     use super::*;
     use itertools::Itertools;
-    use mz_repr::{Datum, Row};
+    use mz_persist_client::{Diagnostics, PersistClient, ShardId};
+    use mz_persist_types::codec_impls::UnitSchema;
+    use mz_repr::{Datum, RelationDesc, Row, SqlScalarType};
     use mz_storage_client::client::StatusUpdate;
     use mz_storage_client::healthcheck::{
         MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STATUS_HISTORY_DESC,
@@ -2069,5 +2115,176 @@ mod tests {
             ns_datum.1.unwrap_map().iter().next().unwrap(),
             ("thing", Datum::String("error"))
         );
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn test_monotonic_append_upper_mismatch_retry() {
+        use mz_ore::metrics::MetricsRegistry;
+        use mz_persist::location::{Blob, Consensus};
+        use mz_persist::mem::{MemBlob, MemBlobConfig, MemConsensus};
+        use mz_persist_client::async_runtime::IsolatedRuntime;
+        use mz_persist_client::cache::StateCache;
+        use mz_persist_client::cfg::PersistConfig;
+        use mz_persist_client::metrics::Metrics as PersistMetrics;
+        use mz_persist_client::rpc::PubSubClientConnection;
+
+        let cfg = PersistConfig::new_for_tests();
+        let blob: Arc<dyn Blob> = Arc::new(MemBlob::open(MemBlobConfig::default()));
+        let consensus: Arc<dyn Consensus> = Arc::new(MemConsensus::default());
+        let metrics = Arc::new(PersistMetrics::new(&cfg, &MetricsRegistry::new()));
+        // Two clients over the same backing storage with separate state
+        // caches, so that appends through one client are not reflected in the
+        // other's cached upper.
+        let new_client = || {
+            let pubsub_sender = PubSubClientConnection::noop().sender;
+            PersistClient::new(
+                cfg.clone(),
+                Arc::clone(&blob),
+                Arc::clone(&consensus),
+                Arc::clone(&metrics),
+                Arc::new(IsolatedRuntime::new_for_tests()),
+                Arc::new(StateCache::new(
+                    &cfg,
+                    Arc::clone(&metrics),
+                    Arc::clone(&pubsub_sender),
+                )),
+                pubsub_sender,
+            )
+            .expect("valid client")
+        };
+
+        let shard = ShardId::new();
+        let relation_desc = RelationDesc::builder()
+            .with_column("a", SqlScalarType::UInt64.nullable(false))
+            .finish();
+        let updates = |range: std::ops::Range<u64>| {
+            range
+                .map(|i| TimestamplessUpdate {
+                    row: Row::pack_slice(&[Datum::UInt64(i)]),
+                    diff: Diff::ONE,
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let client1 = new_client();
+        let mut write1 = client1
+            .open_writer::<SourceData, (), Timestamp, StorageDiff>(
+                shard,
+                Arc::new(relation_desc.clone()),
+                Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("valid usage");
+
+        // A second client moves the upper: it appends at max(0, 10) = 10, and
+        // the upper becomes 11.
+        let client2 = new_client();
+        let mut write2 = client2
+            .open_writer::<SourceData, (), Timestamp, StorageDiff>(
+                shard,
+                Arc::new(relation_desc.clone()),
+                Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("valid usage");
+        monotonic_append(&mut write2, updates(0..5), Timestamp::from(10)).await;
+
+        // `write1` still caches the initial upper 0, so its first attempt (at
+        // max(0, 5) = 5) hits an upper mismatch, and the rebuilt batch lands at
+        // the actual upper 11. With more than MONOTONIC_APPEND_YIELD_UPDATES
+        // rows, both builds yield.
+        assert_eq!(
+            write1.shared_upper(),
+            Antichain::from_elem(Timestamp::from(0)),
+            "write1's cached upper must be stale for this test to exercise the retry",
+        );
+        monotonic_append(&mut write1, updates(5..3005), Timestamp::from(5)).await;
+
+        let mut read = client1
+            .open_leased_reader::<SourceData, (), Timestamp, StorageDiff>(
+                shard,
+                Arc::new(relation_desc),
+                Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
+                true,
+            )
+            .await
+            .expect("valid usage");
+
+        // A snapshot advances all timestamps to its `as_of`, so per-update
+        // timestamps are verified by which updates are visible at which
+        // `as_of`.
+        for (as_of, expected_rows) in [(9, 0), (10, 5), (11, 3005)] {
+            let contents = read
+                .snapshot_and_fetch(Antichain::from_elem(Timestamp::from(as_of)))
+                .await
+                .expect("as_of available");
+            let mut seen = BTreeSet::new();
+            for ((key, _val), _ts, diff) in contents {
+                let SourceData(data) = key;
+                let row = data.expect("valid data");
+                let a = row.iter().next().unwrap().unwrap_uint64();
+                assert_eq!(diff, 1, "row {a} duplicated or retracted");
+                assert!(seen.insert(a), "row {a} appeared twice");
+            }
+            assert_eq!(
+                seen,
+                (0..expected_rows).collect(),
+                "unexpected contents at time {as_of}"
+            );
+        }
+    }
+
+    /// The yields are what keep a large append from blocking a Tokio worker
+    /// for its whole duration, and nothing else in the append's result shows
+    /// them, so this test pins how often they happen.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn test_add_updates_yielding_yields_by_count_and_bytes() {
+        let client = PersistClient::new_for_tests().await;
+        let write = client
+            .open_writer::<SourceData, (), Timestamp, StorageDiff>(
+                ShardId::new(),
+                Arc::new(
+                    RelationDesc::builder()
+                        .with_column("s", SqlScalarType::String.nullable(false))
+                        .finish(),
+                ),
+                Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("valid usage");
+
+        // Below `blob_target_size`, `BatchBuilder::add` never returns
+        // `Pending`, so every `Pending` of the add future is a yield.
+        let count_yields = |row_len: usize, n: usize| {
+            let row = Row::pack_slice(&[Datum::String(&"x".repeat(row_len))]);
+            let update = TimestamplessUpdate {
+                row,
+                diff: Diff::ONE,
+            };
+            let updates = vec![update; n];
+            let mut builder = write.builder(Antichain::from_elem(Timestamp::MIN));
+            async move {
+                let mut add =
+                    std::pin::pin!(add_updates_yielding(&mut builder, &updates, Timestamp::MIN));
+                let mut yields = 0;
+                while futures::poll!(add.as_mut()).is_pending() {
+                    yields += 1;
+                }
+                yields
+            }
+        };
+
+        // Small rows yield once per MONOTONIC_APPEND_YIELD_UPDATES updates.
+        for (n, expected) in [(0, 0), (1, 0), (1024, 0), (1025, 1), (3000, 2)] {
+            assert_eq!(count_yields(1, n).await, expected, "{n} small rows");
+        }
+        // Rows of 600 KiB reach MONOTONIC_APPEND_YIELD_BYTES every two rows.
+        assert_eq!(count_yields(600 << 10, 5).await, 2, "5 large rows");
     }
 }

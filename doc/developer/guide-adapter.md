@@ -66,6 +66,19 @@ logic to them. Extend the implications framework instead.
   Representing a new kind may require extending `ParsedStateUpdate` /
   `ParsedStateUpdateKind` first.
 
+### Index imports are not catalog dependencies
+
+Which indexes a dataflow reads from is an optimizer decision recorded in the
+physical plan and in the compute controller (`compute_dependencies`), not in the
+catalog. A materialized view's `uses()` comes from its HIR and names relations
+only, so an index's `used_by` is always empty and the planner's `CASCADE`
+expansion and `RESTRICT` check never see index readers. The sequencer asks
+`ComputeController::collection_reverse_dependencies` instead
+(`Coordinator::check_index_dependents`), which is why that check lives in the
+sequencer rather than in `plan_drop_objects`. Anything else that needs "who
+reads this index" has to go through the compute controller too. See
+`doc/developer/design/20260923_drop_in_use_index.md`.
+
 ### Background reconcilers own convergence resource failures
 
 When a catalog mutation writes desired state that a background reconciler
@@ -101,6 +114,16 @@ A read-only (0dt) coordinator needs the same liveness as the leader: it serves
 no queries, but a stall there blocks promotion.
 
 ## Correctness Invariants
+
+### Command replay must respect DDL serialization
+
+Replaying a catalog command validates that command, not another statement's
+already-built plan. DDL that carries planned SQL across off-thread work relies
+on the coordinator's DDL lock to keep names stable. Acquire that same lock for
+each command commit attempt, including attempts resumed after external
+preparation. Release it while preparation runs so unrelated DDL can progress.
+Queue contenders instead of awaiting the mutex on the coordinator, which its
+owner needs to finish. Releasing the guard must also wake the deferred queue.
 
 ### Timestamp selection must respect real-time bounds
 

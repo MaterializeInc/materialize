@@ -299,9 +299,16 @@ mod tests {
 
         let test_cases = [
             TestCase {
+                invalid_origins: vec![HeaderValue::from_static("https://example.org")],
+                ..Default::default()
+            },
+            TestCase {
                 allowed_origins: vec![HeaderValue::from_static("https://example.org")],
                 mirrored_origins: vec![HeaderValue::from_static("https://example.org")],
-                invalid_origins: vec![HeaderValue::from_static("https://wrong.com")],
+                invalid_origins: vec![
+                    HeaderValue::from_static("http://example.org"),
+                    HeaderValue::from_static("https://wrong.com"),
+                ],
                 wildcard_origins: vec![],
             },
             TestCase {
@@ -317,6 +324,10 @@ mod tests {
                     HeaderValue::from_static("https://example.org"),
                     HeaderValue::from_static("https://wrong.com"),
                     HeaderValue::from_static("https://wrong.com:8443"),
+                    HeaderValue::from_static("https://badexample.org"),
+                    HeaderValue::from_static("https://foo.example.org.evil.com"),
+                    HeaderValue::from_static("null"),
+                    HeaderValue::from_static("not an origin"),
                 ],
             },
             TestCase {
@@ -386,6 +397,58 @@ mod tests {
                     header, None,
                     "origin {invalid:?} unexpectedly not allowed\n\
                      allowed_origins={allowed_origins:?}",
+                );
+            }
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_cors_credentialed_preflight() {
+        use http::header::{
+            ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_HEADERS,
+            ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_REQUEST_HEADERS,
+            ACCESS_CONTROL_REQUEST_METHOD, AUTHORIZATION, CONTENT_TYPE,
+        };
+
+        let allowed_origins = [HeaderValue::from_static("*.example.org")];
+        let cors = CorsLayer::new()
+            .allow_credentials(true)
+            .allow_methods([Method::GET])
+            .allow_headers([AUTHORIZATION, CONTENT_TYPE])
+            .allow_origin(super::build_cors_allowed_origin(&allowed_origins));
+
+        for (origin, expected_origin) in [
+            (
+                "https://console.example.org",
+                Some(HeaderValue::from_static("https://console.example.org")),
+            ),
+            ("https://example.org.evil.com", None),
+        ] {
+            let service = ServiceBuilder::new().layer(&cors).service_fn(|_| async {
+                Err::<Response<&str>, _>(anyhow::anyhow!(
+                    "preflight request reached the application handler"
+                ))
+            });
+            let request = Request::builder()
+                .method(Method::OPTIONS)
+                .header(ORIGIN, origin)
+                .header(ACCESS_CONTROL_REQUEST_METHOD, "GET")
+                .header(ACCESS_CONTROL_REQUEST_HEADERS, "authorization,content-type")
+                .body("")
+                .unwrap();
+            let response = service.oneshot(request).await.unwrap();
+            let headers = response.headers();
+            assert_eq!(
+                headers.get(ACCESS_CONTROL_ALLOW_ORIGIN),
+                expected_origin.as_ref(),
+                "origin {origin}",
+            );
+            if expected_origin.is_some() {
+                assert_eq!(headers[ACCESS_CONTROL_ALLOW_CREDENTIALS], "true");
+                assert_eq!(headers[ACCESS_CONTROL_ALLOW_METHODS], "GET");
+                assert_eq!(
+                    headers[ACCESS_CONTROL_ALLOW_HEADERS],
+                    "authorization,content-type"
                 );
             }
         }

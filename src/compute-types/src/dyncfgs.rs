@@ -13,17 +13,6 @@ use std::time::Duration;
 
 use mz_dyncfg::{Config, ConfigSet, ParameterScope};
 
-/// Whether rendering should use `half_join2` rather than DD's `half_join` for delta joins.
-///
-/// `half_join2` avoids quadratic behavior in certain join patterns. This flag exists as an escape
-/// hatch to revert to the old implementation if issues arise.
-pub const ENABLE_HALF_JOIN2: Config<bool> = Config::new(
-    "enable_compute_half_join2",
-    true,
-    "Whether compute should use `half_join2` rather than DD's `half_join` to render delta joins.",
-    ParameterScope::Environment,
-);
-
 /// Whether rendering should collapse error multiplicities to one where it arranges errors.
 ///
 /// Error semantics depend only on whether an error is present, so its multiplicity carries no
@@ -96,12 +85,12 @@ pub const ENABLE_COLUMNAR_MERGE_BATCHER: Config<bool> = Config::new(
 /// The accumulable reduce keeps one accumulator per aggregate in the diff of its
 /// input arrangement. When `true`, that arrangement holds its diffs in a columnar
 /// container, which lays the accumulators out by variant so each pays only for its
-/// own fields. When `false` (the default), the diffs live in a columnation stack at
-/// the width of the largest variant. Read at operator construction time, so flips
-/// take effect on dataflows created after the change.
+/// own fields. When `false`, the diffs live in a columnation stack at the width of
+/// the largest variant. The default is `true`. Read at operator construction time,
+/// so flips take effect on dataflows created after the change.
 pub const ENABLE_COLUMNAR_ACCUMULABLE_DIFF: Config<bool> = Config::new(
     "enable_columnar_accumulable_diff",
-    false,
+    true,
     "Store the accumulable reduce's accumulators in a columnar arrangement diff, laid out by \
      variant, instead of a columnation stack of fixed-width accumulator enums.",
     ParameterScope::Replica,
@@ -120,9 +109,6 @@ pub const ENABLE_COLUMNAR_ACCUMULABLE_DIFF: Config<bool> = Config::new(
 /// address space and spawns its spill threads. Turning the gates back off
 /// stops retuning but does not tear the installed pool down.
 ///
-/// It additionally enables the process-global column pager, which storage's
-/// paged upsert stash draws from, so it is not exclusive to the arrange path.
-///
 /// Off by default, even when the batcher path itself is on, so the
 /// no-pressure case stays a pure resident operation. Tune the budget via
 /// [`COLUMN_PAGED_BATCHER_BUDGET_FRACTION`].
@@ -134,13 +120,48 @@ pub const ENABLE_COLUMN_PAGED_BATCHER_SPILL: Config<bool> = Config::new(
     ParameterScope::Replica,
 );
 
+/// Whether the buffer pool may use the scratch directory as its extent
+/// store. Takes effect only at pool installation, see `apply_pool_config` in
+/// `mz_timely_util::pool_config`.
+pub const ENABLE_COLUMN_PAGED_BATCHER_FILE_EXTENTS: Config<bool> = Config::new(
+    "enable_column_paged_batcher_file_extents",
+    false,
+    "Use the scratch directory as the buffer pool's extent store when one exists. \
+     Read once at pool installation.",
+    ParameterScope::Replica,
+);
+
+/// How often the buffer pool's spill threads release free extent slots of
+/// the file store back to the filesystem. The default follows
+/// [`LGALLOC_BACKGROUND_INTERVAL`].
+pub const COLUMN_PAGED_BATCHER_FILE_RELEASE_INTERVAL: Config<Duration> = Config::new(
+    "column_paged_batcher_file_release_interval",
+    Duration::from_secs(1),
+    "Interval at which the buffer pool releases free file store slots to the filesystem. \
+     Zero disables the release.",
+    ParameterScope::Replica,
+);
+
+/// The most bytes of free file store slots the buffer pool releases per
+/// extent class and [`COLUMN_PAGED_BATCHER_FILE_RELEASE_INTERVAL`]. Zero
+/// disables the release, so the store keeps freed slots allocated until an
+/// allocation needs their room. The default follows
+/// [`LGALLOC_SLOW_CLEAR_BYTES`].
+pub const COLUMN_PAGED_BATCHER_FILE_RELEASE_BYTES: Config<usize> = Config::new(
+    "column_paged_batcher_file_release_bytes",
+    128 << 20,
+    "Bytes of free file store slots the buffer pool releases per extent class and interval. \
+     Zero disables the release.",
+    ParameterScope::Replica,
+);
+
 /// The youngest chunk generation whose spilled bodies are compressed.
 ///
 /// A chunk at generational depth `d` is rewritten with frequency
 /// proportional to `2^-d` under geometric merging, so compressing shallow
 /// generations buys pool bytes back for only a short stay at a guaranteed
 /// near-term codec round-trip. Generations below the floor spill under the
-/// identity codec: fully budgeted and swap-backed, with encode and decode
+/// identity codec: fully budgeted and backed, with encode and decode
 /// reduced to copies. The default exempts only fresh (depth 0) chunks. A
 /// chunk that outlives a merge untouched ages a generation regardless, and
 /// an identity-coded body at or past the floor is re-spilled compressed at
@@ -156,78 +177,47 @@ pub const COLUMN_CHUNK_COMPRESS_MIN_DEPTH: Config<u32> = Config::new(
     ParameterScope::Replica,
 );
 
-/// Resident-bytes budget fraction for chunk spilling. Two consumers read
-/// it: the column pager's tiered policy multiplies it against the
-/// announced memory limit, and the buffer pool (`mz_ore::pool`)
-/// multiplies it against physical RAM, since a resident budget must
-/// derive from memory that can be resident and the announced limit
-/// includes swap on swap-provisioned nodes.
+/// Resident-bytes budget fraction for chunk spilling. The buffer pool
+/// (`mz_ore::pool`) multiplies it against physical RAM, since a resident
+/// budget must derive from memory that can be resident and the announced
+/// limit includes swap on swap-provisioned nodes.
 ///
-/// `0.05` (5%) is a reasonable starting point: large enough that the
-/// per-call ColumnBuilder ship-threshold (~2 MiB) fits multiple chunks
-/// per worker, small enough that the merge-batcher's transient state
-/// doesn't crowd out the spine. Set lower to spill more aggressively
-/// under pressure. The computed budget is floored at 128 MiB so the
-/// no-pressure case doesn't page per chunk. Ignored when
-/// `enable_column_paged_batcher_spill` is `false`.
+/// The default of `0.20` is the budget the chunked upsert-v2 stash ran with
+/// in production on swap-provisioned replicas. Set lower to spill more
+/// aggressively under pressure. The computed budget is floored at 128 MiB so
+/// the no-pressure case doesn't page per chunk. Ignored while every spill
+/// gate ([`ENABLE_COLUMN_PAGED_BATCHER_SPILL`], [`ENABLE_CORRECTION_V2_SPILL`],
+/// and storage's `enable_upsert_paged_spill`) is off.
 pub const COLUMN_PAGED_BATCHER_BUDGET_FRACTION: Config<f64> = Config::new(
     "column_paged_batcher_budget_fraction",
-    0.05,
+    0.2,
     "Budget fraction for chunk spilling: the buffer pool multiplies it against physical \
-     RAM and the column pager's tiered policy against the announced memory limit. \
-     Total pool budget = max(ram * fraction, 128 MiB).",
+     RAM. Total pool budget = max(ram * fraction, 128 MiB).",
     ParameterScope::Replica,
 );
 
-/// Number of buffer-pool spill threads performing eviction I/O (lz4
-/// compression plus the synchronous-reclaim `MADV_PAGEOUT`) off the threads
-/// that trip the budget. Zero evicts inline on the calling thread, which
-/// measurably convoys workers behind eviction I/O at hydration eviction
-/// rates. Thread spawning is once per process: raising the value later has
-/// no effect beyond re-enabling, and lowering it to zero falls back to
-/// inline eviction while spawned threads idle.
-pub const COLUMN_PAGED_BATCHER_SPILL_WORKER_COUNT: Config<usize> = Config::new(
-    "column_paged_batcher_spill_worker_count",
-    2,
-    "Buffer-pool spill threads for off-worker eviction I/O; 0 evicts inline on the caller.",
-    ParameterScope::Replica,
-);
-
-/// Compress chunks the column-paged batcher spills, using lz4. Only
-/// meaningful when [`ENABLE_COLUMN_PAGED_BATCHER_SPILL`] is `true`; the codec
-/// is applied on the pageout path and reversed on page-in. Trades CPU for a
-/// smaller on-storage (and, for the swap backend, resident) footprint.
+/// Buffer-pool spill threads performing eviction I/O (lz4 compression plus
+/// the synchronous-reclaim `MADV_PAGEOUT`) off the threads that trip the
+/// budget, as a fraction of the process's timely workers, rounded down to a
+/// power of two (`mz_timely_util::pool_config::spill_threads_for_workers`).
+/// Any positive fraction spawns at least one thread. Zero evicts inline on the
+/// calling thread, which measurably convoys workers behind eviction I/O at
+/// hydration eviction rates.
 ///
-/// Off by default so the spill path's cost stays a pure copy until compression
-/// is shown to pay for itself on the target workload.
-pub const COLUMN_PAGED_BATCHER_LZ4: Config<bool> = Config::new(
-    "column_paged_batcher_lz4",
-    false,
-    "Compress column-paged batcher chunks with lz4 on the spill path. Only meaningful when \
-     `enable_column_paged_batcher_spill = true`.",
-    ParameterScope::Replica,
-);
-
-/// Proactively evict the column-paged batcher's lz4-compressed spill chunks
-/// from RSS via `MADV_PAGEOUT` when spilling to the swap backend. Only
-/// meaningful when [`COLUMN_PAGED_BATCHER_LZ4`] is `true` and the active
-/// backend is swap (no scratch directory): on that path the compressed bytes
-/// stay resident in the process address space and currently receive no madvise
-/// at all, so the kernel reclaims them only lazily under LRU pressure.
-/// `MADV_PAGEOUT` instead swaps them out eagerly at spill time, holding RSS at
-/// the budget rather than letting it drift up to the pressure cliff. A later
-/// page-in re-faults the pages — cheap because lz4 shrank the byte volume,
-/// which is what makes eager eviction pay off on this path.
+/// The default of `0.5` gives 1 thread below 4 workers, then 2, 4, 8 and 16
+/// threads from 4, 8, 16 and 32 workers. These are the per-size counts
+/// production ran the chunked upsert-v2 stash with. Hydration sweeps on a
+/// 62-worker replica convoyed all workers at 2 and 4 threads.
 ///
-/// Off by default: the eager-reclaim syscall is the one kernel interaction the
-/// pager design singled out as risky, so it stays gated until proven on the
-/// target workload.
-pub const COLUMN_PAGED_BATCHER_SWAP_PAGEOUT: Config<bool> = Config::new(
-    "column_paged_batcher_swap_pageout",
-    false,
-    "Eagerly evict the column-paged batcher's lz4-compressed swap-backend spill chunks from RSS \
-     via `MADV_PAGEOUT` (they otherwise receive no madvise and are reclaimed only lazily). Only \
-     meaningful when `column_paged_batcher_lz4 = true` and the swap backend is active.",
+/// Thread spawning is once per process: raising the value later has no effect
+/// beyond re-enabling, and lowering it to zero falls back to inline eviction
+/// while spawned threads idle.
+pub const COLUMN_PAGED_BATCHER_SPILL_WORKER_FRACTION: Config<f64> = Config::new(
+    "column_paged_batcher_spill_worker_fraction",
+    0.5,
+    "Buffer-pool spill threads for off-worker eviction I/O, as a fraction of the process's \
+     timely workers, rounded down to a power of two and at least 1; 0 evicts inline on the \
+     caller.",
     ParameterScope::Replica,
 );
 
@@ -254,11 +244,10 @@ pub const COLUMN_PAGED_BATCHER_EAGER_BACKING: Config<bool> = Config::new(
 /// `MADV_PAGEOUT`. Zero collapses the tier: extents page out as soon as
 /// they are written.
 ///
-/// The default pairs with the 0.05 budget default to leave ~20% of RAM for
-/// the compressed tier — the same share zswap's default compressed pool
-/// takes, and roughly RAM-sized logical coverage at the measured ~5.6x
-/// ratio — while keeping three quarters of RAM for everything else in the
-/// process.
+/// With the 0.20 budget default this leaves at most 5% of RAM, less the warm
+/// cap, for the compressed tier, so most budget evictions page out to the
+/// swap device promptly. Three quarters of RAM stay available for everything
+/// else in the process.
 pub const COLUMN_PAGED_BATCHER_POOL_RSS_TARGET_FRACTION: Config<f64> = Config::new(
     "column_paged_batcher_pool_rss_target_fraction",
     0.25,
@@ -289,7 +278,7 @@ pub const ENABLE_SYNC_MV_SINK: Config<bool> = Config::new(
 /// its own batch. Zero disables sharing.
 pub const MV_SINK_SHARED_BATCH_MAX_BYTES: Config<usize> = Config::new(
     "compute_mv_sink_shared_batch_max_bytes",
-    0,
+    1024 * 1024,
     "The size of a worker's updates for one batch interval below which the MV sink coalesces \
      them into a batch shared by the workers in one process. Zero disables sharing.",
     ParameterScope::Environment,
@@ -333,6 +322,25 @@ pub const ENABLE_CORRECTION_V2_SPILL: Config<bool> = Config::new(
     false,
     "Allow the MV sink correction V2 buffer's chunk bodies to spill to the process buffer pool \
      under memory pressure.",
+    ParameterScope::Replica,
+);
+
+/// The youngest correction V2 chunk generation whose spilled bodies are
+/// lz4-compressed in the buffer pool. MV sinks take it in place of
+/// [`COLUMN_CHUNK_COMPRESS_MIN_DEPTH`], so tuning one leaves the other's
+/// consumers alone. Applies to chunks minted after the next configuration tick.
+///
+/// Compression trades CPU for pool bytes, and that trade differs by replica.
+/// Hydrating an MV over `SELECT * FROM lineitem` (TPC-H SF30) on a 2-worker
+/// replica whose memory nearly fit the correction buffer took 714 s at depth 1
+/// and 533 s with compression off, the uncompressed run peaking 4.5 GiB higher
+/// in RSS. Larger replicas were not measured.
+pub const CORRECTION_V2_COMPRESS_MIN_DEPTH: Config<u32> = Config::new(
+    "compute_correction_v2_compress_min_depth",
+    1,
+    "The youngest MV sink correction chunk generation whose spilled bodies are \
+     lz4-compressed in the buffer pool; younger generations store uncompressed. \
+     0 compresses every spilled body.",
     ParameterScope::Replica,
 );
 
@@ -826,7 +834,6 @@ pub const MV_SINK_ADVANCE_PERSIST_FRONTIERS: Config<bool> = Config::new(
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
-        .add(&ENABLE_HALF_JOIN2)
         .add(&ENABLE_ERROR_DISTINCT)
         .add(&ENABLE_MZ_JOIN_CORE)
         .add(&ENABLE_SYNC_MV_SINK)
@@ -835,6 +842,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&CORRECTION_V2_CHAIN_PROPORTIONALITY)
         .add(&CORRECTION_V2_CHUNK_SIZE)
         .add(&ENABLE_CORRECTION_V2_SPILL)
+        .add(&CORRECTION_V2_COMPRESS_MIN_DEPTH)
         .add(&TEMPORAL_BUCKETING_SUMMARY)
         .add(&LINEAR_JOIN_YIELDING)
         .add(&ENABLE_LGALLOC)
@@ -883,10 +891,11 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_COLUMNAR_MERGE_BATCHER)
         .add(&ENABLE_COLUMNAR_ACCUMULABLE_DIFF)
         .add(&ENABLE_COLUMN_PAGED_BATCHER_SPILL)
+        .add(&ENABLE_COLUMN_PAGED_BATCHER_FILE_EXTENTS)
+        .add(&COLUMN_PAGED_BATCHER_FILE_RELEASE_INTERVAL)
+        .add(&COLUMN_PAGED_BATCHER_FILE_RELEASE_BYTES)
         .add(&COLUMN_PAGED_BATCHER_BUDGET_FRACTION)
-        .add(&COLUMN_PAGED_BATCHER_LZ4)
-        .add(&COLUMN_PAGED_BATCHER_SWAP_PAGEOUT)
-        .add(&COLUMN_PAGED_BATCHER_SPILL_WORKER_COUNT)
+        .add(&COLUMN_PAGED_BATCHER_SPILL_WORKER_FRACTION)
         .add(&COLUMN_PAGED_BATCHER_EAGER_BACKING)
         .add(&COLUMN_PAGED_BATCHER_POOL_RSS_TARGET_FRACTION)
         .add(&COLUMN_CHUNK_COMPRESS_MIN_DEPTH)

@@ -13,10 +13,10 @@ import React from "react";
 import { FreshnessGraph } from "~/components/FreshnessGraph/FreshnessGraph";
 import { MaterializeTheme } from "~/theme";
 
-import { useObjectFreshnessHistory } from "./queries";
+import { MaintainedObjectListItem, useObjectFreshnessHistory } from "./queries";
 
 export interface ObjectFreshnessChartProps {
-  objectId: string;
+  item: MaintainedObjectListItem;
   timePeriodMinutes: number;
   onTimestampSelect?: (timestamp: Date | null) => void;
   onTimestampLock?: (timestamp: Date | null) => void;
@@ -25,7 +25,7 @@ export interface ObjectFreshnessChartProps {
 }
 
 export const ObjectFreshnessChart = ({
-  objectId,
+  item,
   timePeriodMinutes,
   onTimestampSelect,
   onTimestampLock,
@@ -37,7 +37,7 @@ export const ObjectFreshnessChart = ({
   const lookbackMs = timePeriodMinutes * 60 * 1000;
 
   const { data, isLoading } = useObjectFreshnessHistory({
-    objectId,
+    object: item,
     lookbackMs,
   });
 

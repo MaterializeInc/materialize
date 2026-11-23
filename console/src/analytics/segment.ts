@@ -38,10 +38,8 @@ if (segment && segmentApiKey !== null) {
     },
     {
       integrations: {
-        // Use the Materialize-specific Segment proxy, which is less likely to
-        // be on public ad blocking lists.
         "Segment.io": {
-          apiHost: "api.segment.materialize.com/v1",
+          apiHost: "api.segment.io/v1",
         },
       },
       retryQueue: true,

@@ -28,6 +28,7 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+frontegg.workspace = true
 reqwest.workspace = true
 openssl.workspace = true
 

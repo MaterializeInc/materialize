@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+import { greatest, group, sort } from "d3";
+
 import { IPostgresInterval } from "~/api/materialize";
 import { CriticalPathRow } from "~/api/materialize/maintained-objects/criticalPath";
 import { sumPostgresIntervalMs } from "~/util";
@@ -24,9 +26,8 @@ export interface RenderableNode {
   /** Count of off-path sibling inputs sharing the same child as this node. */
   offPathCount: number;
   objectType: string | null;
-  /** For subsources, the parent source id — link targets should use this. */
-  parentSourceId: string | null;
-  /** Cluster the node runs on. Null for objects without a cluster (tables). */
+  /** Cluster the node runs on, or that a subsource's or table's source
+   *  ingests on. */
   cluster: { id: string; name: string } | null;
   /** Max lag this node observed in the lookback window. */
   peakLag: IPostgresInterval | null;
@@ -42,6 +43,11 @@ const lagMs = (lag: IPostgresInterval | null) =>
 
 const isHealthyLag = (lag: IPostgresInterval | null) =>
   lag !== null && lagMs(lag) <= HEALTHY_LAG_MS;
+
+const nodeCluster = (r: Pick<CriticalPathRow, "clusterId" | "clusterName">) =>
+  r.clusterId && r.clusterName
+    ? { id: r.clusterId, name: r.clusterName }
+    : null;
 
 /** Three Maps describing the critical-path subgraph.
  *
@@ -151,10 +157,16 @@ const computeOffPathCounts = (
   return result;
 };
 
+/** An edge drawn from `id` down to `childId`; dashed unless `isBottleneck`. */
+export type GraphEdge = Pick<
+  CriticalPathRow,
+  "id" | "childId" | "isBottleneck" | "isIngestion"
+>;
+
 export interface GraphView {
   nodes: RenderableNode[];
-  edges: CriticalPathRow[];
-  /** Chain nodes past `visibleDepth`. Drives the "Show N more" CTA. */
+  edges: GraphEdge[];
+  /** Nodes left out of the drawn graph. Drives the "+ N more" toggle. */
   hiddenChainCount: number;
 }
 
@@ -227,7 +239,6 @@ export const buildGraphView = (
     }),
     offPathCount: 0,
     objectType: probe.objectType,
-    parentSourceId: null,
     cluster: probe.cluster,
     peakLag: probeRow?.peakLag ?? null,
     peakLagAt: probeRow?.peakLagAt ?? null,
@@ -248,11 +259,7 @@ export const buildGraphView = (
         }),
         offPathCount: offPathCountById.get(id) ?? 0,
         objectType: r.objectType,
-        parentSourceId: r.parentSourceId,
-        cluster:
-          r.clusterId && r.clusterName
-            ? { id: r.clusterId, name: r.clusterName }
-            : null,
+        cluster: nodeCluster(r),
         peakLag: r.peakLag,
         peakLagAt: r.peakLagAt,
       },
@@ -296,11 +303,7 @@ export const buildGraphView = (
     kind: "offPath",
     offPathCount: 0,
     objectType: r.objectType,
-    parentSourceId: r.parentSourceId,
-    cluster:
-      r.clusterId && r.clusterName
-        ? { id: r.clusterId, name: r.clusterName }
-        : null,
+    cluster: nodeCluster(r),
     peakLag: r.peakLag,
     peakLagAt: r.peakLagAt,
   }));
@@ -309,5 +312,122 @@ export const buildGraphView = (
     nodes: [probeNode, ...chainNodes, ...offPathNodes],
     edges: [...chainEdges, ...offPathEdges],
     hiddenChainCount,
+  };
+};
+
+/** Subsources and tables drawn under a source before the "more" toggle. */
+export const DEFAULT_VISIBLE_EXPORTS = 4;
+
+/** One binned reading, as `fetchObjectLagHistory` returns it. */
+export interface LagReading {
+  bucketStart: Date;
+  objectId: string;
+  lag: IPostgresInterval | null;
+}
+
+/** Ranks unreadable exports first, since a NULL lag is the worst one, then by
+ *  lag, then exports with no reading in the anchor bucket. */
+const exportRank = (reading: LagReading | undefined) => {
+  if (!reading) return 1;
+  return reading.lag === null ? -Infinity : -lagMs(reading.lag);
+};
+
+/** Lays a source out above the subsources and tables it ingests into, each
+ *  with its reading in the bucket containing `anchor`. `readings` include the
+ *  source's own, so every node describes the same moment.
+ *
+ *  Only the `DEFAULT_VISIBLE_EXPORTS` worst are drawn unless `showAll`. The
+ *  primary bottleneck is the export whose lag past the source is largest, or
+ *  the source itself when no export trails it.
+ */
+export const buildSourceExportsView = ({
+  probe,
+  exports,
+  readings,
+  anchor,
+  bucketSizeMs,
+  showAll,
+}: {
+  probe: MaintainedObjectListItem;
+  exports: MaintainedObjectListItem[];
+  readings: LagReading[];
+  anchor: Date | null;
+  bucketSizeMs: number;
+  showAll: boolean;
+}): GraphView => {
+  const readingsById = group(readings, (r) => r.objectId);
+  const anchorMs = anchor?.getTime();
+  const readingAtAnchor = (id: string) =>
+    anchorMs === undefined
+      ? undefined
+      : readingsById.get(id)?.find((r) => {
+          const startMs = r.bucketStart.getTime();
+          return startMs <= anchorMs && anchorMs < startMs + bucketSizeMs;
+        });
+  const ranked = sort(
+    exports.map((item) => ({
+      item,
+      reading: readingAtAnchor(item.id),
+      peak: greatest(
+        (readingsById.get(item.id) ?? []).filter((r) => r.lag !== null),
+        (r) => lagMs(r.lag),
+      ),
+    })),
+    (e) => exportRank(e.reading),
+    (e) => e.item.name,
+  );
+
+  const probeReading = readingAtAnchor(probe.id);
+  const probeLag = probeReading ? probeReading.lag : (probe.lag?.value ?? null);
+  const lagMsById = new Map<string, number>([
+    [probe.id, lagMs(probeLag)],
+    ...ranked.map((e) => [e.item.id, lagMs(e.reading?.lag ?? null)] as const),
+  ]);
+  const primaryIds = findPrimaryBottlenecks(
+    lagMsById,
+    new Map(ranked.map((e) => [e.item.id, [probe.id]])),
+    Math.max(...lagMsById.values()),
+  );
+
+  const visible = showAll ? ranked : ranked.slice(0, DEFAULT_VISIBLE_EXPORTS);
+  const probeNode: RenderableNode = {
+    id: probe.id,
+    name: probe.name,
+    lag: probeLag,
+    isProbe: true,
+    kind: classifyNode({ id: probe.id, lag: probeLag, primaryIds }),
+    offPathCount: 0,
+    objectType: probe.objectType,
+    cluster: probe.cluster,
+    peakLag: null,
+    peakLagAt: null,
+  };
+  const exportNodes: RenderableNode[] = visible.map(
+    ({ item, reading, peak }) => {
+      const lag = reading?.lag ?? null;
+      return {
+        id: item.id,
+        name: item.name,
+        lag,
+        isProbe: false,
+        kind: classifyNode({ id: item.id, lag, primaryIds }),
+        offPathCount: 0,
+        objectType: item.objectType,
+        cluster: item.cluster,
+        peakLag: peak?.lag ?? null,
+        peakLagAt: peak?.bucketStart ?? null,
+      };
+    },
+  );
+
+  return {
+    nodes: [probeNode, ...exportNodes],
+    edges: visible.map(({ item }) => ({
+      id: probe.id,
+      childId: item.id,
+      isBottleneck: true,
+      isIngestion: true,
+    })),
+    hiddenChainCount: ranked.length - visible.length,
   };
 };

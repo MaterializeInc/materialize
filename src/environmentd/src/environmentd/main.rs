@@ -104,6 +104,10 @@ pub struct Args {
     /// this should never be enabled in CI.
     #[clap(long, env = "ALL_FEATURES")]
     all_features: bool,
+    /// Set by the container entrypoint when it restarts environmentd after
+    /// `mz_ore::restart_in_place!`.
+    #[clap(long, env = "RESTARTED_IN_PLACE", hide = true)]
+    restarted_in_place: bool,
 
     // === Connection options. ===
     /// Path to a file containing the json-formatted configuration of our
@@ -255,6 +259,10 @@ pub struct Args {
         env = "ORCHESTRATOR_KUBERNETES_ENABLE_PROMETHEUS_SCRAPE_ANNOTATIONS"
     )]
     orchestrator_kubernetes_enable_prometheus_scrape_annotations: bool,
+    /// Whether to run service (clusterd) pods in a Kubernetes user namespace
+    /// by setting `hostUsers: false` on their pod specs.
+    #[clap(long, env = "ORCHESTRATOR_KUBERNETES_ENABLE_USER_NAMESPACES")]
+    orchestrator_kubernetes_enable_user_namespaces: bool,
     #[clap(long, env = "ORCHESTRATOR_PROCESS_WRAPPER")]
     orchestrator_process_wrapper: Option<String>,
     /// Where the process orchestrator should store secrets.
@@ -634,6 +642,10 @@ pub struct Args {
     /// should not be set in production.
     #[clap(long, value_enum, requires = "unsafe_mode")]
     unsafe_force_builtin_schema_migration: Option<String>,
+    /// Makes every catalog open that runs migrations also apply an empty one.
+    /// Testing only.
+    #[clap(long, requires = "unsafe_mode")]
+    unsafe_force_catalog_migration: bool,
 }
 
 #[derive(ValueEnum, Debug, Clone)]
@@ -859,6 +871,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                                 .orchestrator_kubernetes_disable_pod_metrics_collection,
                             enable_prometheus_scrape_annotations: args
                                 .orchestrator_kubernetes_enable_prometheus_scrape_annotations,
+                            enable_user_namespaces: args
+                                .orchestrator_kubernetes_enable_user_namespaces,
                         },
                         &metrics_registry,
                     ))
@@ -1100,7 +1114,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     let serve_start = Instant::now();
     info!("startup: envd init: serving beginning");
     let server = runtime.block_on(async {
-        let listeners = Listeners::bind(listeners_config).await?;
+        let listeners = Listeners::bind(listeners_config)?;
         let catalog_config = CatalogConfig {
             persist_clients,
             metrics: Arc::new(mz_catalog::durable::Metrics::new(&metrics_registry)),
@@ -1110,6 +1124,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 // Special modes.
                 unsafe_mode: args.unsafe_mode,
                 all_features: args.all_features,
+                restarted_in_place: args.restarted_in_place,
                 // Connection options.
                 tls,
                 tls_reload_certs: mz_server_core::default_cert_reload_ticker(),
@@ -1191,6 +1206,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 // Testing options.
                 now,
                 force_builtin_schema_migration,
+                force_catalog_migration: args.unsafe_force_catalog_migration,
             })
             .await
             .maybe_terminate("booting server")?;

@@ -12,7 +12,7 @@ from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check, disabled
 
 
-@disabled("due to database-issues#6249")
+@disabled("due to DB-236")
 class PeekCancellation(Check):
     def initialize(self) -> Testdrive:
         return Testdrive(dedent("""

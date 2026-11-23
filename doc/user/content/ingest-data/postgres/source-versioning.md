@@ -88,7 +88,7 @@ snapshot](/ingest-data/#snapshotting) of table `v1.T` will begin.
 
 {{< note >}}
 
-{{% include-headless "/headless/source-versioning-snapshotting-note" %}}
+{{% include-headless "/headless/postgres-source-versioning-snapshotting-note" %}}
 
 {{< /note >}}
 
@@ -137,7 +137,7 @@ The [snapshotting](/ingest-data/#snapshotting) of table `v2.T` will begin.
 
 {{< note >}}
 
-{{% include-headless "/headless/source-versioning-snapshotting-note" %}}
+{{% include-headless "/headless/postgres-source-versioning-snapshotting-note" %}}
 
 {{< /note >}}
 
@@ -169,7 +169,7 @@ CREATE TABLE v3.T
 
 {{< note >}}
 
-{{% include-headless "/headless/source-versioning-snapshotting-note" %}}
+{{% include-headless "/headless/postgres-source-versioning-snapshotting-note" %}}
 
 {{< /note >}}
 
@@ -256,7 +256,7 @@ CREATE TABLE v4.T
 
 {{< note >}}
 
-{{% include-headless "/headless/source-versioning-snapshotting-note" %}}
+{{% include-headless "/headless/postgres-source-versioning-snapshotting-note" %}}
 
 {{< /note >}}
 

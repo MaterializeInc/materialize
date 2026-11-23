@@ -96,7 +96,7 @@ use uncased::UncasedStr;
 use crate::ast::Ident;
 use crate::session::user::User;
 
-pub(crate) mod constraints;
+pub mod constraints;
 pub(crate) mod definitions;
 pub(crate) mod errors;
 pub(crate) mod polyfill;
@@ -443,12 +443,13 @@ impl SessionVars {
         use definitions::*;
 
         let vars = [
-            &FAILPOINTS,
+            &UNSAFE_FAILPOINTS,
             &SERVER_VERSION,
             &SERVER_VERSION_NUM,
             &SQL_SAFE_UPDATES,
             &REAL_TIME_RECENCY,
             &EMIT_PLAN_INSIGHTS_NOTICE,
+            &EMIT_EXECUTION_TIME_NOTICE,
             &EMIT_TIMESTAMP_NOTICE,
             &EMIT_TRACE_ID_NOTICE,
             &AUTO_ROUTE_CATALOG_QUERIES,
@@ -898,6 +899,11 @@ impl SessionVars {
         *self.expect_value(&EMIT_PLAN_INSIGHTS_NOTICE)
     }
 
+    /// Returns the value of `emit_execution_time_notice` configuration parameter.
+    pub fn emit_execution_time_notice(&self) -> bool {
+        *self.expect_value(&EMIT_EXECUTION_TIME_NOTICE)
+    }
+
     /// Returns the value of `emit_timestamp_notice` configuration parameter.
     pub fn emit_timestamp_notice(&self) -> bool {
         *self.expect_value(&EMIT_TIMESTAMP_NOTICE)
@@ -1228,6 +1234,7 @@ impl SystemVars {
             &MAX_SECRETS,
             &MAX_ROLES,
             &MAX_NETWORK_POLICIES,
+            &MAX_QUERY_POLICIES,
             &MAX_RULES_PER_NETWORK_POLICY,
             &MAX_RESULT_SIZE,
             &MAX_COPY_FROM_ROW_SIZE,
@@ -1455,6 +1462,11 @@ impl SystemVars {
     /// that shouldn't be synced by SystemParameterFrontend.
     pub fn iter_synced(&self) -> impl Iterator<Item = &dyn Var> {
         self.iter().filter(|v| v.name() != ENABLE_LAUNCHDARKLY.name)
+    }
+
+    /// Returns the [`VarDefinition`] of the named configuration parameter, if it exists.
+    pub fn definition(&self, name: &str) -> Option<&VarDefinition> {
+        self.vars.get(UncasedStr::new(name)).map(|v| &v.definition)
     }
 
     /// Returns an iterator over the configuration parameters that can be overriden per-Session.
@@ -1779,6 +1791,11 @@ impl SystemVars {
     /// Returns the value of the `max_network_policies` configuration parameter.
     pub fn max_network_policies(&self) -> u32 {
         *self.expect_value(&MAX_NETWORK_POLICIES)
+    }
+
+    /// Returns the value of the `max_query_policies` configuration parameter.
+    pub fn max_query_policies(&self) -> u32 {
+        *self.expect_value(&MAX_QUERY_POLICIES)
     }
 
     /// Returns the value of the `max_network_policies` configuration parameter.
@@ -2453,7 +2470,7 @@ impl SystemVars {
     }
 
     /// Returns whether the named variable is a dyncfg configuration parameter.
-    fn is_dyncfg_var(&self, name: &str) -> bool {
+    pub fn is_dyncfg_var(&self, name: &str) -> bool {
         self.dyncfgs.entries().any(|e| name == e.name())
     }
 }
@@ -2518,6 +2535,12 @@ pub fn is_cluster_scheduling_var(name: &str) -> bool {
 /// Returns whether the named variable is an HTTP server related config var.
 pub fn is_http_config_var(name: &str) -> bool {
     name == WEBHOOK_CONCURRENT_REQUEST_LIMIT.name()
+}
+
+/// Whether `name` is a system parameter that sessions copy at connect time.
+pub fn is_session_default(name: &str) -> bool {
+    SESSION_SYSTEM_VARS.contains_key(UncasedStr::new(name))
+        || name.eq_ignore_ascii_case(STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE.name())
 }
 
 /// Set of [`SystemVar`]s that can also get set at a per-Session level.

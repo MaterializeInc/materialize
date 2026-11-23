@@ -117,6 +117,7 @@ export const useColumns = ({
   >(
     () =>
       ({ selectedItem: changedItem }) => {
+        if (!changedItem) return;
         if (changedItem.key === ALL_COLUMN_ITEM.key) {
           const allColumnsSelected =
             selectedColumnItems.length === COLUMNS.length;

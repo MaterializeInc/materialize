@@ -32,14 +32,14 @@ use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogCollectionEntry, CatalogEntry, CatalogItem, Cluster, ClusterReplica, CommentsMap,
     Connection, DataSourceDesc, Database, DefaultPrivileges, Index, MaterializedView, MetricSink,
-    NetworkPolicy, Role, RoleAuth, Schema, Secret, Sink, Source, SourceReferences, Table,
-    TableDataSource, Type, View,
+    NetworkPolicy, QueryPolicy, Role, RoleAuth, Schema, Secret, Sink, Source, SourceReferences,
+    Table, TableDataSource, Type, View,
 };
 use mz_controller::clusters::{
     ManagedReplicaLocation, ReplicaAllocation, ReplicaLocation, UnmanagedReplicaLocation,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_expr::{CollectionPlan, OptimizedMirRelationExpr};
+use mz_expr::{CollectionPlan, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_license_keys::ValidatedLicenseKey;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NOW_ZERO;
@@ -54,10 +54,11 @@ use mz_repr::namespaces::{
 };
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::optimize::{OptimizerFeatureOverrides, OptimizerFeatures, OverrideFrom};
+use mz_repr::query_policy_id::QueryPolicyId;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
     CatalogItemId, GlobalId, RelationDesc, RelationVersion, RelationVersionSelector,
-    VersionedRelationDesc,
+    ReprColumnType, SqlScalarType, VersionedRelationDesc,
 };
 use mz_secrets::InMemorySecretsController;
 use mz_sql::ast::Ident;
@@ -135,6 +136,9 @@ pub struct CatalogState {
     pub(super) network_policies_by_name: imbl::OrdMap<String, NetworkPolicyId>,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub(super) network_policies_by_id: imbl::OrdMap<NetworkPolicyId, NetworkPolicy>,
+    pub(super) query_policies_by_name: imbl::OrdMap<String, QueryPolicyId>,
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
+    pub(super) query_policies_by_id: imbl::OrdMap<QueryPolicyId, QueryPolicy>,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub(super) role_auth_by_id: imbl::OrdMap<RoleId, RoleAuth>,
 
@@ -432,6 +436,79 @@ where
 }
 
 impl CatalogState {
+    pub fn entries(&self) -> impl Iterator<Item = &CatalogEntry> {
+        self.entry_by_id.values()
+    }
+
+    pub fn user_connections(&self) -> impl Iterator<Item = &CatalogEntry> {
+        self.entries()
+            .filter(|entry| entry.is_connection() && entry.id().is_user())
+    }
+
+    pub fn user_tables(&self) -> impl Iterator<Item = &CatalogEntry> {
+        self.entries()
+            .filter(|entry| entry.is_table() && entry.id().is_user())
+    }
+
+    pub fn user_sources(&self) -> impl Iterator<Item = &CatalogEntry> {
+        self.entries()
+            .filter(|entry| entry.is_source() && entry.id().is_user())
+    }
+
+    pub fn user_sinks(&self) -> impl Iterator<Item = &CatalogEntry> {
+        self.entries()
+            .filter(|entry| entry.is_sink() && entry.id().is_user())
+    }
+
+    pub fn user_materialized_views(&self) -> impl Iterator<Item = &CatalogEntry> {
+        self.entries()
+            .filter(|entry| entry.is_materialized_view() && entry.id().is_user())
+    }
+
+    pub fn user_secrets(&self) -> impl Iterator<Item = &CatalogEntry> {
+        self.entries()
+            .filter(|entry| entry.is_secret() && entry.id().is_user())
+    }
+
+    pub fn clusters(&self) -> impl Iterator<Item = &Cluster> {
+        self.clusters_by_id.values()
+    }
+
+    pub fn user_clusters(&self) -> impl Iterator<Item = &Cluster> {
+        self.clusters().filter(|cluster| cluster.id.is_user())
+    }
+
+    pub fn user_cluster_replicas(&self) -> impl Iterator<Item = &ClusterReplica> {
+        self.user_clusters()
+            .flat_map(|cluster| cluster.user_replicas())
+    }
+
+    pub fn databases(&self) -> impl Iterator<Item = &Database> {
+        self.database_by_id.values()
+    }
+
+    pub fn user_roles(&self) -> impl Iterator<Item = &Role> {
+        self.roles_by_id.values().filter(|role| role.is_user())
+    }
+
+    pub fn user_network_policies(&self) -> impl Iterator<Item = &NetworkPolicy> {
+        self.network_policies_by_id
+            .iter()
+            .filter(|(id, _)| id.is_user())
+            .map(|(_, policy)| policy)
+    }
+
+    pub fn user_query_policies(&self) -> impl Iterator<Item = &QueryPolicy> {
+        self.query_policies_by_id
+            .iter()
+            .filter(|(id, _)| id.is_user())
+            .map(|(_, policy)| policy)
+    }
+
+    pub fn cluster_replica_sizes(&self) -> &ClusterReplicaSizeMap {
+        &self.cluster_replica_sizes
+    }
+
     /// Returns an empty [`CatalogState`] that can be used in tests.
     // TODO: Ideally we'd mark this as `#[cfg(test)]`, but that doesn't work with the way
     // tests are structured in this repository.
@@ -451,6 +528,8 @@ impl CatalogState {
             roles_by_name: Default::default(),
             roles_by_id: Default::default(),
             network_policies_by_id: Default::default(),
+            query_policies_by_name: Default::default(),
+            query_policies_by_id: Default::default(),
             role_auth_by_id: Default::default(),
             config: CatalogConfig {
                 start_time: Default::default(),
@@ -485,26 +564,35 @@ impl CatalogState {
     }
 
     pub fn for_session<'a>(&'a self, session: &'a Session) -> ConnCatalog<'a> {
+        let state = session.transaction().catalog_state().unwrap_or(self);
+        let mut catalog = state.for_session_metadata(session, session.retain_notice_transmitter());
+        catalog.prepared_statements = Some(session.prepared_statements());
+        catalog.portals = Some(session.portals());
+        catalog
+    }
+
+    /// Binds statement context to this state without substituting a transaction snapshot.
+    pub(crate) fn for_session_metadata(
+        &self,
+        session: &dyn SessionMetadata,
+        notices_tx: mpsc::UnboundedSender<crate::AdapterNotice>,
+    ) -> ConnCatalog<'_> {
         let search_path = self.resolve_search_path(session);
         let database = self
             .database_by_name
             .get(session.vars().database())
             .map(|id| id.clone());
-        let state = match session.transaction().catalog_state() {
-            Some(txn_catalog_state) => Cow::Borrowed(txn_catalog_state),
-            None => Cow::Borrowed(self),
-        };
         ConnCatalog {
-            state,
+            state: Cow::Borrowed(self),
             unresolvable_ids: BTreeSet::new(),
             conn_id: session.conn_id().clone(),
             cluster: session.vars().cluster().into(),
             database,
             search_path,
             role_id: session.current_role_id().clone(),
-            prepared_statements: Some(session.prepared_statements()),
-            portals: Some(session.portals()),
-            notices_tx: session.retain_notice_transmitter(),
+            prepared_statements: None,
+            portals: None,
+            notices_tx,
             restrict_to_user_objects: session.vars().restrict_to_user_objects(),
         }
     }
@@ -656,7 +744,7 @@ impl CatalogState {
                 ObjectId::NetworkPolicy(id) => {
                     dependents.extend_from_slice(&self.network_policy_dependents(*id, seen));
                 }
-                id @ ObjectId::Role(_) => {
+                id @ (ObjectId::Role(_) | ObjectId::QueryPolicy(_)) => {
                     let unseen = seen.insert(id.clone());
                     if unseen {
                         dependents.push(id.clone());
@@ -1026,6 +1114,109 @@ impl CatalogState {
         })
     }
 
+    /// Records in `tx` the planner-resolved metadata of all items in
+    /// the current transaction.
+    pub(super) fn refresh_item_metadata(
+        &self,
+        tx: &mut mz_catalog::durable::Transaction<'_>,
+    ) -> Result<(), mz_catalog::durable::CatalogError> {
+        let ids: Vec<_> = tx.get_items().map(|item| item.id).collect();
+        self.record_item_metadata(tx, ids)
+    }
+
+    /// Records in `tx` the planner-resolved metadata of every item in `ids`
+    /// that this catalog has loaded.
+    pub(super) fn record_item_metadata(
+        &self,
+        tx: &mut mz_catalog::durable::Transaction<'_>,
+        ids: impl IntoIterator<Item = CatalogItemId>,
+    ) -> Result<(), mz_catalog::durable::CatalogError> {
+        for id in ids {
+            // An id this catalog does not know, such as an item of a
+            // temporary schema owned by a session that is not connected to this process,
+            // is skipped.
+            let Some(entry) = self.try_get_entry(&id) else {
+                continue;
+            };
+            tx.set_item_metadata(id, self.durable_item_metadata(entry.item()))?;
+        }
+        Ok(())
+    }
+
+    /// The planner-resolved metadata the durable catalog records for `item`:
+    /// the columns of a relation, each by the identity its type presents as,
+    /// and the keys of an index. See `mz_catalog::durable::ItemMetadata`.
+    ///
+    /// An index's keys are typed against the version of the indexed relation
+    /// it was created on, which must be in this catalog.
+    pub(super) fn durable_item_metadata(
+        &self,
+        item: &CatalogItem,
+    ) -> mz_catalog::durable::ItemMetadata {
+        let columns = item
+            .relation_desc(RelationVersionSelector::Latest)
+            .map(|desc| {
+                desc.iter()
+                    .map(|(name, typ)| {
+                        let pg_type = mz_pgrepr::Type::from(&typ.scalar_type);
+                        let custom_type = match &typ.scalar_type {
+                            SqlScalarType::List {
+                                custom_id: Some(id),
+                                ..
+                            }
+                            | SqlScalarType::Map {
+                                custom_id: Some(id),
+                                ..
+                            }
+                            | SqlScalarType::Record {
+                                custom_id: Some(id),
+                                ..
+                            } => Some(*id),
+                            _ => None,
+                        };
+                        mz_catalog::durable::ItemColumn {
+                            name: name.clone(),
+                            nullable: typ.nullable,
+                            type_oid: pg_type.oid(),
+                            type_mod: pg_type.typmod(),
+                            custom_type,
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let index_columns = match item {
+            CatalogItem::Index(index) => {
+                let on_entry = self.get_entry_by_global_id(&index.on);
+                let on_desc = on_entry
+                    .relation_desc()
+                    .expect("indexes are built on relations");
+                let column_types: Vec<ReprColumnType> = on_desc
+                    .typ()
+                    .column_types
+                    .iter()
+                    .map(ReprColumnType::from)
+                    .collect();
+                index
+                    .keys
+                    .iter()
+                    .map(|key| mz_catalog::durable::IndexColumn {
+                        column: match key {
+                            MirScalarExpr::Column(column, _) => Some(*column),
+                            _ => None,
+                        },
+                        nullable: key.typ(&column_types).nullable,
+                    })
+                    .collect()
+            }
+            _ => Vec::new(),
+        };
+        mz_catalog::durable::ItemMetadata {
+            columns,
+            index_columns,
+        }
+    }
+
     /// Gets a type named `name` from exactly one of the system schemas.
     ///
     /// # Panics
@@ -1185,6 +1376,26 @@ impl CatalogState {
 
     pub fn get_network_policies(&self) -> impl Iterator<Item = &NetworkPolicyId> {
         self.network_policies_by_id.keys()
+    }
+
+    pub fn get_query_policy(&self, id: &QueryPolicyId) -> &QueryPolicy {
+        self.query_policies_by_id
+            .get(id)
+            .expect("catalog out of sync")
+    }
+
+    pub(super) fn try_get_query_policy_by_name(&self, name: &str) -> Option<&QueryPolicy> {
+        self.query_policies_by_name
+            .get(name)
+            .map(|id| self.get_query_policy(id))
+    }
+
+    /// Returns the query policy attached to the executing cluster.
+    pub fn query_policy_for(&self, cluster_id: ClusterId) -> Option<&QueryPolicy> {
+        self.get_cluster(cluster_id)
+            .config
+            .query_policy
+            .map(|id| self.get_query_policy(&id))
     }
 
     /// Returns the URL for POST-ing data to a webhook source, if `id` corresponds to a webhook
@@ -2501,6 +2712,7 @@ impl CatalogState {
             ObjectId::NetworkPolicy(network_policy_id) => {
                 CommentObjectId::NetworkPolicy(network_policy_id)
             }
+            ObjectId::QueryPolicy(id) => CommentObjectId::QueryPolicy(id),
         }
     }
 
@@ -2812,6 +3024,7 @@ impl CatalogState {
             ObjectId::Item(id) => Some(*self.get_entry(id).owner_id()),
             ObjectId::Role(_) => None,
             ObjectId::NetworkPolicy(id) => Some(self.get_network_policy(id).owner_id.clone()),
+            ObjectId::QueryPolicy(id) => Some(self.get_query_policy(id).owner_id),
         }
     }
 
@@ -2824,6 +3037,7 @@ impl CatalogState {
             ObjectId::Role(_) => mz_sql::catalog::ObjectType::Role,
             ObjectId::Item(id) => self.get_entry(id).item_type().into(),
             ObjectId::NetworkPolicy(_) => mz_sql::catalog::ObjectType::NetworkPolicy,
+            ObjectId::QueryPolicy(_) => mz_sql::catalog::ObjectType::QueryPolicy,
         }
     }
 
@@ -2921,6 +3135,7 @@ impl CatalogState {
             | CommentObjectId::Schema(_)
             | CommentObjectId::Cluster(_)
             | CommentObjectId::ClusterReplica(_)
+            | CommentObjectId::QueryPolicy(_)
             | CommentObjectId::NetworkPolicy(_) => None,
         }
     }
@@ -2967,6 +3182,7 @@ impl CatalogState {
                 .to_string()
             }
             CommentObjectId::NetworkPolicy(id) => self.get_network_policy(&id).name.clone(),
+            CommentObjectId::QueryPolicy(id) => self.get_query_policy(&id).name.clone(),
         }
     }
 

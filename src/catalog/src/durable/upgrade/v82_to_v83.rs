@@ -14,7 +14,7 @@
 //! The catalog persist shard requires that every `(key, ts)` tuple
 //! consolidate to `Diff::ONE`. Catalog writers retract by re-serializing the
 //! in-memory parsed value through the current proto; this only consolidates
-//! cleanly if the round-trip is byte-exact (database-issues#7179). Whenever
+//! cleanly if the round-trip is byte-exact (SQL-895). Whenever
 //! a proto adds a field, that invariant breaks for rows written before the
 //! field existed: the stored row lacks the key entirely while the
 //! re-serialized retraction writes it as explicit `null`, so the retraction

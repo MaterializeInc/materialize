@@ -367,9 +367,9 @@ true
   WHERE metric_name = 'mz_metric_sink_curated_dataflow_error_count'
 0
 
-> DROP INDEX arr_idx
-
 > DROP MATERIALIZED VIEW arr_mv
+
+> DROP INDEX arr_idx
 
 > DROP TABLE arr_t
 
@@ -623,9 +623,12 @@ true
 > SET cluster_replica = r1
 
 # An arrangement, so the teardown below is observable on the size family and not only the gauges.
+# It needs a row: an arrangement without updates holds no batch and so reports no size.
 > CREATE TABLE deny_t (x int)
 
 > CREATE INDEX deny_ix ON deny_t (x)
+
+> INSERT INTO deny_t VALUES (1)
 
 > SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
   WHERE metric_name = 'mz_compute_metric_sink_frontier_ms'

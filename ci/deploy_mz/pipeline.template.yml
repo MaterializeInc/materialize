@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 # Deploys are fast, do them quickly
-priority: 30
+priority: 80
 
 steps:
   - command: bin/ci-builder run stable bin/pyactivate -m ci.deploy_mz.version
@@ -42,9 +42,12 @@ steps:
     concurrency: 1
     concurrency_group: deploy-mz/docker
 
-  - command: bin/pyactivate -m ci.deploy_mz.macos
+  - id: deploy_mz-macos-aarch64
+    command: bin/pyactivate -m ci.deploy_mz.macos
     agents:
-      queue: mac-aarch64
+      queue: mac-aarch64-release
+    env:
+      MZ_BINARIES_UPLOAD_ROLE_ARN: arn:aws:iam::834237029485:role/buildkite-macos-deploy
     timeout_in_minutes: 30
     concurrency: 1
     concurrency_group: deploy-mz/macos/aarch64

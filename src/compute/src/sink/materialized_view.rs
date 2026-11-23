@@ -127,6 +127,7 @@ use mz_compute_types::dyncfgs::{
 };
 use mz_compute_types::sinks::{ComputeSinkDesc, MaterializedViewSinkConnection};
 use mz_dyncfg::ConfigSet;
+use mz_expr::MfpPlan;
 use mz_ore::cast::CastFrom;
 use mz_persist_client::batch::{Batch, ProtoBatch};
 use mz_persist_client::cache::PersistClientCache;
@@ -141,7 +142,7 @@ use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sources::SourceData;
 use mz_timely_util::builder_async::PressOnDropButton;
-use mz_timely_util::builder_async::{Event, OperatorBuilder};
+use mz_timely_util::builder_async::{Event, OperatorBuilder, sole_capability};
 use mz_timely_util::probe::{Handle, ProbeNotify};
 use serde::{Deserialize, Serialize};
 use timely::PartialOrder;
@@ -413,11 +414,12 @@ pub(super) fn persist_source<'s>(
     let as_of = None;
 
     let until = Antichain::new();
-    let map_filter_project = None;
+    let map_filter_project: Option<&mut MfpPlan> = None;
 
     let (ok_stream, err_stream, token) = mz_storage_operators::persist_source::persist_source::<
         DataflowErrorSer,
         mz_storage_operators::persist_source::RowVecBuilder<Timestamp>,
+        _,
     >(
         scope,
         sink_id,
@@ -930,7 +932,8 @@ mod write {
                         match event {
                             Event::Data(cap, data) => {
                                 for desc in data {
-                                    state.absorb_batch_description(desc, cap.clone());
+                                    let cap = sole_capability(&cap).clone();
+                                    state.absorb_batch_description(desc, cap);
                                 }
                                 state.maybe_write_batch().await
                             }

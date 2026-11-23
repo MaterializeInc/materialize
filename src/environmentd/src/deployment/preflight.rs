@@ -22,6 +22,7 @@ use mz_controller_types::ReplicaId;
 use mz_ore::channel::trigger;
 use mz_ore::exit;
 use mz_ore::halt;
+use mz_ore::restart_in_place;
 use mz_ore::str::separated;
 use mz_persist_client::PersistClient;
 use mz_repr::{CatalogItemId, Timestamp};
@@ -47,9 +48,13 @@ pub struct CatchupConfig {
 }
 
 /// Returns whether this deployment should boot in read-only mode.
+///
+/// `restarted_in_place` is whether the container entrypoint restarted this
+/// process after [`restart_in_place!`].
 pub async fn preflight_0dt(
     openable_adapter_storage: &mut dyn OpenableDurableCatalogState,
     deploy_generation: u64,
+    restarted_in_place: bool,
 ) -> Result<bool, CatalogError> {
     if !openable_adapter_storage.is_initialized().await? {
         info!("catalog not initialized; booting with writes allowed");
@@ -62,6 +67,19 @@ pub async fn preflight_0dt(
         info!("this deployment is a new generation; booting in read only mode");
         Ok(true)
     } else if catalog_generation == deploy_generation {
+        // Only read-only code paths restart in place, so finding this
+        // generation in the catalog means a process of it has been promoted:
+        // one in a pod that replaced this one, or, after a skipped catch-up,
+        // this container's previous process, whose read-only bootstrap
+        // restarted after the takeover. Booting writable would fence a
+        // replacement. Halting leaves the restart to Kubernetes, which does not
+        // restart a deleted pod and restarts this one without the marker.
+        if restarted_in_place {
+            halt!(
+                "restarted in place, but deployment generation {} has been promoted; halting",
+                catalog_generation
+            );
+        }
         info!("this deployment is the current generation; booting with writes allowed");
         Ok(false)
     } else {
@@ -196,24 +214,40 @@ pub fn spawn_catchup(
         // notice this and give us the promote signal again, once we're
         // ready again.
 
-        let openable_adapter_storage = mz_catalog::durable::persist_backed_catalog_state(
+        let openable_adapter_storage = openable_catalog(
             persist_client.clone(),
-            environment_id.organization_id(),
-            BUILD_INFO.semver_version(),
-            Some(deploy_generation),
+            &environment_id,
+            deploy_generation,
             Arc::clone(&catalog_metrics),
         )
-        .await
-        .expect("incompatible catalog/persist version");
+        .await;
 
         let _catalog = openable_adapter_storage
             .open(boot_ts, &bootstrap_args)
             .await
             .unwrap_or_terminate("unexpected error while fencing out old deployment");
 
-        // Reboot as the leader.
+        // Reboot as the leader. This process now holds the catalog, so leave
+        // the restart to Kubernetes rather than restarting in place.
         halt!("fenced out old deployment; rebooting as leader")
     });
+}
+
+async fn openable_catalog(
+    persist_client: PersistClient,
+    environment_id: &EnvironmentId,
+    deploy_generation: u64,
+    catalog_metrics: Arc<Metrics>,
+) -> Box<dyn OpenableDurableCatalogState> {
+    mz_catalog::durable::persist_backed_catalog_state(
+        persist_client,
+        environment_id.organization_id(),
+        BUILD_INFO.semver_version(),
+        Some(deploy_generation),
+        catalog_metrics,
+    )
+    .await
+    .expect("incompatible catalog/persist version")
 }
 
 /// Restart in read-only mode when user items or replicas have been created or
@@ -228,15 +262,21 @@ async fn check_ddl_changes(
     initial_user_items: &BTreeSet<CatalogItemId>,
     initial_user_replicas: &BTreeSet<ReplicaId>,
 ) {
-    let openable_adapter_storage = mz_catalog::durable::persist_backed_catalog_state(
+    let mut openable_adapter_storage = openable_catalog(
         persist_client,
-        environment_id.organization_id(),
-        BUILD_INFO.semver_version(),
-        Some(deploy_generation),
+        &environment_id,
+        deploy_generation,
         catalog_metrics,
     )
-    .await
-    .expect("incompatible catalog/persist version");
+    .await;
+
+    // `open_savepoint` consumes the openable, so read the generation first. A
+    // read this early can only report an older generation, and `preflight_0dt`
+    // halts a process restarted in place whose generation has been promoted.
+    let catalog_generation = openable_adapter_storage
+        .get_deployment_generation()
+        .await
+        .unwrap_or_terminate("unexpected error while reading the deployment generation");
 
     let mut catalog = openable_adapter_storage
         .open_savepoint(boot_ts, &bootstrap_args)
@@ -325,10 +365,20 @@ async fn check_ddl_changes(
 
     let extra_info = separated(". ", info_parts);
 
-    halt!(
-        "there have been DDL that we need to react to; rebooting in read-only mode. {}",
-        extra_info
-    )
+    // Restart in place only while this generation is still read-only. Once a
+    // process of this generation has been promoted, a restarted process would
+    // only halt in `preflight_0dt`, so leave the restart to Kubernetes.
+    if catalog_generation < deploy_generation {
+        restart_in_place!(
+            "there have been DDL that we need to react to; rebooting in read-only mode. {}",
+            extra_info
+        )
+    } else {
+        halt!(
+            "deployment generation {} has been promoted; halting",
+            catalog_generation
+        )
+    }
 }
 
 /// Snapshot committed user IDs, not allocator counters: IDs can be allocated in
@@ -428,7 +478,7 @@ mod tests {
     async fn catchup_starts_after_bootstrap() {
         let (builder, config, handle) = setup().await;
         let mut openable = builder.with_deploy_generation(1).unwrap_build().await;
-        assert!(preflight_0dt(openable.as_mut(), 1).await.unwrap());
+        assert!(preflight_0dt(openable.as_mut(), 1, false).await.unwrap());
         let (_trigger, receiver) = trigger::channel();
         let (bootstrapped, bootstrapped_receiver) = oneshot::channel();
         let metrics = Arc::clone(&config.catalog_metrics);

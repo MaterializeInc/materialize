@@ -9,12 +9,6 @@ This directory is the root of Materialize's Hugo user documentation site.
   the documentation hierarchy: `identifier` names a node, `parent` places it
   beneath another node, and `weight` orders siblings. Section landing pages
   generally use `_index.md`.
-- `data/` contains YAML and JSON inputs used to populate reference pages and
-  examples.
-- `layouts/` contains Hugo templates and shortcodes; `assets/` contains SCSS
-  and JavaScript sources.
-- `archetypes/` provides metadata templates, `static/` holds copied assets,
-  and `sql-grammar/` contains BNF files and generated railroad diagrams.
 - `resources/` and `public/` are generated build output. Avoid hand-editing
   them.
 

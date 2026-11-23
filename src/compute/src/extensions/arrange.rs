@@ -11,20 +11,21 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::sync::{Arc, Weak};
 
+use differential_dataflow::batcher::Batcher;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::arrange_core;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::implementations::BatchContainer;
-use differential_dataflow::trace::implementations::spine_fueled::Spine;
-use differential_dataflow::trace::{Batch, Batcher, Builder, Trace, TraceReader};
+use differential_dataflow::trace::implementations::spine_fueled::{Spine, SpineBatch};
+use differential_dataflow::trace::{Trace, TraceReader};
 use differential_dataflow::{Collection, Data, ExchangeData, Hashable, VecCollection};
 use mz_compute_types::dyncfgs::{ENABLE_COLUMN_PAGED_BATCHER, ENABLE_COLUMNAR_MERGE_BATCHER};
 use mz_dyncfg::ConfigSet;
 use mz_row_spine::ArcBatch;
 use mz_timely_util::containers::HeapSize;
+use mz_timely_util::operator::BatcherNew;
 use timely::Container;
-use timely::container::{ContainerBuilder, PushInto};
 use timely::dataflow::Stream;
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract, Pipeline};
 use timely::dataflow::operators::Operator;
@@ -39,11 +40,6 @@ use crate::typedefs::{
 };
 
 /// Which merge batcher an arrange site should instantiate.
-///
-/// The three parameters `mz_arrange_core` takes are one unit, not three
-/// knobs: the chunker's container and the builder's input are both pinned to
-/// `Batcher::Output`, so the chunker and builder follow from the batcher and
-/// a call site has to spell out a whole arm per variant.
 pub enum ArrangementBatcher {
     /// `Chunker<ColumnationStack<_>>` + `Col2ValBatcher` + `RowRowBuilder`.
     /// Chains are columnation stacks.
@@ -84,15 +80,11 @@ pub trait MzArrange<'scope>: MzArrangeCore<'scope> {
     /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
     /// This trace is current for all times marked completed in the output stream, and probing this stream
     /// is the correct way to determine that times in the shared trace are committed.
-    fn mz_arrange<Chu, Ba, Bu, Tr>(self, name: &str) -> Arranged<'scope, TraceAgent<Tr>>
+    fn mz_arrange<Ba, Tr>(self, name: &str) -> Arranged<'scope, TraceAgent<Tr>>
     where
-        Ba: Batcher<Time = Self::Timestamp> + 'static,
-        Chu: ContainerBuilder<Container = Ba::Output>
-            + for<'a> PushInto<&'a mut Self::Input>
-            + 'static,
-        Bu: Builder<Time = Self::Timestamp, Input = Ba::Output, Output = Tr::Batch>,
-        Tr: Trace + TraceReader<Time = Self::Timestamp> + 'static,
-        Tr::Batch: Batch,
+        Ba: Batcher<Self::Container, Time = Self::Timestamp> + BatcherNew + 'static,
+        Ba::Output: Into<Tr::Batch>,
+        Tr: Trace<Time = Self::Timestamp> + 'static,
         Arranged<'scope, TraceAgent<Tr>>: ArrangementSize;
 }
 
@@ -100,8 +92,8 @@ pub trait MzArrange<'scope>: MzArrangeCore<'scope> {
 pub trait MzArrangeCore<'scope> {
     /// The current scope.
     type Timestamp: Timestamp + Lattice;
-    /// The data input container type.
-    type Input: Container + Clone + 'static;
+    /// The container of updates to arrange.
+    type Container: Container + Clone + 'static;
 
     /// Arranges a stream of `(Key, Val)` updates by `Key` into a trace of type `Tr`. Partitions
     /// the data according to `pact`.
@@ -109,20 +101,12 @@ pub trait MzArrangeCore<'scope> {
     /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
     /// This trace is current for all times marked completed in the output stream, and probing this stream
     /// is the correct way to determine that times in the shared trace are committed.
-    fn mz_arrange_core<P, Chu, Ba, Bu, Tr>(
-        self,
-        pact: P,
-        name: &str,
-    ) -> Arranged<'scope, TraceAgent<Tr>>
+    fn mz_arrange_core<P, Ba, Tr>(self, pact: P, name: &str) -> Arranged<'scope, TraceAgent<Tr>>
     where
-        P: ParallelizationContract<Self::Timestamp, Self::Input>,
-        Ba: Batcher<Time = Self::Timestamp> + 'static,
-        Chu: ContainerBuilder<Container = Ba::Output>
-            + for<'a> PushInto<&'a mut Self::Input>
-            + 'static,
-        Bu: Builder<Time = Self::Timestamp, Input = Ba::Output, Output = Tr::Batch>,
-        Tr: Trace + TraceReader<Time = Self::Timestamp> + 'static,
-        Tr::Batch: Batch,
+        P: ParallelizationContract<Self::Timestamp, Self::Container>,
+        Ba: Batcher<Self::Container, Time = Self::Timestamp> + BatcherNew + 'static,
+        Ba::Output: Into<Tr::Batch>,
+        Tr: Trace<Time = Self::Timestamp> + 'static,
         Arranged<'scope, TraceAgent<Tr>>: ArrangementSize;
 }
 
@@ -132,27 +116,19 @@ where
     C: Container + Clone + 'static,
 {
     type Timestamp = T;
-    type Input = C;
+    type Container = C;
 
-    fn mz_arrange_core<P, Chu, Ba, Bu, Tr>(
-        self,
-        pact: P,
-        name: &str,
-    ) -> Arranged<'scope, TraceAgent<Tr>>
+    fn mz_arrange_core<P, Ba, Tr>(self, pact: P, name: &str) -> Arranged<'scope, TraceAgent<Tr>>
     where
-        P: ParallelizationContract<T, Self::Input>,
-        Ba: Batcher<Time = T> + 'static,
-        Chu: ContainerBuilder<Container = Ba::Output>
-            + for<'a> PushInto<&'a mut Self::Input>
-            + 'static,
-        Bu: Builder<Time = T, Input = Ba::Output, Output = Tr::Batch>,
-        Tr: Trace + TraceReader<Time = T> + 'static,
-        Tr::Batch: Batch,
+        P: ParallelizationContract<T, C>,
+        Ba: Batcher<C, Time = T> + BatcherNew + 'static,
+        Ba::Output: Into<Tr::Batch>,
+        Tr: Trace<Time = T> + 'static,
         Arranged<'scope, TraceAgent<Tr>>: ArrangementSize,
     {
         // Allow access to `arrange_named` because we're within Mz's wrapper.
         #[allow(clippy::disallowed_methods)]
-        arrange_core::<_, _, Chu, Ba, Bu, _>(self, pact, name).log_arrangement_size()
+        arrange_core::<_, _, Ba, _>(self, pact, name, Ba::new_batcher).log_arrangement_size()
     }
 }
 
@@ -163,19 +139,15 @@ where
     V: ExchangeData,
     R: ExchangeData,
 {
-    fn mz_arrange<Chu, Ba, Bu, Tr>(self, name: &str) -> Arranged<'scope, TraceAgent<Tr>>
+    fn mz_arrange<Ba, Tr>(self, name: &str) -> Arranged<'scope, TraceAgent<Tr>>
     where
-        Ba: Batcher<Time = T> + 'static,
-        Chu: ContainerBuilder<Container = Ba::Output>
-            + for<'a> PushInto<&'a mut Self::Input>
-            + 'static,
-        Bu: Builder<Time = T, Input = Ba::Output, Output = Tr::Batch>,
-        Tr: Trace + TraceReader<Time = T> + 'static,
-        Tr::Batch: Batch,
+        Ba: Batcher<Vec<((K, V), T, R)>, Time = T> + BatcherNew + 'static,
+        Ba::Output: Into<Tr::Batch>,
+        Tr: Trace<Time = T> + 'static,
         Arranged<'scope, TraceAgent<Tr>>: ArrangementSize,
     {
         let exchange = Exchange::new(move |update: &((K, V), T, R)| (update.0).0.hashed().into());
-        self.mz_arrange_core::<_, Chu, Ba, Bu, _>(exchange, name)
+        self.mz_arrange_core::<_, Ba, _>(exchange, name)
     }
 }
 
@@ -185,25 +157,17 @@ where
     C: Container + Clone + 'static,
 {
     type Timestamp = T;
-    type Input = C;
+    type Container = C;
 
-    fn mz_arrange_core<P, Chu, Ba, Bu, Tr>(
-        self,
-        pact: P,
-        name: &str,
-    ) -> Arranged<'scope, TraceAgent<Tr>>
+    fn mz_arrange_core<P, Ba, Tr>(self, pact: P, name: &str) -> Arranged<'scope, TraceAgent<Tr>>
     where
-        P: ParallelizationContract<T, Self::Input>,
-        Ba: Batcher<Time = T> + 'static,
-        Chu: ContainerBuilder<Container = Ba::Output>
-            + for<'a> PushInto<&'a mut Self::Input>
-            + 'static,
-        Bu: Builder<Time = T, Input = Ba::Output, Output = Tr::Batch>,
-        Tr: Trace + TraceReader<Time = T> + 'static,
-        Tr::Batch: Batch,
+        P: ParallelizationContract<T, C>,
+        Ba: Batcher<C, Time = T> + BatcherNew + 'static,
+        Ba::Output: Into<Tr::Batch>,
+        Tr: Trace<Time = T> + 'static,
         Arranged<'scope, TraceAgent<Tr>>: ArrangementSize,
     {
-        self.inner.mz_arrange_core::<_, Chu, Ba, Bu, _>(pact, name)
+        self.inner.mz_arrange_core::<_, Ba, _>(pact, name)
     }
 }
 
@@ -228,18 +192,14 @@ where
     K: ExchangeData + Hashable,
     R: ExchangeData,
 {
-    fn mz_arrange<Chu, Ba, Bu, Tr>(self, name: &str) -> Arranged<'scope, TraceAgent<Tr>>
+    fn mz_arrange<Ba, Tr>(self, name: &str) -> Arranged<'scope, TraceAgent<Tr>>
     where
-        Ba: Batcher<Time = T> + 'static,
-        Chu: ContainerBuilder<Container = Ba::Output>
-            + for<'a> PushInto<&'a mut Self::Input>
-            + 'static,
-        Bu: Builder<Time = T, Input = Ba::Output, Output = Tr::Batch>,
-        Tr: Trace + TraceReader<Time = T> + 'static,
-        Tr::Batch: Batch,
+        Ba: Batcher<Vec<((K, ()), T, R)>, Time = T> + BatcherNew + 'static,
+        Ba::Output: Into<Tr::Batch>,
+        Tr: Trace<Time = T> + 'static,
         Arranged<'scope, TraceAgent<Tr>>: ArrangementSize,
     {
-        self.0.map(|d| (d, ())).mz_arrange::<Chu, Ba, Bu, _>(name)
+        self.0.map(|d| (d, ())).mz_arrange::<Ba, _>(name)
     }
 }
 
@@ -250,27 +210,19 @@ where
     R: Clone + 'static,
 {
     type Timestamp = T;
-    type Input = Vec<((K, ()), T, R)>;
+    type Container = Vec<((K, ()), T, R)>;
 
-    fn mz_arrange_core<P, Chu, Ba, Bu, Tr>(
-        self,
-        pact: P,
-        name: &str,
-    ) -> Arranged<'scope, TraceAgent<Tr>>
+    fn mz_arrange_core<P, Ba, Tr>(self, pact: P, name: &str) -> Arranged<'scope, TraceAgent<Tr>>
     where
-        P: ParallelizationContract<T, Self::Input>,
-        Ba: Batcher<Time = T> + 'static,
-        Chu: ContainerBuilder<Container = Ba::Output>
-            + for<'a> PushInto<&'a mut Self::Input>
-            + 'static,
-        Bu: Builder<Time = T, Input = Ba::Output, Output = Tr::Batch>,
-        Tr: Trace + TraceReader<Time = T> + 'static,
-        Tr::Batch: Batch,
+        P: ParallelizationContract<T, Vec<((K, ()), T, R)>>,
+        Ba: Batcher<Vec<((K, ()), T, R)>, Time = T> + BatcherNew + 'static,
+        Ba::Output: Into<Tr::Batch>,
+        Tr: Trace<Time = T> + 'static,
         Arranged<'scope, TraceAgent<Tr>>: ArrangementSize,
     {
         self.0
             .map(|d| (d, ()))
-            .mz_arrange_core::<_, Chu, Ba, Bu, _>(pact, name)
+            .mz_arrange_core::<_, Ba, _>(pact, name)
     }
 }
 
@@ -294,7 +246,7 @@ fn log_arrangement_size_inner<'scope, B, L>(
     mut logic: L,
 ) -> Arranged<'scope, TraceAgent<Spine<ArcBatch<B>>>>
 where
-    B: Batch + 'static,
+    B: SpineBatch + 'static,
     L: FnMut(&B) -> (usize, usize, usize) + 'static,
 {
     let scope = arranged.stream.scope();
@@ -329,10 +281,13 @@ where
 
             move |input, output| {
                 input.for_each(|time, data| {
-                    for batch in data.iter() {
-                        batches
-                            .entry(Arc::as_ptr(&batch.0))
-                            .or_insert_with(|| (Arc::downgrade(&batch.0), logic(&batch.0)));
+                    for span in data.iter() {
+                        // A span with no updates carries no batch, and so no allocation to weigh.
+                        if let Some(batch) = &span.inner {
+                            batches
+                                .entry(Arc::as_ptr(&batch.0))
+                                .or_insert_with(|| (Arc::downgrade(&batch.0), logic(&batch.0)));
+                        }
                     }
                     output.session(&time).give_container(data);
                 });
@@ -347,10 +302,12 @@ where
                     return;
                 };
 
-                trace.borrow().trace().map_batches(|batch| {
-                    batches
-                        .entry(Arc::as_ptr(&batch.0))
-                        .or_insert_with(|| (Arc::downgrade(&batch.0), logic(&batch.0)));
+                trace.borrow().trace().map_spans(|span| {
+                    if let Some(batch) = &span.inner {
+                        batches
+                            .entry(Arc::as_ptr(&batch.0))
+                            .or_insert_with(|| (Arc::downgrade(&batch.0), logic(&batch.0)));
+                    }
                 });
 
                 let (mut size, mut capacity, mut allocations) = (0, 0, 0);

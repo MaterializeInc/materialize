@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-FROM node:26-trixie-slim AS node
+FROM node:26-trixie-slim@sha256:e6bedef217677b276c591795e169840edd9096dbf13f29df8ef8d1856b8820bc AS node
 
 # Node 25 dropped corepack from the distribution, but the console pins its
 # package manager through `packageManager` in console/package.json and CI drives
@@ -15,10 +15,13 @@ FROM node:26-trixie-slim AS node
 # `/usr/local/lib/node_modules` below still find `corepack/dist/corepack.js`.
 RUN npm install -g corepack
 
+# CA bundle for apt's HTTPS transport, before ca-certificates is installed.
+FROM gcr.io/distroless/cc-debian13:debug-nonroot@sha256:bdb634669ffbf44cdfef9495238b03ce33a02e9ef631fc718b7dd6d2531f4325 AS ca-certs
+
 # Stage 1: Build a minimum CI Builder image that we can use for the initial
 # steps like `mkpipeline` and `Build`, as well as any tests that are self
 # contained and use other Docker images.
-FROM debian:13-slim AS ci-builder-min
+FROM debian:13-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 AS ci-builder-min
 
 WORKDIR /workdir
 
@@ -44,6 +47,11 @@ ARG XZ_OPT=-T0
 # Please take care with what gets added here. The goal of this initial layer is to be as small as
 # possible since it's used for the `mkpipeline` and `Build` CI jobs, which block __all other__
 # jobs.
+# Fetch apt sources over HTTPS only.
+COPY --from=ca-certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+RUN echo 'Acquire::https::CAInfo "/etc/ssl/certs/ca-certificates.crt";' > /etc/apt/apt.conf.d/99https-ca \
+    && sed -i 's|http://|https://|g' /etc/apt/sources.list.d/*
+
 RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
@@ -61,15 +69,23 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     && rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/* /var/cache/* /var/log/* \
     && sed -i 's/^UID_MIN.*/UID_MIN\t500/' /etc/login.defs
 
-RUN curl -fsSL https://github.com/trufflesecurity/trufflehog/releases/download/v3.91.0/trufflehog_3.91.0_linux_$ARCH_GO.tar.gz > trufflehog.tar.gz \
-    && if [ $ARCH_GO = amd64 ]; then echo '694c5c8791c9a30d8ee295cbe991fc6e7c5f4bd8f5dbe8ada100dfe2ece9a628 trufflehog.tar.gz' | sha256sum --check; fi \
-    && if [ $ARCH_GO = arm64 ]; then echo '58f627f07e7b94c5269db2958c57209f190a7f15c01d8126eac9b3b1d7ae23b3 trufflehog.tar.gz' | sha256sum --check; fi \
+# renovate: datasource=github-release-attachments depName=trufflesecurity/trufflehog
+ARG TRUFFLEHOG_AMD64=v3.99.9@12050095c8063bf4d34f9f6cbce6ba9fa8d0deea9d503d0570364feba093658e
+# renovate: datasource=github-release-attachments depName=trufflesecurity/trufflehog
+ARG TRUFFLEHOG_ARM64=v3.99.9@778b1913196dc9b9234e8fd366f64387efeb08c01930a1d2110dcb2ffd07e68b
+
+RUN TRUFFLEHOG_VERSION=${TRUFFLEHOG_AMD64%@*} \
+    && curl -fsSL https://github.com/trufflesecurity/trufflehog/releases/download/${TRUFFLEHOG_VERSION}/trufflehog_${TRUFFLEHOG_VERSION#v}_linux_$ARCH_GO.tar.gz > trufflehog.tar.gz \
+    && if [ $ARCH_GO = amd64 ]; then echo "${TRUFFLEHOG_AMD64#*@} trufflehog.tar.gz" | sha256sum --check; fi \
+    && if [ $ARCH_GO = arm64 ]; then echo "${TRUFFLEHOG_ARM64#*@} trufflehog.tar.gz" | sha256sum --check; fi \
     && tar -xzf trufflehog.tar.gz -C /usr/local/bin trufflehog \
     && rm trufflehog.tar.gz
 
 # Install Python dependencies. These are necessary to run some of our base tooling.
 COPY requirements.txt /workdir/
-RUN curl -LsSf https://astral.sh/uv/0.9.10/install.sh | UV_INSTALL_DIR=/usr/local/bin UV_UNMANAGED_INSTALL=1 sh \
+# renovate: datasource=github-releases depName=astral-sh/uv
+ARG UV_VERSION=0.13.9
+RUN curl -LsSf https://astral.sh/uv/$UV_VERSION/install.sh | UV_INSTALL_DIR=/usr/local/bin UV_UNMANAGED_INSTALL=1 sh \
     && uv pip install --system --break-system-packages -r /workdir/requirements.txt && rm /workdir/requirements*.txt \
     && rm -rf /root/.cache/uv
 
@@ -83,12 +99,21 @@ RUN gpg --import rust.asc \
 ARG RUST_DATE
 ARG RUST_VERSION
 
+# renovate: datasource=github-releases depName=MaterializeInc/autouseradd
+ARG AUTOUSERADD_VERSION=1.3.0
+# renovate: datasource=github-releases depName=docker/compose
+ARG DOCKER_COMPOSE_VERSION=v5.8.0
+# renovate: datasource=github-releases depName=christian-korneck/docker-pushrm
+ARG DOCKER_PUSHRM_VERSION=v1.9.0
+# renovate: datasource=github-releases depName=docker/buildx
+ARG DOCKER_BUILDX_VERSION=v0.39.1
+
 RUN \
     # 1. autouseradd
     #
     # Ensures that the UID used when running the container has a proper entry in
     # `/etc/passwd`, and writable home directory.
-    curl -fsSL https://github.com/MaterializeInc/autouseradd/releases/download/1.3.0/autouseradd-1.3.0-$ARCH_GO.tar.gz \
+    curl -fsSL https://github.com/MaterializeInc/autouseradd/releases/download/${AUTOUSERADD_VERSION}/autouseradd-${AUTOUSERADD_VERSION}-$ARCH_GO.tar.gz \
     | tar xz -C / --strip-components 1 \
     # 2. Docker
     #
@@ -97,11 +122,11 @@ RUN \
     # Newer docker compose versions change the output format in services.log,
     # making it hard to use a regex in ci_annotate_errors.py to tell which test
     # an error comes from.
-    && curl -fsSL https://github.com/docker/compose/releases/download/v5.0.1/docker-compose-linux-$ARCH_GCC > /usr/local/lib/docker/cli-plugins/docker-compose \
+    && curl -fsSL https://github.com/docker/compose/releases/download/${DOCKER_COMPOSE_VERSION}/docker-compose-linux-$ARCH_GCC > /usr/local/lib/docker/cli-plugins/docker-compose \
     && chmod +x /usr/local/lib/docker/cli-plugins/docker-compose \
-    && curl -fsSL https://github.com/christian-korneck/docker-pushrm/releases/download/v1.9.0/docker-pushrm_linux_$ARCH_GO > /usr/local/lib/docker/cli-plugins/docker-pushrm \
+    && curl -fsSL https://github.com/christian-korneck/docker-pushrm/releases/download/${DOCKER_PUSHRM_VERSION}/docker-pushrm_linux_$ARCH_GO > /usr/local/lib/docker/cli-plugins/docker-pushrm \
     && chmod +x /usr/local/lib/docker/cli-plugins/docker-pushrm \
-    && curl -fsSL https://github.com/docker/buildx/releases/download/v0.30.1/buildx-v0.30.1.linux-$ARCH_GO > /usr/local/lib/docker/cli-plugins/docker-buildx \
+    && curl -fsSL https://github.com/docker/buildx/releases/download/${DOCKER_BUILDX_VERSION}/buildx-${DOCKER_BUILDX_VERSION}.linux-$ARCH_GO > /usr/local/lib/docker/cli-plugins/docker-buildx \
     && chmod +x /usr/local/lib/docker/cli-plugins/docker-buildx \
     # 3. Cargo
     #
@@ -175,7 +200,7 @@ COPY apt-llvm.asc .
 
 RUN gpg --dearmor < apt-llvm.asc > /etc/apt/keyrings/apt-llvm.gpg \
     && rm apt-llvm.asc \
-    && echo "deb [signed-by=/etc/apt/keyrings/apt-llvm.gpg] http://apt.llvm.org/trixie/ llvm-toolchain-trixie-22 main" > /etc/apt/sources.list.d/apt-llvm.list \
+    && echo "deb [signed-by=/etc/apt/keyrings/apt-llvm.gpg] https://apt.llvm.org/trixie/ llvm-toolchain-trixie-22 main" > /etc/apt/sources.list.d/apt-llvm.list \
     && apt-get update \
     && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     clang-22 \
@@ -197,17 +222,26 @@ RUN ln -s ../lib/node_modules/corepack/dist/corepack.js /usr/local/bin/corepack 
     && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
     && corepack enable
 
-RUN curl -fsSL https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.$ARCH_GCC.tar.xz > shellcheck.tar.xz \
-    && tar -xJf shellcheck.tar.xz -C /usr/local/bin --strip-components 1 shellcheck-v0.11.0/shellcheck \
+# renovate: datasource=github-releases depName=koalaman/shellcheck
+ARG SHELLCHECK_VERSION=v0.11.0
+# renovate: datasource=github-releases depName=bufbuild/buf
+ARG BUF_VERSION=v1.75.0
+# renovate: datasource=github-releases depName=boz/kail
+ARG KAIL_VERSION=v0.17.4
+# renovate: datasource=github-releases depName=parca-dev/parca-debuginfo
+ARG PARCA_DEBUGINFO_VERSION=v0.13.0
+
+RUN curl -fsSL https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.$ARCH_GCC.tar.xz > shellcheck.tar.xz \
+    && tar -xJf shellcheck.tar.xz -C /usr/local/bin --strip-components 1 shellcheck-${SHELLCHECK_VERSION}/shellcheck \
     && rm shellcheck.tar.xz \
-    && curl -fsSL https://github.com/bufbuild/buf/releases/download/v1.60.0/buf-Linux-$ARCH_GCC.tar.gz > buf.tar.gz \
+    && curl -fsSL https://github.com/bufbuild/buf/releases/download/${BUF_VERSION}/buf-Linux-$ARCH_GCC.tar.gz > buf.tar.gz \
     && tar -xf buf.tar.gz -C /usr/local/bin --strip-components 2 buf/bin \
     && rm buf.tar.gz \
-    && curl -fsSL https://github.com/boz/kail/releases/download/v0.17.4/kail_v0.17.4_linux_$ARCH_GO.tar.gz > kail.tar.gz \
+    && curl -fsSL https://github.com/boz/kail/releases/download/${KAIL_VERSION}/kail_${KAIL_VERSION}_linux_$ARCH_GO.tar.gz > kail.tar.gz \
     && tar -xf kail.tar.gz -C /usr/local/bin kail \
     && rm kail.tar.gz \
     && chmod +x /usr/local/bin/kail \
-    && curl -fsSL https://github.com/parca-dev/parca-debuginfo/releases/download/v0.12.2/parca-debuginfo_0.12.2_Linux_$ARCH_GCC > /usr/local/bin/parca-debuginfo \
+    && curl -fsSL https://github.com/parca-dev/parca-debuginfo/releases/download/${PARCA_DEBUGINFO_VERSION}/parca-debuginfo_${PARCA_DEBUGINFO_VERSION#v}_Linux_$ARCH_GCC > /usr/local/bin/parca-debuginfo \
     && chmod +x /usr/local/bin/buf /usr/local/bin/protoc-gen-buf-breaking /usr/local/bin/protoc-gen-buf-lint /usr/local/bin/parca-debuginfo
 
 ENTRYPOINT ["autouseradd", "--user", "materialize"]
@@ -254,22 +288,22 @@ RUN mkdir rust \
     && gpg --verify rust.asc rust.tar.gz \
     && tar -xzf rust.tar.gz -C /usr/local/lib/rustlib/ --strip-components=4 \
     && rm -rf rust.asc rust.tar.gz rust \
-    && cargo install --root /usr/local --version "=0.9.0" --locked --features=cli cargo-about \
-    && cargo install --root /usr/local --version "=3.7.0" --locked cargo-deb \
-    && cargo install --root /usr/local --version "=0.19.8" --locked cargo-deny \
+    && cargo install --root /usr/local --version "=0.9.3" --locked --features=cli cargo-about \
+    && cargo install --root /usr/local --version "=3.8.0" --locked cargo-deb \
+    && cargo install --root /usr/local --version "=0.22.0" --locked cargo-deny \
     && cargo install --root /usr/local --version "=0.1.0" --locked cargo-deplint \
-    && cargo install --root /usr/local --version "=0.9.137" --locked cargo-nextest \
-    && cargo install --root /usr/local --version "=0.8.7" --locked cargo-llvm-cov \
+    && cargo install --root /usr/local --version "=0.9.152" --locked cargo-nextest \
+    && cargo install --root /usr/local --version "=0.9.1" --locked cargo-llvm-cov \
     && cargo install --root /usr/local --version "=0.1.61" --locked --features=vendored-openssl cargo-udeps \
     && cargo install --root /usr/local --version "=0.4.0" --locked cargo-binutils \
-    && cargo install --root /usr/local --version "=0.13.1" --locked wasm-pack \
+    && cargo install --root /usr/local --version "=0.15.1" --locked wasm-pack \
     && if [ "$RUST_VERSION" = "nightly" ]; then \
            # NOTE: no --locked, unlike the installs above. cargo-fuzz 0.13.1's \
            # bundled Cargo.lock pins deps that fail on the pinned nightly \
            # (yanked futures-util/zip, plus a crate using the perma-unstable \
            # `rustc_layout_scalar_valid_range_*` attribute). Let cargo resolve \
            # compatible versions instead. \
-           cargo install --root /usr/local --version "=0.13.1" cargo-fuzz; \
+           cargo install --root /usr/local --version "=0.13.2" cargo-fuzz; \
        fi \
     && rm -rf /cargo/registry /cargo/git
 
@@ -285,7 +319,10 @@ RUN npx pyright@$(sh /workdir/pyright-version.sh) --help \
 
 # Install APT repo generator.
 
-RUN curl -fsSL https://github.com/deb-s3/deb-s3/releases/download/0.11.8/deb-s3-0.11.8.gem > deb-s3.gem \
+# renovate: datasource=rubygems depName=deb-s3
+ARG DEB_S3_VERSION=0.11.8
+
+RUN curl -fsSL https://github.com/deb-s3/deb-s3/releases/download/${DEB_S3_VERSION}/deb-s3-${DEB_S3_VERSION}.gem > deb-s3.gem \
     && gem install ./deb-s3.gem --no-document \
     && rm deb-s3.gem \
     && rm -rf /root/.local/share/gem/cache
@@ -294,15 +331,19 @@ RUN curl -fsSL https://github.com/deb-s3/deb-s3/releases/download/0.11.8/deb-s3-
 
 # TODO(def-): AWS (Real) tests fail with InvalidClientTokenId
 # RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$ARCH_GCC-2.31.39.zip" > awscli.zip \
-RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$ARCH_GCC-2.17.2.zip" > awscli.zip \
+# renovate: datasource=github-tags depName=aws/aws-cli
+ARG AWS_CLI_VERSION=2.17.2
+RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$ARCH_GCC-$AWS_CLI_VERSION.zip" > awscli.zip \
     && unzip awscli.zip \
     && ./aws/install \
     && rm -rf aws awscli.zip
 
 # Install the gcloud CLI.
 
+# renovate: datasource=custom.gcloud depName=gcloud
+ARG GCLOUD_VERSION=548.0.0
 RUN arch_gcloud=$(echo "$ARCH_GCC" | sed -e "s/aarch64/arm/" -e "s/amd64/x86_64/") \
-    && curl -fsSL "https://storage.googleapis.com/cloud-sdk-release/google-cloud-cli-548.0.0-linux-$arch_gcloud.tar.gz" > gcloud.tar.gz \
+    && curl -fsSL "https://storage.googleapis.com/cloud-sdk-release/google-cloud-cli-$GCLOUD_VERSION-linux-$arch_gcloud.tar.gz" > gcloud.tar.gz \
     && tar -xzf gcloud.tar.gz -C /opt \
     && rm gcloud.tar.gz \
     && CLOUDSDK_CORE_DISABLE_PROMPTS=1 /opt/google-cloud-sdk/install.sh --path-update false \
@@ -315,89 +356,161 @@ RUN arch_gcloud=$(echo "$ARCH_GCC" | sed -e "s/aarch64/arm/" -e "s/amd64/x86_64/
     && rm -rf /root/.cache/pip
 
 # Install docs site dependencies. These are towards the end for the same reason
-# as the Python dependencies. These are only supported on x86_64 at the moment.
-# See: https://discourse.gohugo.io/t/how-to-install-hugo-extended-on-linux-arm/28098/4
+# as the Python dependencies. The docs build runs on x86_64.
 #
 # On every Hugo version bump, compare doc/user/layouts/sitemap.xml with the new
 # version's built-in sitemap template, which it copies, and port any changes.
 
+# renovate: datasource=github-release-attachments depName=wjdp/htmltest
+ARG HTMLTEST_AMD64=v0.17.0@775c597ee74899d6002cd2d93076f897f4ba68686bceabe2e5d72e84c57bc0fb
+# renovate: datasource=github-release-attachments depName=gohugoio/hugo
+ARG HUGO_AMD64=v0.170.1@a1c81c53a8bc789f1af9494a6b6be1a9b1aa7782e22a1398f919d5df50558433
+# renovate: datasource=github-release-attachments depName=sass/dart-sass
+ARG DART_SASS_AMD64=1.108.2@32d2eb5b83cbc180fce9657ff3c57401a9006c59eccfe0bfdde0aa755a66d42f
+
 RUN if [ $ARCH_GCC = x86_64 ]; then \
-    curl -fsSL https://github.com/wjdp/htmltest/releases/download/v0.17.0/htmltest_0.17.0_linux_amd64.tar.gz > htmltest.tar.gz \
-    && echo '775c597ee74899d6002cd2d93076f897f4ba68686bceabe2e5d72e84c57bc0fb htmltest.tar.gz' | sha256sum --check \
+    HTMLTEST_VERSION=${HTMLTEST_AMD64%@*} \
+    && curl -fsSL https://github.com/wjdp/htmltest/releases/download/${HTMLTEST_VERSION}/htmltest_${HTMLTEST_VERSION#v}_linux_amd64.tar.gz > htmltest.tar.gz \
+    && echo "${HTMLTEST_AMD64#*@} htmltest.tar.gz" | sha256sum --check \
     && tar -xzf htmltest.tar.gz -C /usr/local/bin htmltest \
     && rm htmltest.tar.gz \
-    && curl -fsSL https://github.com/gohugoio/hugo/releases/download/v0.152.2/hugo_extended_withdeploy_0.152.2_Linux-64bit.tar.gz > hugo.tar.gz \
-    && echo '08200e4d82f086c94c301e8ba08102f9e23f38774ad949bb3251cac76283684a hugo.tar.gz' | sha256sum --check \
+    && HUGO_VERSION=${HUGO_AMD64%@*} \
+    && curl -fsSL https://github.com/gohugoio/hugo/releases/download/${HUGO_VERSION}/hugo_withdeploy_${HUGO_VERSION#v}_linux-amd64.tar.gz > hugo.tar.gz \
+    && echo "${HUGO_AMD64#*@} hugo.tar.gz" | sha256sum --check \
     && tar -xzf hugo.tar.gz -C /usr/local/bin hugo \
-    && rm hugo.tar.gz; \
+    && rm hugo.tar.gz \
+    && DART_SASS_VERSION=${DART_SASS_AMD64%@*} \
+    && curl -fsSL https://github.com/sass/dart-sass/releases/download/${DART_SASS_VERSION}/dart-sass-${DART_SASS_VERSION}-linux-x64.tar.gz > dart-sass.tar.gz \
+    && echo "${DART_SASS_AMD64#*@} dart-sass.tar.gz" | sha256sum --check \
+    && tar -xzf dart-sass.tar.gz -C /opt \
+    && ln -s /opt/dart-sass/sass /usr/local/bin/sass \
+    && rm dart-sass.tar.gz; \
     fi
 
 # Install KinD, kubectl, helm & helm-docs
 
-RUN curl -fsSL https://kind.sigs.k8s.io/dl/v0.32.0/kind-linux-$ARCH_GO > /usr/local/bin/kind \
-    && chmod +x /usr/local/bin/kind \
-    && if [ $ARCH_GO = amd64 ]; then echo '50030de23cf40a18505f20426f6a8506bedf13c6e509244bd1fa9463721b0f54 /usr/local/bin/kind' | sha256sum --check; fi \
-    && if [ $ARCH_GO = arm64 ]; then echo 'b92cd615e97585de8ddade28ed5cd7feb4248d717c233eea5b03c37298900f5d /usr/local/bin/kind' | sha256sum --check; fi
+# renovate: datasource=github-release-attachments depName=kubernetes-sigs/kind
+ARG KIND_AMD64=v0.33.0@aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d
+# renovate: datasource=github-release-attachments depName=kubernetes-sigs/kind
+ARG KIND_ARM64=v0.33.0@20022bee6cfcd5086cb7234d218e3454e6090022f2a8f55d1fa7fcf42c3867a2
 
-RUN curl -fsSL https://dl.k8s.io/release/v1.34.10/bin/linux/$ARCH_GO/kubectl > /usr/local/bin/kubectl \
+RUN KIND_VERSION=${KIND_AMD64%@*} \
+    && curl -fsSL https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-$ARCH_GO > /usr/local/bin/kind \
+    && chmod +x /usr/local/bin/kind \
+    && if [ $ARCH_GO = amd64 ]; then echo "${KIND_AMD64#*@} /usr/local/bin/kind" | sha256sum --check; fi \
+    && if [ $ARCH_GO = arm64 ]; then echo "${KIND_ARM64#*@} /usr/local/bin/kind" | sha256sum --check; fi
+
+# renovate: datasource=github-releases depName=kubernetes/kubernetes
+ARG KUBECTL_VERSION=v1.34.10
+RUN curl -fsSL https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/$ARCH_GO/kubectl > /usr/local/bin/kubectl \
     && chmod +x /usr/local/bin/kubectl \
     && if [ $ARCH_GO = amd64 ]; then echo '95bd70842bd11a524d24acd5b68726899e3488e153e45e2b4ae846545beda050 /usr/local/bin/kubectl' | sha256sum --check; fi \
     && if [ $ARCH_GO = arm64 ]; then echo '52d3aeefea32fdfa3671ccd636be5da463ddfd0a2fc09d7bcbaedcff4c76cad5 /usr/local/bin/kubectl' | sha256sum --check; fi
 
-RUN curl -fsSL https://get.helm.sh/helm-v4.0.0-linux-$ARCH_GO.tar.gz > helm.tar.gz \
+# renovate: datasource=github-releases depName=helm/helm
+ARG HELM_VERSION=v4.0.0
+RUN curl -fsSL https://get.helm.sh/helm-${HELM_VERSION}-linux-$ARCH_GO.tar.gz > helm.tar.gz \
     && if [ $ARCH_GO = amd64 ]; then echo 'c77e9e7c1cc96e066bd240d190d1beed9a6b08060b2043ef0862c4f865eca08f helm.tar.gz' | sha256sum --check; fi \
     && if [ $ARCH_GO = arm64 ]; then echo '8c5c77e20cc29509d640e208a6a7d2b7e9f99bb04e5b5fbe22707b72a5235245 helm.tar.gz' | sha256sum --check; fi \
     && tar -xf helm.tar.gz -C /usr/local/bin --strip-components=1 linux-$ARCH_GO/helm \
     && rm helm.tar.gz
 
+# renovate: datasource=github-release-attachments depName=norwoodj/helm-docs
+ARG HELM_DOCS_AMD64=v1.14.2@a8cf72ada34fad93285ba2a452b38bdc5bd52cc9a571236244ec31022928d6cc
+# renovate: datasource=github-release-attachments depName=norwoodj/helm-docs
+ARG HELM_DOCS_ARM64=v1.14.2@c3787212332386dcd122debef7848feb165aa701467ae3e3442df7638f3ac4e4
+
 RUN arch_helm_docs=$(echo "$ARCH_GCC" | sed -e "s/aarch64/arm64/" -e "s/amd64/x86_64/") \
-    && curl -fsSL https://github.com/norwoodj/helm-docs/releases/download/v1.14.2/helm-docs_1.14.2_Linux_$arch_helm_docs.tar.gz > helm-docs.tar.gz \
-    && if [ "$arch_helm_docs" = "x86_64" ]; then echo 'a8cf72ada34fad93285ba2a452b38bdc5bd52cc9a571236244ec31022928d6cc helm-docs.tar.gz' | sha256sum --check; fi \
-    && if [ "$arch_helm_docs" = "arm64" ]; then echo 'c3787212332386dcd122debef7848feb165aa701467ae3e3442df7638f3ac4e4 helm-docs.tar.gz' | sha256sum --check; fi \
+    && HELM_DOCS_VERSION=${HELM_DOCS_AMD64%@*} \
+    && curl -fsSL https://github.com/norwoodj/helm-docs/releases/download/${HELM_DOCS_VERSION}/helm-docs_${HELM_DOCS_VERSION#v}_Linux_$arch_helm_docs.tar.gz > helm-docs.tar.gz \
+    && if [ "$arch_helm_docs" = "x86_64" ]; then echo "${HELM_DOCS_AMD64#*@} helm-docs.tar.gz" | sha256sum --check; fi \
+    && if [ "$arch_helm_docs" = "arm64" ]; then echo "${HELM_DOCS_ARM64#*@} helm-docs.tar.gz" | sha256sum --check; fi \
     && tar -xf helm-docs.tar.gz -C /usr/local/bin \
     && rm helm-docs.tar.gz
 
+# renovate: datasource=github-release-attachments depName=helm-unittest/helm-unittest
+ARG HELM_UNITTEST_AMD64=v1.2.1@48e86ecc1467b009630e5954375e5d8494139f73b466df5fe8c04fa45b634939
+# renovate: datasource=github-release-attachments depName=helm-unittest/helm-unittest
+ARG HELM_UNITTEST_ARM64=v1.2.1@c66062713cd3cbb1a80d7098bd1d4a48db8438f56b43fb6377df65447f93f8de
+
 RUN mkdir -p /usr/local/share/helm/plugins/unittest \
-    && curl -fsSL https://github.com/helm-unittest/helm-unittest/releases/download/v1.0.2/helm-unittest-linux-$ARCH_GO-1.0.2.tgz > helm-unittest.tar.gz \
-    && if [ $ARCH_GO = amd64 ]; then echo 'c3fa443e21860549120cc43455e7fe517f80e5878aff4aa3fee8f8b803eb00fa helm-unittest.tar.gz' | sha256sum --check; fi \
-    && if [ $ARCH_GO = arm64 ]; then echo 'f543a40777e45a63aaf2808a3395e72027a53d3daef10520a9aba65dbf13ff91 helm-unittest.tar.gz' | sha256sum --check; fi \
+    && HELM_UNITTEST_VERSION=${HELM_UNITTEST_AMD64%@*} \
+    && curl -fsSL https://github.com/helm-unittest/helm-unittest/releases/download/${HELM_UNITTEST_VERSION}/helm-unittest-linux-$ARCH_GO-${HELM_UNITTEST_VERSION#v}.tgz > helm-unittest.tar.gz \
+    && if [ $ARCH_GO = amd64 ]; then echo "${HELM_UNITTEST_AMD64#*@} helm-unittest.tar.gz" | sha256sum --check; fi \
+    && if [ $ARCH_GO = arm64 ]; then echo "${HELM_UNITTEST_ARM64#*@} helm-unittest.tar.gz" | sha256sum --check; fi \
     && tar -xf helm-unittest.tar.gz -C /usr/local/share/helm/plugins/unittest \
     && rm helm-unittest.tar.gz
 
-RUN curl -fsSL https://releases.hashicorp.com/terraform/1.13.5/terraform_1.13.5_linux_$ARCH_GO.zip > terraform.zip \
+# renovate: datasource=github-releases depName=hashicorp/terraform
+ARG TERRAFORM_VERSION=1.13.5
+RUN curl -fsSL https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_$ARCH_GO.zip > terraform.zip \
     && if [ $ARCH_GO = amd64 ]; then echo '0dbe3fcc268eb670801af6a6456799d1ae26e72e73797f6c6167e18aafd1fd9a terraform.zip' | sha256sum --check; fi \
     && if [ $ARCH_GO = arm64 ]; then echo 'fc1ddcb403fb57e25bdbdceb1ef2b1a102650c01b4d65dd3410082d2ef8b4417 terraform.zip' | sha256sum --check; fi \
     && unzip terraform.zip terraform -d /usr/local/bin \
     && chmod +x /usr/local/bin/terraform \
     && rm terraform.zip
 
-RUN curl -fsSL https://github.com/terraform-docs/terraform-docs/releases/download/v0.20.0/terraform-docs-v0.20.0-linux-$ARCH_GO.tar.gz > terraform-docs.tar.gz \
-    && if [ $ARCH_GO = amd64 ]; then echo '34ae01772412bb11474e6718ea62113e38ff5964ee570a98c69fafe3a6dff286 terraform-docs.tar.gz' | sha256sum --check; fi \
-    && if [ $ARCH_GO = arm64 ]; then echo '371b4ed983781d1efdd8f7de06264baac41b1d80927f7fd718c405a303d863a0 terraform-docs.tar.gz' | sha256sum --check; fi \
+# renovate: datasource=github-release-attachments depName=terraform-docs/terraform-docs
+ARG TERRAFORM_DOCS_AMD64=v0.25.1@246f1a3211c9dbbed4c4af82b856dbd40acda78816ac8cdb5203c2869b659c76
+# renovate: datasource=github-release-attachments depName=terraform-docs/terraform-docs
+ARG TERRAFORM_DOCS_ARM64=v0.25.1@a5b4b1ae887138fe1c617fe4e1aea272511d9a7ffc2cf98b0a2aacd87b348b56
+
+RUN TERRAFORM_DOCS_VERSION=${TERRAFORM_DOCS_AMD64%@*} \
+    && curl -fsSL https://github.com/terraform-docs/terraform-docs/releases/download/${TERRAFORM_DOCS_VERSION}/terraform-docs-${TERRAFORM_DOCS_VERSION}-linux-$ARCH_GO.tar.gz > terraform-docs.tar.gz \
+    && if [ $ARCH_GO = amd64 ]; then echo "${TERRAFORM_DOCS_AMD64#*@} terraform-docs.tar.gz" | sha256sum --check; fi \
+    && if [ $ARCH_GO = arm64 ]; then echo "${TERRAFORM_DOCS_ARM64#*@} terraform-docs.tar.gz" | sha256sum --check; fi \
     && tar -xzf terraform-docs.tar.gz -C /usr/local/bin terraform-docs \
     && rm terraform-docs.tar.gz
 
-RUN curl -fsSL https://github.com/mikefarah/yq/releases/download/v4.48.2/yq_linux_$ARCH_GO > yq \
-    && if [ $ARCH_GO = amd64 ]; then echo '0ffc35320180d4911bc3a772934da508715e08af444cb33d4d43660065e25bcc yq' | sha256sum --check; fi \
-    && if [ $ARCH_GO = arm64 ]; then echo '3c21630fda217239a5b7d718d08f08e02503098230b3abd49195d315a6dcfe45 yq' | sha256sum --check; fi \
+# renovate: datasource=github-release-attachments depName=mikefarah/yq
+ARG YQ_AMD64=v4.54.3@129534601871538efe0ba4c5e62a34fb1d5f469bcb975c4fddeb467d82974973
+# renovate: datasource=github-release-attachments depName=mikefarah/yq
+ARG YQ_ARM64=v4.54.3@89f69310b61b68d1245065a1241d1fc843f7a36cd6103ffd77ad987613bd1b67
+
+RUN YQ_VERSION=${YQ_AMD64%@*} \
+    && curl -fsSL https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_$ARCH_GO > yq \
+    && if [ $ARCH_GO = amd64 ]; then echo "${YQ_AMD64#*@} yq" | sha256sum --check; fi \
+    && if [ $ARCH_GO = arm64 ]; then echo "${YQ_ARM64#*@} yq" | sha256sum --check; fi \
     && chmod +x yq \
     && mv yq /usr/local/bin
 
-RUN curl -fsSL https://amazon-inspector-sbomgen.s3.amazonaws.com/1.8.2/linux/$ARCH_GO/inspector-sbomgen.zip > inspector-sbomgen.zip \
+# renovate: datasource=custom.inspector-sbomgen depName=inspector-sbomgen
+ARG INSPECTOR_SBOMGEN_VERSION=1.8.2
+RUN curl -fsSL https://amazon-inspector-sbomgen.s3.amazonaws.com/$INSPECTOR_SBOMGEN_VERSION/linux/$ARCH_GO/inspector-sbomgen.zip > inspector-sbomgen.zip \
     && if [ $ARCH_GO = amd64 ]; then echo '2e4e3c754e230046349dd975feb48fa953ea5a2de190cbbc17c1c85043936b5a inspector-sbomgen.zip' | sha256sum --check; fi \
     && if [ $ARCH_GO = arm64 ]; then echo '449a49e222a2bdffe0353435d7b04b0556b35a391c7b9714ce46d1a5382bc3e2 inspector-sbomgen.zip' | sha256sum --check; fi \
     && unzip inspector-sbomgen.zip \
-    && mv inspector-sbomgen-1.8.2/linux/$ARCH_GO/inspector-sbomgen /usr/local/bin \
+    && mv inspector-sbomgen-$INSPECTOR_SBOMGEN_VERSION/linux/$ARCH_GO/inspector-sbomgen /usr/local/bin \
     && chmod +x /usr/local/bin/inspector-sbomgen \
-    && rm -rf inspector-sbomgen.zip inspector-sbomgen-1.8.2
+    && rm -rf inspector-sbomgen.zip inspector-sbomgen-$INSPECTOR_SBOMGEN_VERSION
+
+# renovate: datasource=github-release-attachments depName=zizmorcore/zizmor
+ARG ZIZMOR_AMD64=v1.32.0@bb110cc765eca9cd7efb2e284a956be5974c60027b0970f16397d86208a9957b
+# renovate: datasource=github-release-attachments depName=zizmorcore/zizmor
+ARG ZIZMOR_ARM64=v1.32.0@cb152b207f815116d7fa1c1ee4614f61578803351395052908095e79adfd9fd0
 
 RUN arch_zizmor=$(echo "$ARCH_GCC" | sed -e "s/amd64/x86_64/") \
-    && curl -fsSL https://github.com/zizmorcore/zizmor/releases/download/v1.30.1/zizmor-$arch_zizmor-unknown-linux-gnu.tar.gz > zizmor.tar.gz \
-    && if [ $arch_zizmor = x86_64 ]; then echo 'e65324f4430c2717591937edcec90ccbefaf14c174f8ec9415e03ca875b46e1a zizmor.tar.gz' | sha256sum --check; fi \
-    && if [ $arch_zizmor = aarch64 ]; then echo '7ff1dce33bdd18fd2a4affe63bdd47efcccca97b2cec1c1863ec26e9e2647540 zizmor.tar.gz' | sha256sum --check; fi \
+    && ZIZMOR_VERSION=${ZIZMOR_AMD64%@*} \
+    && curl -fsSL https://github.com/zizmorcore/zizmor/releases/download/${ZIZMOR_VERSION}/zizmor-$arch_zizmor-unknown-linux-gnu.tar.gz > zizmor.tar.gz \
+    && if [ $arch_zizmor = x86_64 ]; then echo "${ZIZMOR_AMD64#*@} zizmor.tar.gz" | sha256sum --check; fi \
+    && if [ $arch_zizmor = aarch64 ]; then echo "${ZIZMOR_ARM64#*@} zizmor.tar.gz" | sha256sum --check; fi \
     && tar xvf zizmor.tar.gz \
     && mv zizmor /usr/local/bin \
     && rm zizmor.tar.gz
+
+# Install a pinned libduckdb for libduckdb-sys to link against via
+# `DUCKDB_LIB_DIR`, so builds don't download it. The testdrive image copies it
+# from here (`builder-files` in src/testdrive/ci/mzbuild.yml). The version must
+# match the libduckdb-sys crate (1.MAJOR_MINOR_PATCH.x encodes DuckDB
+# MAJOR.MINOR.PATCH), which bin/lint-versions checks. ldconfig makes it
+# loadable by test binaries, since Cargo only adds library paths inside the
+# target dir to their search path.
+RUN curl -fsSL https://github.com/duckdb/duckdb/releases/download/v1.5.6/libduckdb-linux-$ARCH_GO.zip > libduckdb.zip \
+    && if [ $ARCH_GO = amd64 ]; then echo 'b845005f5132a7d8180057c35e14a7626632258782f871a90861b19c1c03841b libduckdb.zip' | sha256sum --check; fi \
+    && if [ $ARCH_GO = arm64 ]; then echo 'b72ed9f05003f5e9d2015f7ceada6416b377d9dd33169cdde3c9e33897856eee libduckdb.zip' | sha256sum --check; fi \
+    && unzip libduckdb.zip libduckdb.so -d /usr/local/lib \
+    && ldconfig \
+    && rm libduckdb.zip
 
 # Hardcode some known SSH hosts, or else SSH will ask whether the host is
 # trustworthy on the first connection.
@@ -409,6 +522,7 @@ ENV PATH=/opt/google-cloud-sdk/bin:$PATH
 ENV CARGO_TARGET_DIR=/mnt/build
 ENV CARGO_INCREMENTAL=1
 ENV HELM_PLUGINS=/usr/local/share/helm/plugins
+ENV DUCKDB_LIB_DIR=/usr/local/lib
 
 # Set up for a persistent volume to hold Cargo metadata, so that crate metadata
 # does not need to be refetched on every compilation.
@@ -417,7 +531,7 @@ RUN mkdir /cargo && chmod 777 /cargo
 VOLUME /cargo
 
 # Stage 3: Build a lightweight CI Builder image for console/playwright jobs.
-FROM debian:13-slim AS ci-builder-console
+FROM debian:13-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 AS ci-builder-console
 
 ARG ARCH_GCC
 ARG ARCH_GO
@@ -430,6 +544,11 @@ ENV MZ_DEV_CI_BUILDER=1
 ENV DOCKER_BUILDKIT=1
 
 ARG XZ_OPT=-T0
+
+# Fetch apt sources over HTTPS only.
+COPY --from=ca-certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+RUN echo 'Acquire::https::CAInfo "/etc/ssl/certs/ca-certificates.crt";' > /etc/apt/apt.conf.d/99https-ca \
+    && sed -i 's|http://|https://|g' /etc/apt/sources.list.d/*
 
 RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     ca-certificates \
@@ -501,13 +620,21 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     && rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/* /var/cache/* /var/log/* \
     && sed -i 's/^UID_MIN.*/UID_MIN\t500/' /etc/login.defs
 
-RUN curl -fsSL https://github.com/MaterializeInc/autouseradd/releases/download/1.3.0/autouseradd-1.3.0-$ARCH_GO.tar.gz \
+# renovate: datasource=github-releases depName=MaterializeInc/autouseradd
+ARG AUTOUSERADD_VERSION=1.3.0
+
+RUN curl -fsSL https://github.com/MaterializeInc/autouseradd/releases/download/${AUTOUSERADD_VERSION}/autouseradd-${AUTOUSERADD_VERSION}-$ARCH_GO.tar.gz \
     | tar xz -C / --strip-components 1
 
+# renovate: datasource=github-releases depName=docker/compose
+ARG DOCKER_COMPOSE_VERSION=v5.8.0
+# renovate: datasource=github-releases depName=docker/buildx
+ARG DOCKER_BUILDX_VERSION=v0.39.1
+
 RUN mkdir -p /usr/local/lib/docker/cli-plugins \
-    && curl -fsSL https://github.com/docker/compose/releases/download/v5.0.1/docker-compose-linux-$ARCH_GCC > /usr/local/lib/docker/cli-plugins/docker-compose \
+    && curl -fsSL https://github.com/docker/compose/releases/download/${DOCKER_COMPOSE_VERSION}/docker-compose-linux-$ARCH_GCC > /usr/local/lib/docker/cli-plugins/docker-compose \
     && chmod +x /usr/local/lib/docker/cli-plugins/docker-compose \
-    && curl -fsSL https://github.com/docker/buildx/releases/download/v0.30.1/buildx-v0.30.1.linux-$ARCH_GO > /usr/local/lib/docker/cli-plugins/docker-buildx \
+    && curl -fsSL https://github.com/docker/buildx/releases/download/${DOCKER_BUILDX_VERSION}/buildx-${DOCKER_BUILDX_VERSION}.linux-$ARCH_GO > /usr/local/lib/docker/cli-plugins/docker-buildx \
     && chmod +x /usr/local/lib/docker/cli-plugins/docker-buildx
 
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
@@ -517,19 +644,29 @@ RUN ln -s ../lib/node_modules/corepack/dist/corepack.js /usr/local/bin/corepack 
     && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
     && corepack enable
 
-RUN curl -fsSL https://kind.sigs.k8s.io/dl/v0.32.0/kind-linux-$ARCH_GO > /usr/local/bin/kind \
-    && chmod +x /usr/local/bin/kind \
-    && if [ $ARCH_GO = amd64 ]; then echo '50030de23cf40a18505f20426f6a8506bedf13c6e509244bd1fa9463721b0f54 /usr/local/bin/kind' | sha256sum --check; fi \
-    && if [ $ARCH_GO = arm64 ]; then echo 'b92cd615e97585de8ddade28ed5cd7feb4248d717c233eea5b03c37298900f5d /usr/local/bin/kind' | sha256sum --check; fi
+# renovate: datasource=github-release-attachments depName=kubernetes-sigs/kind
+ARG KIND_AMD64=v0.33.0@aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d
+# renovate: datasource=github-release-attachments depName=kubernetes-sigs/kind
+ARG KIND_ARM64=v0.33.0@20022bee6cfcd5086cb7234d218e3454e6090022f2a8f55d1fa7fcf42c3867a2
 
-RUN curl -fsSL https://dl.k8s.io/release/v1.34.10/bin/linux/$ARCH_GO/kubectl > /usr/local/bin/kubectl \
+RUN KIND_VERSION=${KIND_AMD64%@*} \
+    && curl -fsSL https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-$ARCH_GO > /usr/local/bin/kind \
+    && chmod +x /usr/local/bin/kind \
+    && if [ $ARCH_GO = amd64 ]; then echo "${KIND_AMD64#*@} /usr/local/bin/kind" | sha256sum --check; fi \
+    && if [ $ARCH_GO = arm64 ]; then echo "${KIND_ARM64#*@} /usr/local/bin/kind" | sha256sum --check; fi
+
+# renovate: datasource=github-releases depName=kubernetes/kubernetes
+ARG KUBECTL_VERSION=v1.34.10
+RUN curl -fsSL https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/$ARCH_GO/kubectl > /usr/local/bin/kubectl \
     && chmod +x /usr/local/bin/kubectl \
     && if [ $ARCH_GO = amd64 ]; then echo '95bd70842bd11a524d24acd5b68726899e3488e153e45e2b4ae846545beda050 /usr/local/bin/kubectl' | sha256sum --check; fi \
     && if [ $ARCH_GO = arm64 ]; then echo '52d3aeefea32fdfa3671ccd636be5da463ddfd0a2fc09d7bcbaedcff4c76cad5 /usr/local/bin/kubectl' | sha256sum --check; fi
 
 # Use Helm 3 (not 4) because the cloud repo's bin/kind-create uses relative
 # file paths for vendored charts, which Helm 4 rejects as invalid URLs.
-RUN curl -fsSL https://get.helm.sh/helm-v3.16.2-linux-$ARCH_GO.tar.gz > helm.tar.gz \
+# renovate: datasource=github-releases depName=helm/helm
+ARG HELM_VERSION=v3.16.2
+RUN curl -fsSL https://get.helm.sh/helm-${HELM_VERSION}-linux-$ARCH_GO.tar.gz > helm.tar.gz \
     && if [ $ARCH_GO = amd64 ]; then echo '9318379b847e333460d33d291d4c088156299a26cd93d570a7f5d0c36e50b5bb helm.tar.gz' | sha256sum --check; fi \
     && if [ $ARCH_GO = arm64 ]; then echo '1888301aeb7d08a03b6d9f4d2b73dcd09b89c41577e80e3455c113629fc657a4 helm.tar.gz' | sha256sum --check; fi \
     && tar -xf helm.tar.gz -C /usr/local/bin --strip-components=1 linux-$ARCH_GO/helm \

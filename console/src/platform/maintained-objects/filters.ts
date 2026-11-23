@@ -10,12 +10,13 @@
 import { ColumnFiltersState, Row } from "@tanstack/react-table";
 
 import {
-  MAINTAINED_OBJECT_TYPES,
-  MaintainedObjectType,
+  MAINTAINED_OBJECT_LIST_TYPES,
+  MaintainedObjectListType,
 } from "~/api/materialize/maintained-objects/constants";
 import { snapshotting } from "~/platform/connectors/utils";
 
 import {
+  isSourceCollection,
   MaintainedObjectListItem,
   MaintainedObjectSourceStatus,
 } from "./queries";
@@ -79,7 +80,7 @@ export const arrayMatchFilter =
 
 export const clusterFilterFn = arrayMatchFilter((r) => r.cluster?.name);
 
-export const objectTypeFilterFn = arrayMatchFilter<MaintainedObjectType>(
+export const objectTypeFilterFn = arrayMatchFilter<MaintainedObjectListType>(
   (r) => r.objectType,
 );
 
@@ -134,14 +135,14 @@ export const STATUS_FILTER_LABELS: Record<string, string> = {
 };
 
 /**
- * The bucket the Status cell displays: ingestion status for sources, replica
- * hydration for everything else. The filter matches on this so it can never
- * select a value the cell doesn't show.
+ * The bucket the Status cell displays: ingestion status for sources and their
+ * subsources and tables, replica hydration for everything else. The filter
+ * matches on this so it can never select a value the cell doesn't show.
  */
 export const statusBucketForRow = (
   row: MaintainedObjectListItem,
 ): string | undefined => {
-  if (row.objectType === "source") {
+  if (isSourceCollection(row)) {
     return row.sourceStatus
       ? bucketForSourceStatus(row.sourceStatus, row.sourceType)
       : undefined;
@@ -191,12 +192,12 @@ export const FILTER_URL_SPECS: readonly FilterUrlSpec[] = [
       nonEmpty(
         p
           .getAll("objectType[]")
-          .filter((t): t is MaintainedObjectType =>
-            (MAINTAINED_OBJECT_TYPES as readonly string[]).includes(t),
+          .filter((t): t is MaintainedObjectListType =>
+            (MAINTAINED_OBJECT_LIST_TYPES as readonly string[]).includes(t),
           ),
       ),
     toUrl: (v) => {
-      const arr = v as MaintainedObjectType[];
+      const arr = v as MaintainedObjectListType[];
       return arr?.length ? { key: "objectType[]", value: arr } : undefined;
     },
   },

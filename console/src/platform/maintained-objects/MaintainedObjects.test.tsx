@@ -25,6 +25,7 @@ const buildObject = (
   databaseName: "materialize",
   objectType: "materialized-view",
   sourceType: null,
+  parentSource: null,
   cluster: { id: "u1", name: "quickstart" },
   hydratedReplicas: 1,
   totalReplicas: 1,
@@ -132,6 +133,38 @@ describe("MaintainedObjects", () => {
     const row = await screen.findByRole("row", { name: /snapshotting_src/ });
     expect(within(row).getByText("Snapshotting")).toBeVisible();
     expect(within(row).queryByText("Not Hydrated")).not.toBeInTheDocument();
+  });
+
+  it("shows a snapshotting table next to a running one from the same source", async () => {
+    // A table added to a running source snapshots on its own while the
+    // source's other tables keep ingesting.
+    const parentSource = { id: "u103", name: "events_src" };
+    const runningTable = buildObject({
+      id: "u106",
+      name: "running_table",
+      objectType: "table",
+      sourceType: "postgres",
+      parentSource,
+      sourceStatus: { status: "running", error: null, snapshotCommitted: true },
+    });
+    const newTable = buildObject({
+      id: "u107",
+      name: "new_table",
+      objectType: "table",
+      sourceType: "postgres",
+      parentSource,
+      sourceStatus: {
+        status: "running",
+        error: null,
+        snapshotCommitted: false,
+      },
+    });
+    await renderMaintainedObjects({ objects: [runningTable, newTable] });
+
+    const running = await screen.findByRole("row", { name: /running_table/ });
+    expect(within(running).getByText("Running")).toBeVisible();
+    const snapshotting = screen.getByRole("row", { name: /new_table/ });
+    expect(within(snapshotting).getByText("Snapshotting")).toBeVisible();
   });
 
   it("surfaces a stalled source's status", async () => {

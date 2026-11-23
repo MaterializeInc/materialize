@@ -28,6 +28,7 @@ from materialize.parallel_workload.action import (
     ApplyReplacementMaterializedViewAction,
     BackupRestoreAction,
     CancelAction,
+    CreateOrReplaceReplacementMaterializedViewAction,
     CreateReplacementMaterializedViewAction,
     DropClusterAction,
     DropDatabaseAction,
@@ -680,7 +681,6 @@ def print_stats(
         "must be owner of",
         "permission denied for",
         "still depended upon by",
-        "another session modified the catalog while this DDL transaction was open",
         "because it already has a replacement",
         "is sealed and thus cannot be replaced",
         "unknown cluster 'dont_exist'",
@@ -748,11 +748,12 @@ def print_stats(
         # so CREATE REPLACEMENT fails with a tolerated "does not exist"/"unknown
         # schema", and a churny rename seed can legitimately never land a clean
         # attempt. With no replacement ever created,
-        # ApplyReplacementMaterializedViewAction then has nothing to apply
-        # either. Both succeed in the other scenarios, so they stay checked
-        # there.
+        # ApplyReplacementMaterializedViewAction then has nothing to apply and
+        # CreateOrReplaceReplacementMaterializedViewAction nothing to replace.
+        # All three succeed in the other scenarios, so they stay checked there.
         excluded.add(CreateReplacementMaterializedViewAction)
         excluded.add(ApplyReplacementMaterializedViewAction)
+        excluded.add(CreateOrReplaceReplacementMaterializedViewAction)
     never_succeeded = []
     for action_class in sorted(action_classes, key=lambda cls: cls.__name__):
         successes = num_successes[action_class]

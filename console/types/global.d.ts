@@ -16,6 +16,7 @@ declare global {
   const __SENTRY_ENABLED__: string;
   const __SENTRY_RELEASE__: string;
   const __IMPERSONATION_HOSTNAME__: string | undefined;
+  const __MARKETING_SITE_DEV_ORIGINS__: string;
 
   interface Window {
     // Global object for hubspot tracking code

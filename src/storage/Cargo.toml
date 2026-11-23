@@ -34,7 +34,6 @@ indexmap.workspace = true
 itertools.workspace = true
 maplit.workspace = true
 mysql_async.workspace = true
-mysql_common.workspace = true
 mz-arrow-util = { path = "../arrow-util" }
 mz-aws-glue-schema-registry = { path = "../aws-glue-schema-registry" }
 mz-ccsr = { path = "../ccsr" }
@@ -54,6 +53,7 @@ mz-postgres-util = { path = "../postgres-util" }
 mz-repr = { path = "../repr" }
 mz-rocksdb = { path = "../rocksdb" }
 mz-row-spine = { path = "../row-spine" }
+mz-service = { path = "../service" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-sql-server-util = { path = "../sql-server-util" }
 mz-ssh-util = { path = "../ssh-util" }

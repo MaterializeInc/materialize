@@ -73,6 +73,16 @@ pub enum InternalStorageCommand {
         /// The reason for the restart request.
         reason: String,
     },
+    /// Suspend the dataflow identified by the `GlobalId` without restarting it. It stays down
+    /// until the controller issues its run command again.
+    Suspend {
+        /// The id of the dataflow that should be suspended.
+        id: GlobalId,
+        /// The epoch of the rendering that asked for this. A later rendering keeps running.
+        epoch: u64,
+        /// The reason for the suspend request.
+        reason: String,
+    },
     /// Render an ingestion dataflow at the given resumption frontier.
     CreateIngestionDataflow {
         /// ID of the ingestion/sourve.

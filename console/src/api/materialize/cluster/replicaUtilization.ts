@@ -19,7 +19,16 @@ import { executeSqlV2, queryBuilder } from "~/api/materialize";
  * NOTE: fractions, not percentages. The hour bound leaves a replica with no
  * recent sample blank rather than hours stale.
  */
-export function buildReplicaUtilizationQuery() {
+export function buildReplicaUtilizationQuery({
+  includeSwap = false,
+}: {
+  /**
+   * Select `swapPercent`, swap's share of the heap limit as the cluster page's
+   * memory chart stacks it, or null for a size whose heap limit is only its
+   * RAM. Its columns need mz >= 26.44.
+   */
+  includeSwap?: boolean;
+} = {}) {
   return queryBuilder
     .selectFrom("mz_console_cluster_utilization_overview_3h")
     .distinctOn("replica_id")
@@ -31,6 +40,12 @@ export function buildReplicaUtilizationQuery() {
       "disk_percent as diskPercent",
       "heap_percent as heapPercent",
     ])
+    .$if(includeSwap, (qb) =>
+      qb.select(
+        sql<number | null>`CASE WHEN heap_limit_percent > 1
+          THEN swap_of_ram_percent / heap_limit_percent END`.as("swapPercent"),
+      ),
+    )
     .orderBy("replica_id")
     .orderBy("occurred_at", "desc");
 }
@@ -41,12 +56,14 @@ export type ReplicaUtilization = InferResult<
 
 /** Fetches the latest utilization sample for every replica in the environment. */
 export async function fetchReplicaUtilization({
+  params,
   queryKey,
   requestOptions,
 }: {
+  params: Parameters<typeof buildReplicaUtilizationQuery>[0];
   queryKey: QueryKey;
   requestOptions?: RequestInit;
 }) {
-  const compiledQuery = buildReplicaUtilizationQuery().compile();
+  const compiledQuery = buildReplicaUtilizationQuery(params).compile();
   return executeSqlV2({ queries: compiledQuery, queryKey, requestOptions });
 }

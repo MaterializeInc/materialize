@@ -7,12 +7,16 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+import { addMinutes, startOfMinute, subMinutes } from "date-fns";
 import PostgresInterval from "postgres-interval";
 
 import {
   createMultiSelectReactHookFormHandler,
   formatDuration,
+  mapQueryHistorySearchParams,
+  queryHistoryPath,
 } from "./queryHistoryUtils";
+import { queryHistoryListUrlSchema } from "./utils";
 
 type Values = "value1" | "value2" | "value3";
 
@@ -102,5 +106,57 @@ describe("formatDuration", () => {
   it("Should format nanoseconds when less than 1 second correctly", () => {
     const interval = PostgresInterval("00:00:00.59999");
     expect(formatDuration(interval)).toBe("600ms");
+  });
+});
+
+describe("queryHistoryPath", () => {
+  it("links to the list filtered to a cluster's statements from every user in a range, as the list reads its URL", () => {
+    // The list only takes a range that starts within its lookback.
+    const startDate = startOfMinute(subMinutes(new Date(), 20));
+    const endDate = addMinutes(startDate, 3);
+
+    const path = queryHistoryPath("aws-us-east-1", {
+      clusterId: "u9",
+      dateRange: [startDate, endDate],
+      sortField: "duration",
+    });
+    const url = new URL(path, "https://console.test");
+
+    expect(url.pathname).toBe("/regions/aws-us-east-1/query-history");
+    expect(
+      queryHistoryListUrlSchema.parse(
+        mapQueryHistorySearchParams(url.searchParams, "me@example.com"),
+      ),
+    ).toMatchObject({
+      clusterId: "u9",
+      user: "*",
+      dateRange: [startDate.toISOString(), endDate.toISOString()],
+      sortField: "duration",
+      sortOrder: "desc",
+    });
+  });
+
+  it("links to only the cluster's running statements, oldest first", () => {
+    const startDate = startOfMinute(subMinutes(new Date(), 60));
+    const path = queryHistoryPath("aws-us-east-1", {
+      clusterId: "u9",
+      dateRange: [startDate, addMinutes(startDate, 61)],
+      finishedStatuses: ["running"],
+      sortField: "start_time",
+      sortOrder: "asc",
+    });
+    const url = new URL(path, "https://console.test");
+
+    expect(
+      queryHistoryListUrlSchema.parse(
+        mapQueryHistorySearchParams(url.searchParams, "me@example.com"),
+      ),
+    ).toMatchObject({
+      clusterId: "u9",
+      user: "*",
+      finishedStatuses: ["running"],
+      sortField: "start_time",
+      sortOrder: "asc",
+    });
   });
 });

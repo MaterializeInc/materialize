@@ -20,6 +20,11 @@ export const TIME_PERIOD_OPTIONS = {
   "1440": "24 hours",
 };
 
+export const rangeLabelFor = (timePeriodMinutes: number) =>
+  TIME_PERIOD_OPTIONS[
+    String(timePeriodMinutes) as keyof typeof TIME_PERIOD_OPTIONS
+  ] ?? `${timePeriodMinutes}m`;
+
 /**
  * Search params carrying the page's controls, so a view is linkable. The time
  * period reuses the app-wide `timePeriod` key from `useTimePeriodSelect`.
@@ -93,3 +98,6 @@ export const OBJECT_TYPE_FILTERS: Record<
   ),
   schema: SCHEMA_OBJECT_TYPE_FILTERS,
 };
+
+/** Shown where a statistic has no value, matching the rest of the Console. */
+export const NO_VALUE = "—";

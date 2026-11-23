@@ -43,7 +43,12 @@ class QpsSweep:
         ):
             raise ValueError("Invalid QPS sweep configuration")
 
-    def config(self, flags: list[str], concurrency: int, protocol: str) -> dict:
+    def config(
+        self,
+        flags: list[str],
+        concurrency: int,
+        protocol: str,
+    ) -> dict:
         options = dict(zip(flags[::2], flags[1::2]))
         params = parse_qs(options["-params"])
 
@@ -62,7 +67,13 @@ class QpsSweep:
             "libpq_envs": [
                 common
                 | {
-                    "PGOPTIONS": f"-c cluster={cluster} -c statement_timeout={int(self.query_timeout * 1000)}"
+                    # Sweep-owned routing and timeout take precedence over caller options.
+                    "PGOPTIONS": " ".join(
+                        [
+                            *params.get("options", []),
+                            f"-c cluster={cluster} -c statement_timeout={int(self.query_timeout * 1000)}",
+                        ]
+                    )
                 }
                 for cluster in clusters
             ],

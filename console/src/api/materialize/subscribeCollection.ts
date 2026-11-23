@@ -13,7 +13,11 @@ import { atom, PrimitiveAtom } from "jotai";
 import { getStore } from "~/jotai";
 import storageAvailable from "~/utils/storageAvailable";
 
-import { SubscribeError, SubscribeState } from "./SubscribeManager";
+import {
+  SUBSCRIBE_ERROR_CODE,
+  SubscribeError,
+  SubscribeState,
+} from "./SubscribeManager";
 
 /** Trailing-throttle window for persisting the collection to localStorage. */
 const PERSIST_THROTTLE_MS = 1000;
@@ -79,6 +83,9 @@ export interface SubscribeCollection<T extends object> {
    * full current row set is diffed against what's already synced and only the
    * delta is written into the collection. Safe to call before sync starts. */
   applySnapshot: (state: SubscribeState<T>) => void;
+  /** The latest applied rows, including while the collection is paused
+   * between subscribers. */
+  getRows: () => T[];
   /** Seed the collection from the localStorage cache scoped to `scope`
    * (`organizationId|regionId`) and route future writes to that scoped key.
    * Deferred and scoped on purpose: a constant module-level key would seed one
@@ -234,12 +241,16 @@ export function createSubscribeCollection<T extends object>(options: {
   const applySnapshot = (state: SubscribeState<T>) => {
     // An empty pre-snapshot carries no data: don't clear cache-seeded state or
     // count it as live (that would block the later, async-scoped hydrate). It
-    // does clear a stale error so a reconnect falls back to loading.
+    // does clear a stale error so a reconnect falls back to loading. A socket
+    // that closes before its snapshot carries no data either, only its error.
     const isEmptyPreload =
-      !state.snapshotComplete && state.data.length === 0 && !state.error;
+      !state.snapshotComplete &&
+      state.data.length === 0 &&
+      (!state.error ||
+        state.error.code === SUBSCRIBE_ERROR_CODE.CONNECTION_CLOSED);
     if (isEmptyPreload) {
       writeStatus({
-        error: undefined,
+        error: state.error,
         snapshotComplete: lastSnapshotComplete,
         isRefreshing: lastSnapshotComplete,
       });
@@ -352,6 +363,7 @@ export function createSubscribeCollection<T extends object>(options: {
     collection,
     statusAtom,
     applySnapshot,
+    getRows: () => Array.from(desired.values()),
     hydrate,
     reset,
     suspendPersistence,

@@ -26,3 +26,36 @@ CREATE VIEW v AS SELECT foo.a, bar.b FROM d1.public.foo, d2.public.bar
 
 statement error renaming conflict: in materialize.public.v, which uses d1.public.foo, found reference to "bar"; cannot rename "foo" to any identity used in any existing view definitions
 ALTER TABLE d1.public.foo RENAME TO bar
+
+mode standard
+
+# A view's own query does not change when it takes the name of its input.
+statement ok
+CREATE SCHEMA upstream
+
+statement ok
+CREATE SCHEMA downstream
+
+statement ok
+CREATE TABLE upstream.orders (id int)
+
+statement ok
+CREATE VIEW downstream.orders_tmp AS SELECT id FROM upstream.orders
+
+statement ok
+ALTER VIEW downstream.orders_tmp RENAME TO orders
+
+query TT
+SHOW CREATE VIEW downstream.orders
+----
+materialize.downstream.orders
+CREATE VIEW materialize.downstream.orders AS SELECT id FROM materialize.upstream.orders;
+
+statement ok
+ALTER VIEW downstream.orders RENAME TO orders_v2
+
+query TT
+SHOW CREATE VIEW downstream.orders_v2
+----
+materialize.downstream.orders_v2
+CREATE VIEW materialize.downstream.orders_v2 AS SELECT id FROM materialize.upstream.orders;

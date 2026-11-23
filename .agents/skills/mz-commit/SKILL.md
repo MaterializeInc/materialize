@@ -10,19 +10,23 @@ description: >
 
 Read `doc/developer/guide-changes.md` for the full conventions on submitting and reviewing changes.
 
-## Pre-commit checklist
+## Pre-push checklist
 
-Before committing, run these and fix any warnings:
+Before pushing a branch for review, run these and fix any warnings. Local
+commits that only checkpoint work in progress need none of this.
 
 1. `bin/fmt` (formats all `.rs`, `.py`, and `.proto` files; takes no file arguments)
 2. `bin/lint` (can error if tools are missing; use `bin/ci-builder run stable bin/lint` as an alternative)
-3. `cargo clippy --all-targets -- -D warnings`
 
-`bin/lint` and clippy do not run rustdoc. When the diff adds imports or edits
+`bin/lint` does not run rustdoc. When the diff adds imports or edits
 doc comments, run the Doctests check on the changed crates (command in the
 mz-debug-ci skill). When a `metric!` definition changed, `bin/lint`
 regenerates `doc/user/data/metrics.yml`. Commit the result, or the "Lint and
 rustfmt" job fails on the diff.
+When a system parameter or dyncfg was added, removed, or changed (name,
+default, description, scope, constraint), run `bin/gen-system-parameter-catalog`
+and commit `src/sql/system-parameters.json`, or the
+`checked_in_catalog_is_current` test in `mz-system-parameter-catalog` fails.
 
 After rebasing onto upstream/main, run `cargo check --workspace --all-targets`
 even when the rebase had no conflicts. Upstream changes can still break the

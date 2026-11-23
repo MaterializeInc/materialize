@@ -254,6 +254,7 @@ impl<P, T> FuelSize for mz_timely_util::order::Partitioned<P, T> {
 pub struct SharedFuel<T: Timestamp, CB: ContainerBuilder> {
     handles: Vec<AsyncOutputHandle<T, CB>>,
     outstanding_bytes: usize,
+    yielded: bool,
 }
 
 impl<T: Timestamp, CB: ContainerBuilder> SharedFuel<T, CB> {
@@ -262,7 +263,13 @@ impl<T: Timestamp, CB: ContainerBuilder> SharedFuel<T, CB> {
         Self {
             handles,
             outstanding_bytes: 0,
+            yielded: false,
         }
+    }
+
+    /// Returns whether [`Self::give`] yielded since the last call.
+    pub fn take_yielded(&mut self) -> bool {
+        std::mem::take(&mut self.yielded)
     }
 
     /// Gives `data` at `cap` to the handle at `index`, charging its [`FuelSize`] against the
@@ -290,6 +297,7 @@ impl<T: Timestamp, CB: ContainerBuilder> SharedFuel<T, CB> {
         let exceeded = self.outstanding_bytes > MAX_OUTSTANDING_BYTES;
         if exceeded {
             self.outstanding_bytes = 0;
+            self.yielded = true;
         }
         exceeded
     }

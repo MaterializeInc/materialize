@@ -7,6 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+import docUrls from "~/mz-doc-urls.json";
+
+export const AUTO_SCALING_DOCS = `${docUrls["/docs/sql/alter-cluster/"]}#speed-up-hydration-by-autoscaling-to-a-larger-size`;
+
 // because the data is sampled on 60s intervals, we don't want to show more granular data than this.
 export const MIN_BUCKET_SIZE_MS = 60 * 1000;
 

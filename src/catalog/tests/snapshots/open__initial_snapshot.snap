@@ -561,6 +561,8 @@ Snapshot {
     },
     role_auth: {},
     items: {},
+    item_columns: {},
+    index_columns: {},
     comments: {},
     clusters: {
         ClusterKey {
@@ -629,6 +631,7 @@ Snapshot {
                         burst: None,
                     },
                 ),
+                query_policy: None,
             },
         },
     },
@@ -666,6 +669,8 @@ Snapshot {
             oid: 17048,
         },
     },
+    cluster_replica_sizes: {},
+    query_policies: {},
     cluster_replicas: {
         ClusterReplicaKey {
             id: User(
@@ -740,6 +745,11 @@ Snapshot {
             next_id: 1,
         },
         IdAllocKey {
+            name: "system_cluster_replica_size",
+        }: IdAllocValue {
+            next_id: 1,
+        },
+        IdAllocKey {
             name: "system_compute",
         }: IdAllocValue {
             next_id: 1,
@@ -755,6 +765,11 @@ Snapshot {
             next_id: 1,
         },
         IdAllocKey {
+            name: "user_cluster_replica_size",
+        }: IdAllocValue {
+            next_id: 1,
+        },
+        IdAllocKey {
             name: "user_compute",
         }: IdAllocValue {
             next_id: 2,
@@ -763,6 +778,11 @@ Snapshot {
             name: "user_network_policy",
         }: IdAllocValue {
             next_id: 2,
+        },
+        IdAllocKey {
+            name: "user_query_policy",
+        }: IdAllocValue {
+            next_id: 1,
         },
         IdAllocKey {
             name: "user_role",
@@ -851,7 +871,7 @@ Snapshot {
             ),
         }: SystemPrivilegesValue {
             acl_mode: AclMode {
-                bitflags: 8053063680,
+                bitflags: 8321499136,
             },
         },
     },

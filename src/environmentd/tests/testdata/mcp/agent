@@ -39,8 +39,9 @@ mcp-agent
 ----
 202 Accepted
 
-# server/discover is only answered on 2026-07-28 with the flag on. Dual-era
-# clients probe with it and fall back to initialize on this error.
+# Without the 2026-07-28 MCP-Protocol-Version header, server/discover is not
+# answered. Dual-era clients probe with it and fall back to initialize on this
+# error.
 mcp-agent
 {"jsonrpc":"2.0","id":3,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}
 ----

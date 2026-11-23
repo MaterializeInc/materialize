@@ -257,6 +257,7 @@ export function buildCluster(
     name: "mz_system",
     size: "25cc",
     managed: true,
+    replicationFactor: 1,
     disk: true,
     isOwner: true,
     ownerId: "u1",

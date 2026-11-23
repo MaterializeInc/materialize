@@ -133,7 +133,39 @@ const countLargestReplicaQueries = () => {
   return { requests, handler };
 };
 
-/** The card under a replica select, as the Metrics page lays them out. */
+/**
+ * Holds requests whose query key part matches `matches` until `release` is
+ * called, leaving their answers to other handlers. `requested` resolves on the
+ * first held request.
+ */
+const holdQueries = (
+  matches: (keyPart: Record<string, unknown>) => boolean,
+) => {
+  let release = () => {};
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let markRequested = () => {};
+  const requested = new Promise<void>((resolve) => {
+    markRequested = resolve;
+  });
+  const handler = http.post("*/api/sql", async ({ request }) => {
+    const queryKey = JSON.parse(
+      new URL(request.url).searchParams.get("query_key") ?? "[]",
+    );
+    if (queryKey[1] && matches(queryKey[1])) {
+      markRequested();
+      await released;
+    }
+    return undefined;
+  });
+  return { handler, requested, release };
+};
+
+/**
+ * The card under a replica select, as the Metrics page lays them out. Picks
+ * in a transition, as react-router's navigation does.
+ */
 const ReplicaSwitcher = ({
   cluster,
   initialReplicaName,
@@ -147,7 +179,10 @@ const ReplicaSwitcher = ({
       <select
         aria-label="Replica"
         value={replicaName ?? ""}
-        onChange={(event) => setReplicaName(event.target.value || undefined)}
+        onChange={(event) => {
+          const name = event.target.value || undefined;
+          React.startTransition(() => setReplicaName(name));
+        }}
       >
         <option value="">All replicas</option>
         {cluster.replicas.map(({ id, name }) => (
@@ -192,12 +227,15 @@ const largestReplicaHandler = (
     options,
   );
 
-const largestObjectsKey = (replicaHeapLimit: number | null = HEAP_LIMIT) =>
+const largestObjectsKey = (
+  replicaHeapLimit: number | null = HEAP_LIMIT,
+  replicaName = "r1",
+) =>
   clusterQueryKeys.largestMaintainedQueries({
     clusterId: "u1",
     clusterName: "quickstart",
     limit: 10,
-    replicaName: "r1",
+    replicaName,
     replicaHeapLimit,
     unifiedSizes: false,
   });
@@ -230,9 +268,10 @@ const largestObjectsHandler = (
     },
   ],
   replicaHeapLimit: number | null = HEAP_LIMIT,
+  replicaName = "r1",
 ) =>
   buildSqlQueryHandlerV2({
-    queryKey: largestObjectsKey(replicaHeapLimit),
+    queryKey: largestObjectsKey(replicaHeapLimit, replicaName),
     results: mapKyselyToTabular({
       columns: buildColumns([
         "id",
@@ -250,6 +289,21 @@ const largestObjectsHandler = (
   });
 
 const R1 = buildReplica("u678", "r1");
+const R2 = buildReplica("u679", "r2");
+
+const R2_OBJECTS = [
+  {
+    id: "u404",
+    name: "order_totals",
+    size: "1073741824",
+    memoryPercentage: "26.3852",
+    type: "index",
+    schemaName: "public",
+    databaseName: "materialize",
+    dataflowId: "9",
+    dataflowName: "Dataflow: materialize.public.order_totals",
+  },
+];
 
 const renderMemoryByObject = (cluster = buildCluster([R1])) => {
   server.use(...heapReadsHandlers(cluster));
@@ -418,6 +472,63 @@ describe("MemoryByObject", () => {
       screen.getByRole("heading", { name: "Objects by Memory" }),
     ).toBeVisible();
   });
+
+  it("leaves a replica's load error behind when another replica is picked", async () => {
+    const cluster = buildCluster([R1, R2]);
+    server.use(
+      ...heapReadsHandlers(cluster),
+      buildSqlQueryHandlerV2({
+        queryKey: largestObjectsKey(),
+        results: {
+          error: {
+            code: ErrorCode.INTERNAL_ERROR,
+            message: "largestMaintainedQueries failed",
+          },
+          notices: [],
+        },
+      }),
+      largestObjectsHandler(R2_OBJECTS, HEAP_LIMIT, "r2"),
+    );
+    await renderComponent(
+      <ReplicaSwitcher cluster={cluster} initialReplicaName="r1" />,
+    );
+    expect(
+      await screen.findByText(/from replica r1, which might mean it's busy/),
+    ).toBeVisible();
+
+    selectReplica("r2");
+    expect(await screen.findByText("% of heap limit on r2")).toBeVisible();
+    expect(screen.getByText("order_totals")).toBeVisible();
+    expect(screen.queryByText(/might mean it's busy/)).not.toBeInTheDocument();
+  });
+
+  it("keeps the previous replica's card up while the next replica's objects load", async () => {
+    const cluster = buildCluster([R1, R2]);
+    const r2Objects = holdQueries(
+      ({ scope, replicaName }) =>
+        scope === "largestMaintainedQueries" && replicaName === "r2",
+    );
+    server.use(
+      r2Objects.handler,
+      ...heapReadsHandlers(cluster),
+      largestObjectsHandler(),
+      largestObjectsHandler(R2_OBJECTS, HEAP_LIMIT, "r2"),
+    );
+    await renderComponent(
+      <ReplicaSwitcher cluster={cluster} initialReplicaName="r1" />,
+    );
+    expect(await screen.findByText("% of heap limit on r1")).toBeVisible();
+
+    selectReplica("r2");
+    await r2Objects.requested;
+    expect(screen.getByText("% of heap limit on r1")).toBeVisible();
+    expect(screen.getByText("customer_view")).toBeVisible();
+    expect(screen.queryByTestId("loading-spinner")).not.toBeInTheDocument();
+
+    r2Objects.release();
+    expect(await screen.findByText("% of heap limit on r2")).toBeVisible();
+    expect(screen.getByText("order_totals")).toBeVisible();
+  });
 });
 
 // Sizes stream from mz_object_arrangement_sizes on 26.35 and later.
@@ -566,6 +677,9 @@ describe("MemoryByObject with streamed sizes", () => {
 
     const objects = await screen.findByRole("list", { name: "Objects" });
     expect(within(objects).getByText("2.00 GB (25.0%)")).toBeVisible();
+    expect(
+      screen.getByText("% of heap limit across 2 processes on r1"),
+    ).toBeVisible();
     expect(requests.count).toEqual(0);
   });
 
@@ -639,6 +753,45 @@ describe("MemoryByObject with streamed sizes", () => {
     expect(requests.count).toEqual(1);
   });
 
+  it("keeps a linked replica's objects on screen until the largest replica is known", async () => {
+    await setLiveSizesEnvironment();
+    const cluster = buildCluster([
+      buildReplica("u25", "r1"),
+      buildReplica("u26", "r2"),
+    ]);
+    const largestReplica = holdQueries(
+      ({ scope }) => scope === "largestClusterReplica",
+    );
+    server.use(
+      largestReplica.handler,
+      ...heapReadsHandlers(cluster),
+      largestReplicaHandler([
+        { id: "u26", name: "r2", size: "25cc", heapLimit: String(HEAP_LIMIT) },
+      ]),
+      mockSubscribeSocket((sql, params) => {
+        if (params.includes("u25")) return sizesSnapshot([["u188", GIB]]);
+        if (params.includes("u26")) return sizesSnapshot([["u404", 2 * GIB]]);
+        return undefined;
+      }),
+    );
+    await renderLive(
+      <ReplicaSwitcher cluster={cluster} initialReplicaName="r1" />,
+    );
+    expect(await screen.findByText("customer_view")).toBeVisible();
+
+    selectReplica(ALL_REPLICAS);
+    await largestReplica.requested;
+    expect(screen.getByTestId("refreshing-spinner")).toBeVisible();
+    expect(screen.getByText("% of heap limit on r1")).toBeVisible();
+    expect(screen.getByText("customer_view")).toBeVisible();
+    expect(screen.queryByTestId("loading-spinner")).not.toBeInTheDocument();
+
+    largestReplica.release();
+    expect(await screen.findByText("% of heap limit on r2")).toBeVisible();
+    expect(screen.getByText("u404")).toBeVisible();
+    expect(screen.queryByTestId("refreshing-spinner")).not.toBeInTheDocument();
+  });
+
   describe("other memory", () => {
     const renderOtherMemory = async ({
       replicaId,
@@ -683,7 +836,7 @@ describe("MemoryByObject with streamed sizes", () => {
       expect(within(other).getByText("3.00 GB (37.5%)")).toBeVisible();
       expect(
         within(other).getByLabelText(
-          "Heap in use that isn't attributed to the objects listed. Object sizes come from arrangement sizes, which undercount.",
+          "Heap in use beyond the objects listed: smaller objects, and memory that arrangement sizes don't count.",
         ),
       ).toBeInTheDocument();
     });

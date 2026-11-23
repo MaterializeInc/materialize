@@ -18,7 +18,7 @@ use std::convert::Infallible;
 use std::rc::Rc;
 
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::operators::{CapabilitySet, InspectCore};
+use timely::dataflow::operators::{CapabilitySet, Inspect};
 use timely::dataflow::{Scope, Stream, StreamVec};
 use timely::progress::Timestamp;
 use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
@@ -51,7 +51,7 @@ where
 
         // TODO: This operator observes but doesn't consume data.
         // Instead, it should only observe progress statements.
-        self.inspect_container(move |update| {
+        self.inspect_core(move |update| {
             if let Err(frontier) = update {
                 for handle in &mut handles {
                     handle.update_frontier(frontier);

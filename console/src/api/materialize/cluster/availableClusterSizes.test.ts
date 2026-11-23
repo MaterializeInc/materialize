@@ -7,12 +7,22 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { buildAvailableClusterReplicaSizesQuery } from "./availableClusterSizes";
+import {
+  buildAvailableClusterReplicaSizesQuery,
+  DISABLED_REPLICA_SIZES_MIN_VERSION,
+} from "./availableClusterSizes";
 
 describe("queries", () => {
   it("buildAvailableClusterReplicaSizesQuery produces the expected query", () => {
     const { sql, parameters } =
       buildAvailableClusterReplicaSizesQuery().compile();
+    expect({ sql, parameters }).toMatchSnapshot();
+  });
+
+  it("filters out disabled sizes on environments with the disabled column", () => {
+    const { sql, parameters } = buildAvailableClusterReplicaSizesQuery(
+      DISABLED_REPLICA_SIZES_MIN_VERSION,
+    ).compile();
     expect({ sql, parameters }).toMatchSnapshot();
   });
 });

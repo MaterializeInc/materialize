@@ -10,7 +10,7 @@
 use mz_alloc_default as _;
 use std::hint::black_box;
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use mz_bench_util::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use mz_repr::strconv;
 use rand::rngs::StdRng;
 use rand::seq::IndexedRandom;

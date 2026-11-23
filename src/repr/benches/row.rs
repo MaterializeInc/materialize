@@ -12,8 +12,8 @@ use std::cmp::Ordering;
 use std::hint::black_box;
 
 use arrow::array::StructArray;
-use criterion::{Bencher, Criterion, Throughput, criterion_group, criterion_main};
 use itertools::Itertools;
+use mz_bench_util::{Bencher, Criterion, Throughput, criterion_group, criterion_main};
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 use mz_persist::metrics::ColumnarMetrics;
 use mz_persist_types::Codec;

@@ -19,14 +19,17 @@
 
 use std::{io::Write, str::FromStr};
 
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use mz_frontegg_auth::AppPassword;
 use mz_frontegg_client::client::app_password::CreateAppPasswordRequest;
-use mz_frontegg_client::client::{Client as AdminClient, Credentials};
+use mz_frontegg_client::client::{Authentication, Client as AdminClient, Credentials};
 use mz_frontegg_client::config::{
     ClientBuilder as AdminClientBuilder, ClientConfig as AdminClientConfig,
+    DEFAULT_ENDPOINT as DEFAULT_ADMIN_ENDPOINT,
 };
+use sha2::{Digest, Sha256};
 
-use mz_cloud_api::config::DEFAULT_ENDPOINT;
 use serde::{Deserialize, Serialize};
 use tabled::Tabled;
 use tokio::{select, sync::mpsc};
@@ -38,67 +41,153 @@ use crate::{
     context::{Context, ProfileContext},
     error::Error,
     error::Error::ProfileNameAlreadyExistsError,
-    server::server,
+    server::oauth_callback_server,
 };
 
-/// Strips the `.api` from the login endpoint.
-/// The `.api` prefix will cause a failure during login
-/// in the browser.
-fn strip_api_from_endpoint(endpoint: Url) -> Url {
-    if let Some(domain) = endpoint.domain() {
-        if let Some(corrected_domain) = domain.strip_prefix("api.") {
-            let mut new_endpoint = endpoint.clone();
-            let _ = new_endpoint.set_host(Some(corrected_domain));
-
-            return new_endpoint;
-        }
+/// Logs in through the admin endpoint's OAuth authorization server in the
+/// default web browser, then creates an app password with the resulting access
+/// token.
+///
+/// This is the authorization code flow for native apps (RFC 8252) with PKCE
+/// (RFC 7636). The browser only carries a single-use authorization code, which
+/// cannot be redeemed without `code_verifier`, and `code_verifier` never leaves
+/// this process. The app password is created over a direct HTTPS request.
+///
+/// Without `client_id`, a client is registered for this login through dynamic
+/// client registration (RFC 7591), with this login's exact redirect URI.
+pub async fn init_with_oauth(
+    admin_endpoint: Option<Url>,
+    client_id: Option<&str>,
+) -> Result<AppPassword, Error> {
+    let admin_endpoint = admin_endpoint.unwrap_or_else(|| DEFAULT_ADMIN_ENDPOINT.clone());
+    let endpoint_url = |path: [&str; 2]| {
+        let mut url = admin_endpoint.clone();
+        url.path_segments_mut()
+            .expect("constructor validated URL can be a base")
+            .clear()
+            .extend(path);
+        url
     };
 
-    endpoint
-}
+    let code_verifier = URL_SAFE_NO_PAD.encode(rand::random::<[u8; 32]>());
+    let code_challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(code_verifier.as_bytes()));
+    let state = URL_SAFE_NO_PAD.encode(rand::random::<[u8; 16]>());
 
-/// Opens the default web browser in the host machine
-/// and awaits a single request containing the profile's app password.
-pub async fn init_with_browser(cloud_endpoint: Option<Url>) -> Result<AppPassword, Error> {
-    // Bind a web server to a local port to receive the app password.
     let (tx, mut rx) = mpsc::unbounded_channel();
-    let (server, port) = server(tx).await;
+    let (server, port) = oauth_callback_server(state.clone(), tx).await;
+    // RFC 8252 §7.3: use the loopback IP literal, not `localhost`, so the
+    // redirect cannot be resolved to some other interface.
+    let redirect_uri = format!("http://127.0.0.1:{port}/");
 
-    // Build the login URL
-    let mut url =
-        strip_api_from_endpoint(cloud_endpoint.unwrap_or_else(|| DEFAULT_ENDPOINT.clone()));
+    let http = reqwest::Client::new();
+    let client_id = match client_id {
+        Some(client_id) => client_id.to_string(),
+        None => register_oauth_client(&http, endpoint_url(["oauth", "dcr"]), &redirect_uri).await?,
+    };
+    let client_id = client_id.as_str();
 
-    url.path_segments_mut()
-        .expect("constructor validated URL can be a base")
-        .extend(&["account", "login"]);
+    let mut authorize_url = endpoint_url(["oauth", "authorize"]);
+    authorize_url
+        .query_pairs_mut()
+        .append_pair("response_type", "code")
+        .append_pair("client_id", client_id)
+        .append_pair("redirect_uri", &redirect_uri)
+        .append_pair("scope", "openid")
+        .append_pair("state", &state)
+        .append_pair("code_challenge", &code_challenge)
+        .append_pair("code_challenge_method", "S256");
 
-    let mut query_pairs = url.query_pairs_mut();
-    query_pairs.append_pair(
-        "redirectUrl",
-        &format!("/access/cli?redirectUri=http://localhost:{port}&tokenDescription=Materialize%20CLI%20%28mz%29"),
-    );
-    // The replace is a little hack to avoid asking an additional parameter
-    // for a custom login.
-    let open_url = &query_pairs.finish().as_str().replace("cloud", "console");
-
-    // Open the browser to login user.
-    if let Err(_err) = open::that(open_url) {
+    if let Err(_err) = open::that(authorize_url.as_str()) {
         println!(
-            "Error: Unable to launch a web browser. Access the login page using this link: '{:?}', or execute `mz profile init --no-browser` in your command line.",
-            open_url
+            "Error: Unable to launch a web browser. Access the login page using this link: '{}', or execute `mz profile init --no-browser` in your command line.",
+            authorize_url
         )
     }
 
-    // Wait for the browser to send the app password to our server.
-    select! {
+    let code = select! {
         _ = server => unreachable!("server should not shut down"),
-        result = rx.recv() => {
-            match result {
-                Some(app_password_result) => app_password_result,
-                None => { panic!("failed to login via browser") },
-            }
-        }
+        result = rx.recv() => match result {
+            Some(code) => code?,
+            None => panic!("failed to login via browser"),
+        },
+    };
+
+    #[derive(Deserialize)]
+    struct TokenResponse {
+        access_token: String,
     }
+
+    let res = http
+        .post(endpoint_url(["oauth", "token"]))
+        .form(&[
+            ("grant_type", "authorization_code"),
+            ("code", code.as_str()),
+            ("redirect_uri", redirect_uri.as_str()),
+            ("client_id", client_id),
+            ("code_verifier", code_verifier.as_str()),
+        ])
+        .send()
+        .await?;
+    let status = res.status();
+    if !status.is_success() {
+        let body = res.text().await.unwrap_or_default();
+        return Err(Error::OAuthError(format!(
+            "token endpoint returned {status}: {body}"
+        )));
+    }
+    let TokenResponse { access_token } = res.json().await?;
+
+    let admin_client = AdminClientBuilder::default()
+        .endpoint(admin_endpoint)
+        .build(AdminClientConfig {
+            authentication: Authentication::AccessToken(access_token),
+        });
+    let app_password = admin_client
+        .create_app_password(CreateAppPasswordRequest {
+            description: "Materialize CLI (mz)",
+        })
+        .await?;
+
+    Ok(app_password)
+}
+
+/// Registers a public OAuth client that may only redirect to `redirect_uri`,
+/// and returns its client ID.
+async fn register_oauth_client(
+    http: &reqwest::Client,
+    mut dcr_url: Url,
+    redirect_uri: &str,
+) -> Result<String, Error> {
+    dcr_url
+        .path_segments_mut()
+        .expect("constructor validated URL can be a base")
+        .push("register");
+
+    #[derive(Deserialize)]
+    struct RegistrationResponse {
+        client_id: String,
+    }
+
+    let res = http
+        .post(dcr_url)
+        .json(&serde_json::json!({
+            "client_name": "Materialize CLI (mz)",
+            "redirect_uris": [redirect_uri],
+            "grant_types": ["authorization_code"],
+            "response_types": ["code"],
+            "token_endpoint_auth_method": "none",
+        }))
+        .send()
+        .await?;
+    let status = res.status();
+    if !status.is_success() {
+        let body = res.text().await.unwrap_or_default();
+        return Err(Error::OAuthError(format!(
+            "client registration returned {status}: {body}"
+        )));
+    }
+    let RegistrationResponse { client_id } = res.json().await?;
+    Ok(client_id)
 }
 
 /// Prompts the user for the profile email and passowrd in Materialize.
@@ -155,6 +244,7 @@ pub async fn init_without_browser(admin_endpoint: Option<Url>) -> Result<AppPass
 pub async fn init(
     scx: &Context,
     no_browser: bool,
+    oauth_client_id: Option<&str>,
     force: bool,
     admin_endpoint: Option<Url>,
     cloud_endpoint: Option<Url>,
@@ -174,9 +264,14 @@ pub async fn init(
     // leave behind an app password that no profile records.
     config_file.ensure_writable().await?;
 
-    let app_password = match no_browser {
-        true => init_without_browser(admin_endpoint.clone()).await?,
-        false => init_with_browser(cloud_endpoint.clone()).await?,
+    let app_password = if no_browser {
+        init_without_browser(admin_endpoint.clone()).await?
+    } else {
+        let oauth_endpoint = scx.get_admin_endpoint(
+            cloud_endpoint.clone(),
+            admin_endpoint.as_ref().map(Url::as_str),
+        )?;
+        init_with_oauth(oauth_endpoint, oauth_client_id).await?
     };
 
     let new_profile = TomlProfile {

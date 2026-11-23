@@ -19,8 +19,9 @@ import {
 } from "@chakra-ui/react";
 import React from "react";
 
+import { formatFullyQualifiedObjectName } from "~/api/materialize";
 import { LagInfo } from "~/api/materialize/cluster/materializationLag";
-import { WorkflowGraphNode } from "~/api/materialize/workflowGraphNodes";
+import { WorkflowGraphCanvasNode } from "~/api/materialize/workflowGraphNodes";
 import type { DagreGraph } from "~/components/Graph/dagreGraphHelpers";
 import { WORKFLOW_GRAPH_NODE_Z_INDEX } from "~/layouts/zIndex";
 import {
@@ -92,7 +93,7 @@ export const GraphNode = ({
   ...flexProps
 }: {
   graph: DagreGraph;
-  node: WorkflowGraphNode | undefined;
+  node: WorkflowGraphCanvasNode | undefined;
   nodeLagInfo: LagInfo | undefined;
   isSelected: boolean;
 } & FlexProps) => {
@@ -100,8 +101,10 @@ export const GraphNode = ({
 
   if (!node) return null;
 
-  const namespace = `${node.databaseName}.${node.schemaName}`;
-  const fullyQualifiedName = `${node.databaseName}.${node.schemaName}.${node.name}`;
+  const namespace = node.databaseName
+    ? `${node.databaseName}.${node.schemaName}`
+    : node.schemaName;
+  const fullyQualifiedName = formatFullyQualifiedObjectName(node);
 
   return (
     <Flex direction="column" position="absolute" {...flexProps}>

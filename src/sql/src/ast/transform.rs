@@ -240,10 +240,14 @@ pub fn create_stmt_rename_refs(
             query,
             ..
         }) => {
-            if let Some(target) = replacement_for {
-                maybe_update_item_name(target.name_mut());
+            match replacement_for {
+                // The planner rejects replacement queries that depend on their
+                // target. Only the FOR clause refers to the renamed item.
+                Some(target) if target.name() == &from_item => {
+                    maybe_update_item_name(target.name_mut());
+                }
+                _ => rewrite_query(from_name, to_item_name, query)?,
             }
-            rewrite_query(from_name, to_item_name, query)?;
         }
         Statement::CreateSource(_)
         | Statement::CreateSubsource(_)

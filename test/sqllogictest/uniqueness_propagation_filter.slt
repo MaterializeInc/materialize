@@ -415,3 +415,13 @@ Source materialize.public.t2
 Target cluster: quickstart
 
 EOF
+
+# Lowering a CASE must not derive unique keys for the filtered relations of its nested `If`s.
+# Each WHEN below equates a column of the composite key `a0, ..., a23` with another column,
+# which would double the derivable keys at every level.
+
+statement ok
+CREATE TABLE case_keys (a0 int, a1 int, a2 int, a3 int, a4 int, a5 int, a6 int, a7 int, a8 int, a9 int, a10 int, a11 int, a12 int, a13 int, a14 int, a15 int, a16 int, a17 int, a18 int, a19 int, a20 int, a21 int, a22 int, a23 int, b0 int, b1 int, b2 int, b3 int, b4 int, b5 int, b6 int, b7 int, b8 int, b9 int, b10 int, b11 int, b12 int, b13 int, b14 int, b15 int, b16 int, b17 int, b18 int, b19 int, b20 int, b21 int, b22 int, b23 int)
+
+statement ok
+CREATE VIEW case_keys_v AS SELECT CASE WHEN a0 = b0 THEN CASE WHEN a1 = b1 THEN CASE WHEN a2 = b2 THEN CASE WHEN a3 = b3 THEN CASE WHEN a4 = b4 THEN CASE WHEN a5 = b5 THEN CASE WHEN a6 = b6 THEN CASE WHEN a7 = b7 THEN CASE WHEN a8 = b8 THEN CASE WHEN a9 = b9 THEN CASE WHEN a10 = b10 THEN CASE WHEN a11 = b11 THEN CASE WHEN a12 = b12 THEN CASE WHEN a13 = b13 THEN CASE WHEN a14 = b14 THEN CASE WHEN a15 = b15 THEN CASE WHEN a16 = b16 THEN CASE WHEN a17 = b17 THEN CASE WHEN a18 = b18 THEN CASE WHEN a19 = b19 THEN CASE WHEN a20 = b20 THEN CASE WHEN a21 = b21 THEN CASE WHEN a22 = b22 THEN CASE WHEN a23 = b23 THEN 1 ELSE 0 END ELSE 0 END ELSE 0 END ELSE 0 END ELSE 0 END ELSE 0 END ELSE 0 END ELSE 0 END ELSE 0 END ELSE 0 END ELSE 0 END ELSE 0 END ELSE 0 END ELSE 0 END ELSE 0 END ELSE 0 END ELSE 0 END ELSE 0 END ELSE 0 END ELSE 0 END ELSE 0 END ELSE 0 END ELSE 0 END ELSE 0 END FROM (SELECT a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18, a19, a20, a21, a22, a23, max(b0) AS b0, max(b1) AS b1, max(b2) AS b2, max(b3) AS b3, max(b4) AS b4, max(b5) AS b5, max(b6) AS b6, max(b7) AS b7, max(b8) AS b8, max(b9) AS b9, max(b10) AS b10, max(b11) AS b11, max(b12) AS b12, max(b13) AS b13, max(b14) AS b14, max(b15) AS b15, max(b16) AS b16, max(b17) AS b17, max(b18) AS b18, max(b19) AS b19, max(b20) AS b20, max(b21) AS b21, max(b22) AS b22, max(b23) AS b23 FROM case_keys GROUP BY a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18, a19, a20, a21, a22, a23)

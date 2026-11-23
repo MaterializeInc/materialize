@@ -23,7 +23,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 # Install the dependencies
-npm install
+npm ci
 
 # Run the tests
 npm run test -- --run

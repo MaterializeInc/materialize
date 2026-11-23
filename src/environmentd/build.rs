@@ -10,6 +10,7 @@
 use std::env;
 
 fn main() -> Result<(), anyhow::Error> {
+    println!("cargo:rerun-if-changed=src/environmentd/sys.c");
     println!("cargo:rustc-env=TARGET_TRIPLE={}", env::var("TARGET")?);
 
     cc::Build::new()

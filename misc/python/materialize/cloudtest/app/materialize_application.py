@@ -42,6 +42,9 @@ from materialize.cloudtest.util.wait import wait
 
 LOGGER = logging.getLogger(__name__)
 
+# renovate: datasource=github-releases depName=kubernetes-sigs/metrics-server extractVersion=^v(?<version>\d+\.\d+\.\d+)$
+METRICS_SERVER_VERSION = "0.9.0"
+
 
 class MaterializeApplication(CloudtestApplicationBase):
     def __init__(
@@ -118,7 +121,7 @@ class MaterializeApplication(CloudtestApplicationBase):
         self.kubectl(
             "apply",
             "-f",
-            "https://github.com/kubernetes-sigs/metrics-server/releases/download/metrics-server-helm-chart-3.8.2/components.yaml",
+            f"https://github.com/kubernetes-sigs/metrics-server/releases/download/v{METRICS_SERVER_VERSION}/components.yaml",
         )
         self.kubectl(
             "patch",

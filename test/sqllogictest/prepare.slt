@@ -144,3 +144,15 @@ DEALLOCATE mixed
 
 statement ok
 DEALLOCATE "Mixed";
+
+# PostgreSQL accepts these. Materialize evaluates EXECUTE arguments and the
+# argument of pg_cancel_backend while planning, before it fills in calls such
+# as current_user.
+statement ok
+PREPARE param_text AS SELECT $1::text
+
+statement error current_user in a constant expression not yet supported
+EXECUTE param_text(current_user)
+
+statement error pg_backend_pid in a constant expression not yet supported
+SELECT pg_cancel_backend(pg_backend_pid())

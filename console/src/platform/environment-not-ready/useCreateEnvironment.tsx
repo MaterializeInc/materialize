@@ -13,7 +13,7 @@ import { useAtom, useSetAtom } from "jotai";
 import retry from "p-retry";
 import React from "react";
 
-import { createRegion } from "~/api/cloudRegionApi";
+import { createRegion } from "~/api/cloudGlobalApi";
 import { cloudRegionsSelector } from "~/store/cloudRegions";
 import {
   currentRegionIdAtom,
@@ -40,7 +40,7 @@ const useCreateEnvironment = () => {
       try {
         await retry(
           async () => {
-            await createRegion(region.regionApiUrl);
+            await createRegion(region.provider, region.region);
           },
           // 5 tries total, no backoff
           { retries: 4, minTimeout: 0, factor: 1 },

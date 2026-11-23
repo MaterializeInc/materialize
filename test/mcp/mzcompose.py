@@ -962,6 +962,38 @@ def workflow_endpoints(c: Composition) -> None:
             "hydrated_replica_count": 0,
         }, f"expected zero-replica hydration, got: {hydration}"
 
+    with c.test_case("agent_get_data_product_details_hidden_index_cluster"):
+        # DEX-71: the only index sits on a zero-replica cluster the user has
+        # no USAGE on, so reads fall back to persist and hydration must follow
+        # the MV's own cluster, eventually reporting hydrated=true.
+        c.sql(
+            """
+            DROP MATERIALIZED VIEW IF EXISTS public.test_hydration_hidden_mv;
+            DROP CLUSTER IF EXISTS test_hydration_hidden;
+            CREATE CLUSTER test_hydration_hidden REPLICAS ();
+            CREATE MATERIALIZED VIEW public.test_hydration_hidden_mv IN CLUSTER quickstart
+                AS SELECT 1::int AS id;
+            CREATE INDEX test_hydration_hidden_idx IN CLUSTER test_hydration_hidden
+                ON public.test_hydration_hidden_mv (id);
+            GRANT SELECT ON public.test_hydration_hidden_mv TO anonymous_http_user;
+            """,
+            user="mz_system",
+            port=6877,
+            print_statement=False,
+        )
+
+        object_name = '"materialize"."public"."test_hydration_hidden_mv"'
+        deadline = time.monotonic() + 30
+        last = {}
+        while time.monotonic() < deadline:
+            last = hydration_for(object_name)
+            if last["hydrated"]:
+                break
+            time.sleep(0.5)
+        assert (
+            last.get("hydrated") is True and last["replica_count"] >= 1
+        ), f"expected the MV cluster's hydration within 30s, last: {last}"
+
     with c.test_case("agent_mcp_data_product_details_view_sql"):
         # The hydration column should also be queryable directly via SQL,
         # not just through MCP. This locks in the catalog surface so users
@@ -992,11 +1024,10 @@ def workflow_restrict_to_user_objects_startup_append_bypass(c: Composition) -> N
     empty `resolved_ids`, silently skipping the system-catalog guard. Same
     bug class as the SHOW fix in #36543.
 
-    `EXPLAIN TIMESTAMP` is the reliable vector — it reaches `sequence_plan`
-    and its raw plan depends on `mz_sessions`. The deferral fires only on the
-    *first* `mz_sessions` reference in a session, so the same statement is
-    correctly blocked once the wait future is cleared; we use that for a
-    differential check.
+    `EXPLAIN TIMESTAMP` over `mz_sessions` is the vector. Only the *first*
+    `mz_sessions` reference in a session waits for the startup append, so
+    comparing the first and the second reference checks that the wait does
+    not bypass the guard.
     """
     c.up("materialized")
 
@@ -1035,27 +1066,28 @@ def workflow_restrict_to_user_objects_startup_append_bypass(c: Composition) -> N
 
     with c.test_case("explain_timestamp_first_statement_blocked"):
         cur = fresh_cursor()
-        # First reference: deferred for the startup append, then resumed.
+        # First reference: waits for the startup append.
         first = run(cur, BYPASS)
-        # Second reference: wait future already cleared, no deferral.
+        # Second reference: the append has completed, nothing waits.
         second = run(cur, BYPASS)
 
         # Control: holds on both builds; proves the restriction works and that
         # the statement's resolved_ids carry mz_sessions.
         assert RESTRICTED in second, (
-            "non-deferred EXPLAIN TIMESTAMP over mz_sessions should be blocked, "
+            "EXPLAIN TIMESTAMP over mz_sessions after the startup append should be "
+            "blocked, "
             f"got: {second!r}"
         )
 
-        # Regression: fails on the buggy build, passes once `DeferredPlan`
-        # carries `resolved_ids` into the resumed `check_plan`.
+        # Regression: the guard must also hold for the statement that waits.
         assert RESTRICTED in first, (
-            f"deferred EXPLAIN TIMESTAMP bypassed restrict_to_user_objects, "
+            f"EXPLAIN TIMESTAMP waiting for the startup append bypassed "
+            f"restrict_to_user_objects, "
             f"got: {first!r}"
         )
 
     with c.test_case("non_required_builtin_blocked_as_first_statement"):
-        # mz_roles is not a REQUIRED_BUILTIN_TABLE, so no deferral fires —
+        # mz_roles is not a REQUIRED_BUILTIN_TABLE, so nothing waits. It is
         # blocked even as the first statement.
         outcome = run(
             fresh_cursor(),
@@ -1066,7 +1098,7 @@ def workflow_restrict_to_user_objects_startup_append_bypass(c: Composition) -> N
             f"got: {outcome!r}"
         )
 
-    with c.test_case("frontend_peek_path_not_vulnerable"):
+    with c.test_case("select_not_vulnerable"):
         # SELECT uses the frontend peek path, which runs the RBAC check before
         # awaiting the startup appends. Pins that SELECT is not a bypass vector.
         outcome = run(fresh_cursor(), "SELECT * FROM mz_internal.mz_sessions")
@@ -1086,12 +1118,8 @@ def workflow_restrict_to_user_objects_startup_append_bypass(c: Composition) -> N
         assert rows[0][0] == "restricted_agent", rows
 
     with c.test_case("unrestricted_role_first_statement_succeeds"):
-        # Positive control on the resume path: an unrestricted role running
-        # the same deferred statement as its first statement must succeed,
-        # not error. If `DeferredPlan` now carries `resolved_ids` correctly
-        # the resumed `rbac::check_plan` returns Ok (no `restrict_to_user_objects`
-        # to enforce), and the EXPLAIN TIMESTAMP plan flows through. A
-        # regression here would mean we broke the non-restricted deferral path.
+        # Positive control: an unrestricted role running the same statement as
+        # its first statement, which waits for the startup append, must succeed.
         cur = c.sql_cursor(user="materialize", port=6875, reuse_connection=False)
         outcome = run(cur, BYPASS)
         assert outcome.startswith("ok:"), (

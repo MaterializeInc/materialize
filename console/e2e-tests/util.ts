@@ -16,7 +16,7 @@ import { FronteggAuthenticator, HttpClient } from "@frontegg/client";
 import { APIRequestContext, expect, Page } from "@playwright/test";
 import retry, { AbortError } from "p-retry";
 
-import { Region } from "~/api/cloudGlobalApi";
+import { AvailableRegion } from "~/api/cloudGlobalApi";
 import { buildFronteggUrl } from "~/api/frontegg/index";
 import { appConfig } from "~/config/AppConfig";
 
@@ -35,33 +35,20 @@ export const CONSOLE_ADDR = `${appConfig.consoleUrl.protocol}//${appConfig.conso
 export const IS_LOCAL_STACK =
   appConfig.mode === "cloud" && appConfig.currentStack === "local";
 
-function buildRegions(stack: string): Region[] {
+function buildRegions(stack: string): AvailableRegion[] {
   if (stack === "local") {
-    return [
-      {
-        id: "local/kind",
-        cloudProvider: "local",
-        name: "kind",
-        // When pointing at a local kind cluster, the region-api server lives on port 32001
-        url: "http://127.0.0.1:32001",
-      },
-    ];
+    return [{ id: "local/kind", cloudProvider: "local", name: "kind" }];
   }
-  const stackString = stack === "production" ? "" : `.${stack}`;
   return [
-    {
-      id: "aws/us-east-1",
-      cloudProvider: "aws",
-      name: "us-east-1",
-      url: `https://api.us-east-1.aws${stackString}.cloud.materialize.com`,
-    },
-    {
-      id: "aws/eu-west-1",
-      cloudProvider: "aws",
-      name: "eu-west-1",
-      url: `https://api.eu-west-1.aws${stackString}.cloud.materialize.com`,
-    },
+    { id: "aws/us-east-1", cloudProvider: "aws", name: "us-east-1" },
+    { id: "aws/eu-west-1", cloudProvider: "aws", name: "eu-west-1" },
   ];
+}
+
+/** The global API URL for a region's environment endpoints. */
+export function regionUrl(region: AvailableRegion) {
+  assert(appConfig.mode === "cloud", "e2e tests only run against cloud");
+  return `${appConfig.cloudGlobalApiUrl}/api/region/${region.cloudProvider}/${region.name}`;
 }
 
 // If you change this, also update the value of `config.workers` in `playwright.config.ts`
@@ -325,14 +312,14 @@ export class TestContext {
     await Promise.all(REGIONS.map((region) => this.disableRegion(region)));
   }
 
-  async disableRegion(region: Region): Promise<unknown> {
+  async disableRegion(region: AvailableRegion): Promise<unknown> {
     console.log(`Disabling ${region.id}, this may take up to 5min...`);
     return retry(
       async (attempts) => {
         try {
           await this.ensureAuthenticated();
           await this.request.fetch(
-            `${region.url}/api/region`,
+            regionUrl(region),
             // The timeout on the ALB is 60 seconds, so this timeout doesn't matter much
             {
               method: "DELETE",

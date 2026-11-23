@@ -13,10 +13,10 @@
  * to disable.
  */
 export const disabledFlexibleDeploymentFlags: Record<string, boolean> = {
-  "freshness-page-CNS164": false,
-  // Self-managed has no preview toggle, so a true flag would ship the
-  // redesign to everyone.
-  "cluster-details-page-cns-173": false,
+  // The support page relies on the Cloud org and Intercom identity.
+  "support-page-cns-147": false,
+  // The ticket form needs the Cloud global API's ticket endpoints.
+  "support-ticket-form-cns-201": false,
 };
 
 export const flexibleDeploymentFlags = new Proxy(

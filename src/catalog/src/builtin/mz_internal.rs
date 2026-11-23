@@ -681,6 +681,156 @@ WHERE data->>'kind' = 'NetworkPolicy'",
     }
 });
 
+pub static MZ_QUERY_POLICIES: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
+        name: "mz_query_policies",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_QUERY_POLICIES_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("mode", SqlScalarType::String.nullable(false))
+            .with_column("owner_id", SqlScalarType::String.nullable(false))
+            .with_column(
+                "privileges",
+                SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
+            )
+            .with_column("oid", SqlScalarType::Oid.nullable(false))
+            .with_key(vec![0])
+            .with_key(vec![5])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("id", "The ID of the query policy."),
+            ("name", "The name of the query policy."),
+            (
+                "mode",
+                "Whether matching rules warn or enforce rejection: `warn` or `enforce`.",
+            ),
+            (
+                "owner_id",
+                "The role ID of the policy owner. Corresponds to `mz_catalog.mz_roles.id`.",
+            ),
+            (
+                "privileges",
+                "The privileges belonging to the query policy.",
+            ),
+            ("oid", "A PostgreSQL-compatible OID for the query policy."),
+        ]),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL name,
+    ASSERT NOT NULL mode,
+    ASSERT NOT NULL owner_id,
+    ASSERT NOT NULL privileges,
+    ASSERT NOT NULL oid
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'id') AS id,
+    data->'value'->>'name' AS name,
+    data->'value'->>'mode' AS mode,
+    mz_internal.parse_catalog_id(data->'value'->'owner_id') AS owner_id,
+    mz_internal.parse_catalog_privileges(data->'value'->'privileges') AS privileges,
+    (data->'value'->>'oid')::oid AS oid
+FROM mz_internal.mz_catalog_raw
+WHERE data->>'kind' = 'QueryPolicy'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    });
+
+pub static MZ_QUERY_POLICY_RULES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_query_policy_rules",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_QUERY_POLICY_RULES_OID,
+        desc: RelationDesc::builder()
+            .with_column("policy_id", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("action", SqlScalarType::String.nullable(false))
+            .with_column("metric", SqlScalarType::String.nullable(false))
+            .with_column("value", SqlScalarType::String.nullable(false))
+            .with_key(vec![0, 1])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "policy_id",
+                "The policy containing this rule. Corresponds to `mz_internal.mz_query_policies.id`.",
+            ),
+            ("name", "The name of the rule within its policy."),
+            ("action", "The rule action: `reject`."),
+            ("metric", "The inspected metric: `query_plan_includes`."),
+            (
+                "value",
+                "The prohibited plan feature: `temporary_dataflow` or `storage_read`.",
+            ),
+        ]),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL policy_id,
+    ASSERT NOT NULL name,
+    ASSERT NOT NULL action,
+    ASSERT NOT NULL metric,
+    ASSERT NOT NULL value
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'id') AS policy_id,
+    rule->>'name' AS name,
+    'reject'::text AS action,
+    'query_plan_includes'::text AS metric,
+    rule->>'value' AS value
+FROM mz_internal.mz_catalog_raw,
+    jsonb_array_elements(data->'value'->'rules') AS rule
+WHERE data->>'kind' = 'QueryPolicy'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    }
+});
+
+pub static MZ_QUERY_POLICY_ATTACHMENTS: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
+        name: "mz_query_policy_attachments",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_QUERY_POLICY_ATTACHMENTS_OID,
+        desc: RelationDesc::builder()
+            .with_column("policy_id", SqlScalarType::String.nullable(false))
+            .with_column("object_type", SqlScalarType::String.nullable(false))
+            .with_column("object_id", SqlScalarType::String.nullable(false))
+            .with_key(vec![1, 2])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "policy_id",
+                "The attached policy. Corresponds to `mz_internal.mz_query_policies.id`.",
+            ),
+            ("object_type", "The attachment target type: `cluster`."),
+            (
+                "object_id",
+                "The attached cluster. Corresponds to `mz_catalog.mz_clusters.id`.",
+            ),
+        ]),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL policy_id,
+    ASSERT NOT NULL object_type,
+    ASSERT NOT NULL object_id
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'value'->'config'->'query_policy') AS policy_id,
+    'cluster'::text AS object_type,
+    mz_internal.parse_catalog_id(data->'key'->'id') AS object_id
+FROM mz_internal.mz_catalog_raw
+WHERE data->>'kind' = 'Cluster'
+    AND data->'value'->'config'->'query_policy' IS NOT NULL",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    });
+
 /// PostgreSQL-specific metadata about types that doesn't make sense to expose
 /// in the `mz_types` table as part of our public, stable API.
 pub static MZ_TYPE_PG_METADATA: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
@@ -1127,13 +1277,6 @@ WHERE
 /// so this table is locked down with `access: vec![]` (same pattern as
 /// `mz_catalog_raw`): builtin MVs read it at bootstrap, but direct user
 /// `SELECT` is denied.
-///
-/// Unlike `mz_cluster_replica_sizes`, this table includes rows for sizes
-/// flagged `disabled` — `CatalogState::cluster_replica_size_has_disk`
-/// indexed the in-memory map without checking `disabled`, so a managed
-/// cluster pinned to a disabled size still resolved its `disk` column from
-/// the size's real `swap_enabled` / `disk_limit`. Including disabled sizes
-/// here preserves that behavior.
 pub static MZ_CLUSTER_REPLICA_SIZE_INTERNAL: LazyLock<BuiltinTable> = LazyLock::new(|| {
     BuiltinTable {
         name: "mz_cluster_replica_size_internal",
@@ -2194,15 +2337,29 @@ pub static MZ_SOURCE_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinV
     -- source-global events ('<source>' is the sentinel for replica_id NULL)
     -- and 'paused' events. A per-replica 'paused' is only written when the
     -- replica is dropped, so it is a terminal drop marker, not a stale report.
-    latest_per_replica_events AS
+    --
+    -- The pick carries only key columns and the join fetches error and details
+    -- for the picked rows, since every TopK level stores the rows it carries.
+    latest_per_replica_status AS
     (
         SELECT DISTINCT ON (source_id, replica_id)
-            occurred_at, source_id, replica_id, status, error, details
+            source_id, replica_id, occurred_at, status
         FROM uniform_status_history
         WHERE replica_id = '<source>'
             OR replica_id IN (SELECT id FROM mz_catalog.mz_cluster_replicas)
             OR status = 'paused'
+        -- NOTE: Sized for about a day of restart loop (3 rows every ~5 s per
+        -- replica), since `partially_truncate_status_history` trims only at
+        -- startup. Past the hint each update rereads group size / 4096 rows.
+        -- Smaller hints, like the advice view's for healthy histories, reread more.
+        OPTIONS (DISTINCT ON INPUT GROUP SIZE = 65535)
         ORDER BY source_id, replica_id, occurred_at DESC
+    ),
+    latest_per_replica_events AS
+    (
+        SELECT occurred_at, source_id, replica_id, status, error, details
+        FROM latest_per_replica_status
+        JOIN uniform_status_history USING (source_id, replica_id, occurred_at, status)
     ),
     -- We have a precedence list that determines the overall status in case
     -- there is differing per-replica (including source-global) statuses. If
@@ -2219,6 +2376,7 @@ pub static MZ_SOURCE_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinV
             error,
             details
         FROM latest_per_replica_events
+        OPTIONS (DISTINCT ON INPUT GROUP SIZE = 255)
         ORDER BY source_id, CASE status
                     WHEN 'dropped' THEN 1
                     WHEN 'running' THEN 2
@@ -2476,15 +2634,29 @@ uniform_status_history AS
 -- sink-global events ('<sink>' is the sentinel for replica_id NULL)
 -- and 'paused' events. A per-replica 'paused' is only written when the
 -- replica is dropped, so it is a terminal drop marker, not a stale report.
-latest_per_replica_events AS
+--
+-- The pick carries only key columns and the join fetches error and details
+-- for the picked rows, since every TopK level stores the rows it carries.
+latest_per_replica_status AS
 (
     SELECT DISTINCT ON (sink_id, replica_id)
-        occurred_at, sink_id, replica_id, status, error, details
+        sink_id, replica_id, occurred_at, status
     FROM uniform_status_history
     WHERE replica_id = '<sink>'
         OR replica_id IN (SELECT id FROM mz_catalog.mz_cluster_replicas)
         OR status = 'paused'
+    -- NOTE: Sized for about a day of restart loop (3 rows every ~5 s per
+    -- replica), since `partially_truncate_status_history` trims only at
+    -- startup. Past the hint each update rereads group size / 4096 rows.
+    -- Smaller hints, like the advice view's for healthy histories, reread more.
+    OPTIONS (DISTINCT ON INPUT GROUP SIZE = 65535)
     ORDER BY sink_id, replica_id, occurred_at DESC
+),
+latest_per_replica_events AS
+(
+    SELECT occurred_at, sink_id, replica_id, status, error, details
+    FROM latest_per_replica_status
+    JOIN uniform_status_history USING (sink_id, replica_id, occurred_at, status)
 ),
 -- We have a precedence list that determines the overall status in case
 -- there is differing per-replica (including sink-global) statuses. If
@@ -2501,6 +2673,7 @@ latest_events AS
         error,
         details
     FROM latest_per_replica_events
+    OPTIONS (DISTINCT ON INPUT GROUP SIZE = 255)
     ORDER BY sink_id, CASE status
                 WHEN 'dropped' THEN 1
                 WHEN 'running' THEN 2
@@ -3567,6 +3740,7 @@ SELECT
         WHEN obj ? 'Cluster'          THEN mz_internal.parse_catalog_id(obj->'Cluster')
         WHEN obj ? 'ClusterReplica'   THEN mz_internal.parse_catalog_id(obj->'ClusterReplica'->'replica_id')
         WHEN obj ? 'NetworkPolicy'    THEN mz_internal.parse_catalog_id(obj->'NetworkPolicy')
+        WHEN obj ? 'QueryPolicy'      THEN mz_internal.parse_catalog_id(obj->'QueryPolicy')
     END                                                              AS id,
     CASE
         WHEN obj ? 'Table'            THEN 'table'
@@ -3585,6 +3759,7 @@ SELECT
         WHEN obj ? 'Cluster'          THEN 'cluster'
         WHEN obj ? 'ClusterReplica'   THEN 'cluster-replica'
         WHEN obj ? 'NetworkPolicy'    THEN 'network-policy'
+        WHEN obj ? 'QueryPolicy'      THEN 'query-policy'
     END                                                              AS object_type,
     (sub->'ColumnPos')::int4                                          AS object_sub_id,
     comment
@@ -5113,10 +5288,7 @@ pub const PG_ATTRIBUTE_ALL_DATABASES_IND: BuiltinIndex = BuiltinIndex {
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::INDEX_PG_ATTRIBUTE_ALL_DATABASES_IND_OID,
     sql: "IN CLUSTER mz_catalog_server
-ON mz_internal.pg_attribute_all_databases (
-    attrelid, attname, atttypid, attlen, attnum, atttypmod, attnotnull, atthasdef, attidentity,
-    attgenerated, attisdropped, attcollation, database_name, pg_type_database_name
-)",
+ON mz_internal.pg_attribute_all_databases (attrelid)",
     is_retained_metrics_object: false,
 };
 
@@ -6806,7 +6978,7 @@ pub static MZ_MCP_DATA_PRODUCT_DETAILS: LazyLock<BuiltinView> = LazyLock::new(||
         ),
         (
             "hydration",
-            "Readiness summary as a JSON object with `hydrated` (bool), `replica_count` (int), and `hydrated_replica_count` (int). `hydrated` is true only when the cluster has at least one replica and the dataflow is hydrated on every replica. Reads against a non-hydrated data product block until the dataflow catches up (they never return partial data). Check this before reading: if `hydrated` is false and `replica_count > 0`, wait and retry; if `replica_count` is 0, the cluster has no replicas and that needs operator action, not a retry.",
+            "Readiness summary as a JSON object with `hydrated` (bool), `replica_count` (int), and `hydrated_replica_count` (int). `hydrated` is true only when the cluster has at least one replica and the dataflow is hydrated on every replica. Reads against a non-hydrated data product block until the dataflow catches up (they never return partial data). Check this before reading: if `hydrated` is false and `replica_count > 0`, wait and retry; if `replica_count` is 0, the cluster has no replicas and that needs operator action, not a retry. A null `cluster` means your role lacks USAGE on that cluster, and only materialized views appear that way, since a view is listed only with an index on a cluster you can use. A read of such a row runs on another cluster and returns the materialized view's stored results, so `hydration` then reports the materialized view's own cluster, the one that keeps those results current.",
         ),
     ]),
     sql: r#"
@@ -6890,15 +7062,14 @@ WHERE op.privilege_type = 'SELECT'
   AND s.name NOT IN ('mz_catalog', 'mz_internal', 'pg_catalog', 'information_schema', 'mz_introspection')
 GROUP BY 1, 2, 3
 ),
--- Pick the right (object_id, cluster_id) for hydration: the index's id +
--- cluster when an index exists (its arrangement is what the data product
--- reads from), otherwise the materialized view's own id + cluster.
-hydration_meta AS (
-    SELECT DISTINCT
+hydration_candidates AS (
+    SELECT
         '"' || db.name || '"."' || s.name || '"."' || o.name || '"' AS object_name,
         COALESCE(c_idx.name, c_obj.name) AS cluster,
-        COALESCE(i.id, o.id) AS hydration_object_id,
-        COALESCE(i.cluster_id, o.cluster_id) AS cluster_id
+        o.id AS object_id,
+        o.cluster_id AS object_cluster_id,
+        i.id AS index_id,
+        i.cluster_id AS index_cluster_id
     FROM mz_objects o
     JOIN mz_schemas s ON s.id = o.schema_id
     JOIN mz_databases db ON db.id = s.database_id
@@ -6907,6 +7078,28 @@ hydration_meta AS (
     LEFT JOIN mz_clusters c_obj ON c_obj.id = o.cluster_id
     WHERE (o.type = 'materialized-view' OR (o.type = 'view' AND i.id IS NOT NULL))
       AND s.name NOT IN ('mz_catalog', 'mz_internal', 'pg_catalog', 'information_schema', 'mz_introspection')
+),
+-- Hydration follows the index when the role can use its cluster, otherwise the
+-- view's own cluster, which keeps the persisted output a fallback read uses
+-- fresh (DEX-71). Visibility is an EXISTS over the filtered candidates, since a
+-- LEFT JOIN kept the optimizer from filtering mz_objects before the join.
+hydration_meta AS (
+    SELECT DISTINCT
+        object_name,
+        cluster,
+        CASE WHEN visible THEN COALESCE(index_id, object_id) ELSE object_id END
+            AS hydration_object_id,
+        CASE WHEN visible THEN COALESCE(index_cluster_id, object_cluster_id) ELSE object_cluster_id END
+            AS cluster_id
+    FROM (
+        SELECT
+            c.*,
+            EXISTS (
+                SELECT 1 FROM mz_internal.mz_show_my_cluster_privileges cp
+                WHERE cp.name = c.cluster AND cp.privilege_type = 'USAGE'
+            ) AS visible
+        FROM hydration_candidates c
+    )
 ),
 -- Dedupe by replica before counting: an MV with multiple indexes on the
 -- same cluster has multiple rows in `hydration_meta`, and joining each
@@ -6937,9 +7130,7 @@ hydration AS (
 SELECT
     d.object_name,
     -- Null the advertised cluster unless the role has USAGE on it (DEX-66),
-    -- matching mz_mcp_data_products. Hydration below still joins on the real
-    -- d.cluster, so readiness is reported accurately even when the name is
-    -- hidden.
+    -- matching mz_mcp_data_products.
     CASE WHEN EXISTS (
         SELECT 1 FROM mz_internal.mz_show_my_cluster_privileges cp
         WHERE cp.name = d.cluster AND cp.privilege_type = 'USAGE'
@@ -7426,7 +7617,23 @@ SELECT grantor, grantee, database, NULL AS schema, name, 'schema' AS object_type
 FROM mz_internal.mz_show_schema_privileges
 UNION ALL
 SELECT grantor, grantee, database, schema, name, object_type, privilege_type
-FROM mz_internal.mz_show_object_privileges"#,
+FROM mz_internal.mz_show_object_privileges
+UNION ALL
+SELECT
+    grantor.name,
+    CASE privileges.grantee WHEN 'p' THEN 'PUBLIC' ELSE grantee.name END,
+    NULL AS database,
+    NULL AS schema,
+    privileges.name,
+    'query policy' AS object_type,
+    privileges.privilege_type
+FROM
+    (SELECT mz_internal.mz_aclexplode(privileges).*, name
+    FROM mz_internal.mz_query_policies
+    WHERE id NOT LIKE 's%') AS privileges
+LEFT JOIN mz_catalog.mz_roles grantor ON privileges.grantor = grantor.id
+LEFT JOIN mz_catalog.mz_roles grantee ON privileges.grantee = grantee.id
+WHERE privileges.grantee NOT LIKE 's%'"#,
     access: vec![PUBLIC_SELECT],
     ontology: None,
 });
@@ -7617,6 +7824,33 @@ WHERE
 AND
     policy.id NOT LIKE 'g%'
 GROUP BY policy.name, comments.comment;",
+    access: vec![PUBLIC_SELECT],
+    ontology: None,
+});
+
+pub static MZ_SHOW_QUERY_POLICIES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_show_query_policies",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SHOW_QUERY_POLICIES_OID,
+    desc: RelationDesc::builder()
+        .with_column("name", SqlScalarType::String.nullable(false))
+        .with_column("mode", SqlScalarType::String.nullable(false))
+        .with_column("rules", SqlScalarType::String.nullable(true))
+        .with_column("comment", SqlScalarType::String.nullable(false))
+        .finish(),
+    column_comments: BTreeMap::new(),
+    sql: "
+SELECT policy.name, policy.mode,
+    pg_catalog.string_agg(rule.name, ',' ORDER BY rule.name) AS rules,
+    COALESCE(comments.comment, '') AS comment
+FROM mz_internal.mz_query_policies AS policy
+LEFT JOIN mz_internal.mz_query_policy_rules AS rule ON policy.id = rule.policy_id
+LEFT JOIN mz_internal.mz_comments AS comments
+    ON policy.id = comments.id
+    AND comments.object_type = 'query-policy'
+    AND comments.object_sub_id IS NULL
+WHERE policy.id NOT LIKE 's%'
+GROUP BY policy.name, policy.mode, comments.comment",
     access: vec![PUBLIC_SELECT],
     ontology: None,
 });

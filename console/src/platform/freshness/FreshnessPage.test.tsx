@@ -22,6 +22,7 @@ import { allObjects } from "~/store/allObjects";
 import { allSchemas } from "~/store/allSchemas";
 import { buildDatabaseObject, renderComponent } from "~/test/utils";
 
+import { NO_VALUE } from "./constants";
 import FreshnessPage from "./FreshnessPage";
 
 const renderWithClusters = async (state: {
@@ -77,6 +78,8 @@ const CLUSTER: Cluster = {
   replicationFactor: 1,
 } as unknown as Cluster;
 
+const NOTE = /Freshness is wallclock lag/;
+
 const PROMPT =
   "Select a cluster or schema to see the freshness of its objects.";
 
@@ -96,7 +99,7 @@ const recordRequests = () => {
 };
 
 describe("FreshnessPage cluster selection", () => {
-  const renderAt = async (search: string) =>
+  const renderAt = async (search: string, { objectsLoaded = true } = {}) =>
     renderComponent(<FreshnessPage />, {
       initializeState: (store) => {
         store.set(allClusters, {
@@ -105,9 +108,9 @@ describe("FreshnessPage cluster selection", () => {
           snapshotComplete: true,
         });
         store.set(allObjects, {
-          data: [OBJECT],
+          data: objectsLoaded ? [OBJECT] : [],
           error: undefined,
-          snapshotComplete: true,
+          snapshotComplete: objectsLoaded,
         });
       },
       initialRouterEntries: [search],
@@ -132,6 +135,50 @@ describe("FreshnessPage cluster selection", () => {
     expect(screen.getByText("Select a cluster")).toBeVisible();
     expect(screen.queryByText("quickstart")).not.toBeInTheDocument();
     expect(requests).toEqual([]);
+    // The fine print explains numbers that are not on screen yet.
+    expect(screen.queryByText(NOTE)).not.toBeInTheDocument();
+  });
+
+  it("shows the Summary and the controls before the data arrives", async () => {
+    // So a range change, which reloads the graph and tables, cannot take the
+    // controls the reader just used off the screen.
+    recordRequests();
+    await renderAt("/?cluster=u1");
+
+    expect(
+      await screen.findByRole("combobox", { name: "Freshness statistic" }),
+    ).toBeVisible();
+    expect(screen.getByText("Summary")).toBeVisible();
+    expect(screen.queryByText("Lag Over Time")).not.toBeInTheDocument();
+  });
+
+  it("shows no Summary values before the object list has loaded", async () => {
+    // A link can open the page before the objects subscribe delivers its
+    // snapshot. The empty list then is not an empty scope.
+    recordRequests();
+    await renderAt("/?cluster=u1", { objectsLoaded: false });
+
+    const summary = await screen.findByRole("region", {
+      name: "Summary percentiles",
+    });
+    expect(within(summary).queryByText(NO_VALUE)).not.toBeInTheDocument();
+  });
+
+  it("words the threshold sentence the same for every statistic", async () => {
+    recordRequests();
+    await renderAt("/?cluster=u1&exceeded=current");
+
+    expect(await screen.findByText("Highlight objects with")).toBeVisible();
+    expect(screen.getByText("lag ≥")).toBeVisible();
+  });
+
+  it("labels the time range and object type menus", async () => {
+    recordRequests();
+    await renderAt("/?cluster=u1");
+
+    expect(await screen.findByText("Time range")).toBeVisible();
+    expect(screen.getByText("Object types")).toBeVisible();
+    expect(screen.getByRole("combobox", { name: "Time range" })).toBeVisible();
   });
 
   it("loads a cluster a link names", async () => {
@@ -141,6 +188,7 @@ describe("FreshnessPage cluster selection", () => {
     expect(await screen.findByText("quickstart")).toBeVisible();
     await waitFor(() => expect(requests.length).toBeGreaterThan(0));
     expect(screen.queryByText(PROMPT)).not.toBeInTheDocument();
+    expect(screen.getByText(NOTE)).toBeVisible();
   });
 });
 
@@ -208,6 +256,7 @@ describe("FreshnessPage schema scope", () => {
 
     expect(await screen.findByText(PROMPT)).toBeVisible();
     expect(screen.getByText("Select a schema")).toBeVisible();
+    expect(screen.queryByText(NOTE)).not.toBeInTheDocument();
     expect(screen.queryByText("analytics.public")).not.toBeInTheDocument();
     expect(screen.queryByText("quickstart")).not.toBeInTheDocument();
   });

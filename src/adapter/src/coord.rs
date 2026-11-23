@@ -102,8 +102,8 @@ use mz_catalog::config::{AwsPrincipalContext, BuiltinItemMigrationConfig, Cluste
 use mz_catalog::durable::OpenableDurableCatalogState;
 use mz_catalog::expr_cache::{GlobalExpressions, LocalExpressions, latest_item_version};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, ClusterReplicaProcessStatus, Connection, DataSourceDesc,
-    ReconfigurationTarget, Table, TableDataSource,
+    CatalogEntry, CatalogItem, ClusterReplicaProcessStatus, DataSourceDesc, ReconfigurationTarget,
+    Table, TableDataSource,
 };
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig, VpcEndpointEvent};
 use mz_compute_client::as_of_selection;
@@ -113,7 +113,7 @@ use mz_compute_client::controller::error::{
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::LirDataflowDescription;
 use mz_controller::clusters::{
-    ClusterConfig, ClusterEvent, ClusterStatus, ManagedReplicaLocation, ProcessId, ReplicaLocation,
+    ClusterConfig, ClusterEvent, ClusterStatus, ProcessId, ReplicaLocation,
 };
 use mz_controller::{ControllerConfig, Readiness};
 use mz_controller_types::{ClusterId, ReplicaId, WatchSetId};
@@ -151,9 +151,9 @@ use mz_sql::catalog::{CatalogCluster, EnvironmentId};
 use mz_sql::names::{QualifiedItemName, ResolvedIds};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::{
-    self, AlterSinkPlan, ConnectionDetails, CreateConnectionPlan, HirRelationExpr,
-    NetworkPolicyRule, Params, QueryWhen,
+    self, AlterSinkPlan, ConnectionDetails, HirRelationExpr, NetworkPolicyRule, Params,
 };
+use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::User;
 use mz_sql::session::vars::{MAX_CREDIT_CONSUMPTION_RATE, SystemVars, Var};
 use mz_sql_parser::ast::ExplainStage;
@@ -192,16 +192,14 @@ use crate::config::{
     SystemParameterSyncConfig,
 };
 use crate::coord::appends::{
-    BuiltinTableAppendCompletion, BuiltinTableAppendNotify, DeferredPlan, GroupCommitPermit,
-    PendingWriteTxn,
+    BuiltinTableAppendCompletion, BuiltinTableAppendNotify, GroupCommitPermit, PendingWriteTxn,
 };
 use crate::coord::caught_up::CaughtUpCheckContext;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::introspection::IntrospectionSubscribe;
 use crate::coord::metric_sink::{CuratedMetricSink, InstalledMetricSink, PlannedMetricSink};
-use crate::coord::peek::PendingPeek;
 use crate::coord::statement_logging::StatementLogging;
-use crate::coord::timeline::{TimelineContext, TimelineState};
+use crate::coord::timeline::TimelineState;
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::coord::validity::PlanValidity;
 use crate::error::AdapterError;
@@ -245,6 +243,23 @@ mod metric_sink;
 mod privatelink_status;
 mod sql;
 mod validity;
+
+/// Boxes a coordinator dispatcher while bounding its inline state.
+fn box_dispatcher<'a, F>(future: F) -> LocalBoxFuture<'a, ()>
+where
+    F: std::future::Future<Output = ()> + 'a,
+{
+    // Every command pays for the largest branch's future, even when that branch
+    // is not taken. Box large, infrequent callees separately to stay within this
+    // budget. Leave room for differences between build profiles and platforms.
+    const {
+        assert!(
+            size_of::<F>() <= 24 * 1024,
+            "coordinator dispatcher future exceeds 24 KiB: box large awaited callees"
+        );
+    }
+    future.boxed_local()
+}
 
 /// The oldest leader version against which a replacement-migrated builtin materialized view may
 /// write its new persist shard while this environment is still read-only.
@@ -348,11 +363,14 @@ pub enum Message {
         controller: ControllerReadiness,
     },
     PurifiedStatementReady(PurifiedStatementReady),
-    CreateConnectionValidationReady(CreateConnectionValidationReady),
-    AlterConnectionValidationReady(AlterConnectionValidationReady),
-    DeferredPlanReady {
-        /// The connection whose session-startup appends completed.
-        conn_id: ConnectionId,
+    SourceStatementReady {
+        pending: ddl::PendingSourceStatement,
+        response: mz_sql::pure::SourcePreparationResponse,
+        otel_ctx: OpenTelemetryContext,
+    },
+    DdlCommandsReady {
+        pending: ddl::PendingDdlCommit,
+        otel_ctx: OpenTelemetryContext,
     },
     /// Initiates a group commit.
     GroupCommitInitiate(Span, Option<GroupCommitPermit>),
@@ -425,11 +443,6 @@ pub enum Message {
         span: Span,
         stage: CreateMaterializedViewStage,
     },
-    SubscribeStageReady {
-        ctx: ExecuteContext,
-        span: Span,
-        stage: SubscribeStage,
-    },
     IntrospectionSubscribeStageReady {
         span: Span,
         stage: IntrospectionSubscribeStage,
@@ -447,11 +460,6 @@ pub enum Message {
         ctx: ExecuteContext,
         span: Span,
         stage: ClusterStage,
-    },
-    ExplainTimestampStageReady {
-        ctx: ExecuteContext,
-        span: Span,
-        stage: ExplainTimestampStage,
     },
     DrainStatementLog,
     PrivateLinkVpcEndpointEvents(Vec<VpcEndpointEvent>),
@@ -505,10 +513,8 @@ impl Message {
                 Command::ExecuteCopyTo { .. } => "execute-copy-to",
                 Command::ExecuteSideEffectingFunc { .. } => "execute-side-effecting-func",
                 Command::LookupConnection { .. } => "lookup-connection",
-                Command::RegisterFrontendPeek { .. } => "register-frontend-peek",
-                Command::UnregisterFrontendPeek { .. } => "unregister-frontend-peek",
+                Command::InstallPeekWatchSets { .. } => "install-peek-watch-sets",
                 Command::ExplainTimestamp { .. } => "explain-timestamp",
-                Command::FrontendStatementLogging(..) => "frontend-statement-logging",
                 Command::StartCopyFromStdin { .. } => "start-copy-from-stdin",
                 Command::InjectAuditEvents { .. } => "inject-audit-events",
                 Command::RegisterConnectionCancelWatch { .. } => "register-connection-cancel-watch",
@@ -529,8 +535,8 @@ impl Message {
                 controller: ControllerReadiness::Internal,
             } => "controller_ready(internal)",
             Message::PurifiedStatementReady(_) => "purified_statement_ready",
-            Message::CreateConnectionValidationReady(_) => "create_connection_validation_ready",
-            Message::DeferredPlanReady { .. } => "deferred_plan_ready",
+            Message::SourceStatementReady { .. } => "source_statement_ready",
+            Message::DdlCommandsReady { .. } => "ddl_commands_ready",
             Message::GroupCommitInitiate(..) => "group_commit_initiate",
             Message::GroupCommitApplied { .. } => "group_commit_applied",
             Message::AdvanceTimelines => "advance_timelines",
@@ -552,14 +558,12 @@ impl Message {
             Message::ExecuteSingleStatementTransaction { .. } => {
                 "execute_single_statement_transaction"
             }
-            Message::ExplainTimestampStageReady { .. } => "explain_timestamp_stage_ready",
             Message::CreateIndexStageReady { .. } => "create_index_stage_ready",
             Message::CreateMetricSinkStageReady { .. } => "create_metric_sink_stage_ready",
             Message::CreateViewStageReady { .. } => "create_view_stage_ready",
             Message::CreateMaterializedViewStageReady { .. } => {
                 "create_materialized_view_stage_ready"
             }
-            Message::SubscribeStageReady { .. } => "subscribe_stage_ready",
             Message::IntrospectionSubscribeStageReady { .. } => {
                 "introspection_subscribe_stage_ready"
             }
@@ -567,7 +571,6 @@ impl Message {
             Message::SecretStageReady { .. } => "secret_stage_ready",
             Message::ClusterStageReady { .. } => "cluster_stage_ready",
             Message::DrainStatementLog => "drain_statement_log",
-            Message::AlterConnectionValidationReady(..) => "alter_connection_validation_ready",
             Message::PrivateLinkVpcEndpointEvents(_) => "private_link_vpc_endpoint_events",
             Message::ClusterControllerRequest(_) => "cluster_controller_request",
             Message::DeferredStatementReady => "deferred_statement_ready",
@@ -601,22 +604,6 @@ pub struct BackgroundWorkResult<T> {
 }
 
 pub type PurifiedStatementReady = BackgroundWorkResult<mz_sql::pure::PurifiedStatement>;
-
-#[derive(Derivative)]
-#[derivative(Debug)]
-pub struct ValidationReady<T> {
-    #[derivative(Debug = "ignore")]
-    pub ctx: ExecuteContext,
-    pub result: Result<T, AdapterError>,
-    pub resolved_ids: ResolvedIds,
-    pub connection_id: CatalogItemId,
-    pub connection_gid: GlobalId,
-    pub plan_validity: PlanValidity,
-    pub otel_ctx: OpenTelemetryContext,
-}
-
-pub type CreateConnectionValidationReady = ValidationReady<CreateConnectionPlan>;
-pub type AlterConnectionValidationReady = ValidationReady<Connection>;
 
 #[derive(Debug)]
 pub struct CopyToContext {
@@ -730,6 +717,7 @@ pub struct CreateViewFinish {
     /// IDs of objects resolved during name resolution.
     resolved_ids: ResolvedIds,
     optimized_expr: OptimizedMirRelationExpr,
+    optimizer_features: OptimizerFeatures,
 }
 
 #[derive(Debug)]
@@ -738,58 +726,6 @@ pub struct CreateViewExplain {
     id: GlobalId,
     plan: plan::CreateViewPlan,
     explain_ctx: ExplainPlanContext,
-}
-
-#[derive(Debug)]
-pub enum ExplainTimestampStage {
-    Optimize(ExplainTimestampOptimize),
-    RealTimeRecency(ExplainTimestampRealTimeRecency),
-    LinearizeTimestamp(ExplainTimestampLinearizeTimestamp),
-    Finish(ExplainTimestampFinish),
-}
-
-#[derive(Debug)]
-pub struct ExplainTimestampOptimize {
-    validity: PlanValidity,
-    plan: plan::ExplainTimestampPlan,
-    cluster_id: ClusterId,
-}
-
-#[derive(Debug)]
-pub struct ExplainTimestampRealTimeRecency {
-    validity: PlanValidity,
-    format: ExplainFormat,
-    optimized_plan: OptimizedMirRelationExpr,
-    cluster_id: ClusterId,
-    when: QueryWhen,
-}
-
-#[derive(Debug)]
-pub struct ExplainTimestampLinearizeTimestamp {
-    validity: PlanValidity,
-    format: ExplainFormat,
-    optimized_plan: OptimizedMirRelationExpr,
-    cluster_id: ClusterId,
-    source_ids: BTreeSet<GlobalId>,
-    when: QueryWhen,
-    real_time_recency_ts: Option<Timestamp>,
-}
-
-#[derive(Debug)]
-pub struct ExplainTimestampFinish {
-    validity: PlanValidity,
-    format: ExplainFormat,
-    cluster_id: ClusterId,
-    source_ids: BTreeSet<GlobalId>,
-    when: QueryWhen,
-    real_time_recency_ts: Option<Timestamp>,
-    /// The timeline context derived in the preceding `LinearizeTimestamp`
-    /// stage, carried forward so it stays consistent with `oracle_read_ts`.
-    timeline_context: TimelineContext,
-    /// The linearized read timestamp, read off the coordinator loop in the
-    /// preceding `LinearizeTimestamp` stage. `None` when no linearized read is
-    /// needed.
-    oracle_read_ts: Option<Timestamp>,
 }
 
 #[derive(Debug)]
@@ -829,6 +765,9 @@ pub enum ExplainContext {
     PlanInsightsNotice(OptimizerTrace),
     /// `EXPLAIN FILTER PUSHDOWN`
     Pushdown,
+    /// `EXPLAIN TIMESTAMP`, which explains the timestamp the statement would read at without
+    /// optimizing it into a dataflow.
+    Timestamp,
 }
 
 impl ExplainContext {
@@ -839,7 +778,7 @@ impl ExplainContext {
         let optimizer_trace = match self {
             ExplainContext::Plan(explain_ctx) => Some(&explain_ctx.optimizer_trace),
             ExplainContext::PlanInsightsNotice(optimizer_trace) => Some(optimizer_trace),
-            _ => None,
+            ExplainContext::None | ExplainContext::Pushdown | ExplainContext::Timestamp => None,
         };
         optimizer_trace.map(|optimizer_trace| optimizer_trace.as_guard())
     }
@@ -850,6 +789,20 @@ impl ExplainContext {
             ExplainContext::Plan(..) => false,
             ExplainContext::PlanInsightsNotice(..) => true,
             ExplainContext::Pushdown => false,
+            ExplainContext::Timestamp => false,
+        }
+    }
+
+    /// Whether the statement's reads of per-replica introspection sources are checked, see
+    /// `check_log_reads`.
+    pub(crate) fn checks_log_reads(&self) -> bool {
+        match self {
+            ExplainContext::None
+            | ExplainContext::Plan(..)
+            | ExplainContext::PlanInsightsNotice(..)
+            | ExplainContext::Pushdown => true,
+            // It only determines a timestamp, and reads nothing on a replica.
+            ExplainContext::Timestamp => false,
         }
     }
 
@@ -917,79 +870,6 @@ pub struct CreateMaterializedViewExplain {
     validity: PlanValidity,
     plan: plan::CreateMaterializedViewPlan,
     df_meta: DataflowMetainfo,
-    explain_ctx: ExplainPlanContext,
-}
-
-#[derive(Debug)]
-pub enum SubscribeStage {
-    OptimizeMir(SubscribeOptimizeMir),
-    LinearizeTimestamp(SubscribeLinearizeTimestamp),
-    TimestampOptimizeLir(SubscribeTimestampOptimizeLir),
-    Finish(SubscribeFinish),
-    Explain(SubscribeExplain),
-}
-
-#[derive(Debug)]
-pub struct SubscribeOptimizeMir {
-    validity: PlanValidity,
-    plan: plan::SubscribePlan,
-    timeline: TimelineContext,
-    dependency_ids: BTreeSet<GlobalId>,
-    cluster_id: ComputeInstanceId,
-    replica_id: Option<ReplicaId>,
-    /// An optional context set iff the state machine is initiated from
-    /// sequencing an EXPLAIN for this statement.
-    explain_ctx: ExplainContext,
-}
-
-#[derive(Debug)]
-pub struct SubscribeLinearizeTimestamp {
-    validity: PlanValidity,
-    plan: plan::SubscribePlan,
-    timeline: TimelineContext,
-    optimizer: optimize::subscribe::Optimizer,
-    global_mir_plan: optimize::subscribe::GlobalMirPlan<optimize::subscribe::Unresolved>,
-    dependency_ids: BTreeSet<GlobalId>,
-    replica_id: Option<ReplicaId>,
-    /// An optional context set iff the state machine is initiated from
-    /// sequencing an EXPLAIN for this statement.
-    explain_ctx: ExplainContext,
-}
-
-#[derive(Debug)]
-pub struct SubscribeTimestampOptimizeLir {
-    validity: PlanValidity,
-    plan: plan::SubscribePlan,
-    timeline: TimelineContext,
-    optimizer: optimize::subscribe::Optimizer,
-    global_mir_plan: optimize::subscribe::GlobalMirPlan<optimize::subscribe::Unresolved>,
-    dependency_ids: BTreeSet<GlobalId>,
-    replica_id: Option<ReplicaId>,
-    /// The linearized read timestamp, read off the coordinator loop in the
-    /// preceding `LinearizeTimestamp` stage. `None` when no linearized read is
-    /// needed.
-    oracle_read_ts: Option<Timestamp>,
-    /// An optional context set iff the state machine is initiated from
-    /// sequencing an EXPLAIN for this statement.
-    explain_ctx: ExplainContext,
-}
-
-#[derive(Debug)]
-pub struct SubscribeFinish {
-    validity: PlanValidity,
-    cluster_id: ComputeInstanceId,
-    replica_id: Option<ReplicaId>,
-    plan: plan::SubscribePlan,
-    global_lir_plan: optimize::subscribe::GlobalLirPlan,
-    dependency_ids: BTreeSet<GlobalId>,
-}
-
-#[derive(Debug)]
-pub struct SubscribeExplain {
-    validity: PlanValidity,
-    optimizer: optimize::subscribe::Optimizer,
-    df_meta: DataflowMetainfo,
-    cluster_id: ComputeInstanceId,
     explain_ctx: ExplainPlanContext,
 }
 
@@ -1221,6 +1101,9 @@ pub struct Config {
 /// Metadata about an active connection.
 #[derive(Debug, Serialize)]
 pub struct ConnMeta {
+    /// Cancellation notifications for session-owned completion waits.
+    #[serde(skip)]
+    frontend_cancel_tx: watch::Sender<()>,
     /// Pgwire specifies that every connection have a 32-bit secret associated
     /// with it, that is known to both the client and the server. Cancellation
     /// requests are required to authenticate with the secret of the connection
@@ -1293,6 +1176,22 @@ pub struct PendingTxn {
     action: EndTransactionAction,
 }
 
+impl PendingTxn {
+    fn finish(self) {
+        let PendingTxn {
+            mut ctx,
+            response,
+            action,
+        } = self;
+        let changed = ctx.session_mut().vars_mut().end_transaction(action);
+        let response = response.map(|mut r| {
+            r.extend_params(changed);
+            ExecuteResponse::from(r)
+        });
+        ctx.retire(response);
+    }
+}
+
 #[derive(Debug)]
 /// The response we'll send for a [`PendingTxn`].
 pub enum PendingTxnResponse {
@@ -1347,9 +1246,48 @@ pub struct PendingReadTxn {
 }
 
 impl PendingReadTxn {
-    /// Return the timestamp context of the pending read transaction.
-    pub fn timestamp_context(&self) -> &TimestampContext {
-        &self.timestamp_context
+    /// Returns the timestamp that needs a fresh oracle check, if any.
+    fn timestamp_to_linearize(&self) -> Option<(&Timeline, &Timestamp)> {
+        self.timestamp_context.timestamp_to_linearize()
+    }
+
+    /// Returns whether the oracle of `timeline` having applied `applied_ts` linearizes this read.
+    fn linearized_by(&self, timeline: &Timeline, applied_ts: &Timestamp) -> bool {
+        match self.timestamp_to_linearize() {
+            None => true,
+            Some((read_timeline, chosen_ts)) => {
+                read_timeline == timeline && chosen_ts <= applied_ts
+            }
+        }
+    }
+
+    /// Finishes an already-linearized ordinary read, or returns it unchanged.
+    fn try_finish_read(self, metrics: &Metrics) -> Option<Self> {
+        if self.timestamp_to_linearize().is_some() {
+            return Some(self);
+        }
+        metrics.linearize_read_fast_path.inc();
+        self.finish_with_metrics(metrics, Instant::now());
+        None
+    }
+
+    /// Retires a linearized transaction and records its completion delay.
+    fn finish_with_metrics(self, metrics: &Metrics, now: Instant) {
+        let span = tracing::debug_span!("retire_read_results");
+        self.otel_ctx.attach_as_parent_to(&span);
+        let _entered = span.enter();
+        metrics
+            .linearize_message_seconds
+            .with_label_values(&[
+                "read",
+                if self.num_requeues == 0 {
+                    "true"
+                } else {
+                    "false"
+                },
+            ])
+            .observe((now - self.created).as_secs_f64());
+        self.finish();
     }
 
     pub(crate) fn take_context(self) -> ExecuteContext {
@@ -1359,17 +1297,7 @@ impl PendingReadTxn {
     /// Alert the client that the read has been linearized.
     #[instrument(level = "debug")]
     pub fn finish(self) {
-        let PendingTxn {
-            mut ctx,
-            response,
-            action,
-        } = self.txn;
-        let changed = ctx.session_mut().vars_mut().end_transaction(action);
-        let response = response.map(|mut r| {
-            r.extend_params(changed);
-            ExecuteResponse::from(r)
-        });
-        ctx.retire(response);
+        self.txn.finish();
     }
 }
 
@@ -1642,7 +1570,7 @@ impl ExecuteContext {
 
     /// Delays sending this statement's response until `barrier` resolves.
     pub(crate) fn delay_response_until(&mut self, barrier: BuiltinTableAppendCompletion) {
-        self.response_barriers.push(barrier.into_notify());
+        self.response_barriers.extend(barrier.into_notify());
     }
 
     pub fn extra(&self) -> &ExecuteContextGuard {
@@ -1899,12 +1827,8 @@ pub struct Coordinator {
     /// Upon completing a transaction, these read holds should be dropped.
     txn_read_holds: BTreeMap<ConnectionId, read_policy::ReadHolds>,
 
-    /// Access to the peek fields should be restricted to methods in the [`peek`] API.
-    /// A map from pending peek ids to the queue into which responses are sent, and
-    /// the connection id of the client that initiated the peek.
-    pending_peeks: BTreeMap<Uuid, PendingPeek>,
-    /// A map from client connection ids to a set of all pending peeks for that client.
-    client_pending_peeks: BTreeMap<ConnectionId, BTreeMap<Uuid, ClusterId>>,
+    /// Active peeks by connection, shared with every session's `PeekClient`.
+    peek_registry: Arc<crate::peek_registry::PeekRegistry>,
 
     /// A map from client connection ids to pending linearize read transaction.
     pending_linearize_read_txns: BTreeMap<ConnectionId, PendingReadTxn>,
@@ -1943,9 +1867,6 @@ pub struct Coordinator {
     /// per replica. See [`Coordinator::plan_metric_sink`].
     metric_sink_plans: BTreeMap<&'static str, PlannedMetricSink>,
 
-    /// Plans waiting for session-startup builtin table appends.
-    deferred_plans: BTreeMap<ConnectionId, DeferredPlan>,
-
     /// Pending writes waiting for a group commit.
     pending_writes: Vec<PendingWriteTxn>,
 
@@ -1980,7 +1901,7 @@ pub struct Coordinator {
     /// - Re-planning a statement is hard because Coordinator and Session state is mutated at
     ///   various points, and we would need to correctly reset those changes before re-planning and
     ///   re-sequencing.
-    serialized_ddl: LockedVecDeque<DeferredPlanStatement>,
+    serialized_ddl: LockedVecDeque<DeferredDdl>,
 
     /// Handle to secret manager that can create and delete secrets from
     /// an arbitrary secret storage engine.
@@ -2505,6 +2426,11 @@ impl Coordinator {
             optimize_dataflows_start.elapsed()
         );
 
+        info!(
+            missed_local = uncached_local_exprs.len(),
+            missed_global = uncached_global_exps.len(),
+            "optimized expressions without an expression cache hit at startup"
+        );
         // We don't need to wait for the cache to update.
         let _fut = self.catalog().update_expression_cache(
             uncached_local_exprs.into_iter().collect(),
@@ -2781,13 +2707,6 @@ impl Coordinator {
         for (cw, policies) in policies_to_set {
             self.initialize_read_policies(&policies, cw).await;
         }
-
-        // Expose mapping from T-shirt sizes to actual sizes
-        builtin_table_updates.extend(
-            self.catalog().state().resolve_builtin_table_updates(
-                self.catalog().state().pack_all_replica_size_updates(),
-            ),
-        );
 
         debug!("startup: coordinator init: bootstrap: initializing migrated builtin tables");
         // When 0dt is enabled, we create new shards for any migrated builtin storage collections.
@@ -3857,10 +3776,16 @@ impl Coordinator {
         let mut catalog_ids = Vec::new();
         let mut dataflows = Vec::new();
         let mut read_policies = BTreeMap::new();
+        let mut pending_replacements = BTreeSet::new();
         for entry in self.catalog.entries() {
             let gid = match entry.item() {
                 CatalogItem::Index(idx) => idx.global_id(),
-                CatalogItem::MaterializedView(mv) => mv.global_id_writes(),
+                CatalogItem::MaterializedView(mv) => {
+                    if mv.replacement_target.is_some() {
+                        pending_replacements.insert(mv.global_id_writes());
+                    }
+                    mv.global_id_writes()
+                }
                 CatalogItem::MetricSink(metric_sink) => metric_sink.global_id,
                 CatalogItem::Table(_)
                 | CatalogItem::Source(_)
@@ -3889,6 +3814,7 @@ impl Coordinator {
             &*self.controller.storage_collections,
             read_ts,
             self.controller.read_only(),
+            &pending_replacements,
         );
 
         let catalog = self.catalog_mut();
@@ -4070,21 +3996,11 @@ impl Coordinator {
                         };
                         messages.push(Message::GroupCommitInitiate(span, Some(permit)));
                     },
-                    // `recv_many()` on `UnboundedReceiver` is cancellation safe:
-                    // https://docs.rs/tokio/1.38.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety-1
-                    // Receive a batch of commands.
-                    count = cmd_rx.recv_many(&mut cmd_messages, MESSAGE_BATCH) => {
-                        if count == 0 {
-                            break;
-                        } else {
-                            messages.extend(cmd_messages.drain(..).map(
-                                |(otel_ctx, cmd)| Message::Command(otel_ctx, cmd),
-                            ));
-                        }
-                    },
                     // `recv()` on `UnboundedReceiver` is cancellation safe:
                     // https://docs.rs/tokio/1.38.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
                     // Receive a single command.
+                    // Above `cmd_rx` so a command flood cannot starve it. Only the sequencer
+                    // sends here.
                     Some(pending_read_txn) = strict_serializable_reads_rx.recv() => {
                         let mut pending_read_txns = vec![pending_read_txn];
                         while let Ok(pending_read_txn) = strict_serializable_reads_rx.try_recv() {
@@ -4101,6 +4017,18 @@ impl Coordinator {
                         }
                         messages.push(Message::LinearizeReads);
                     }
+                    // `recv_many()` on `UnboundedReceiver` is cancellation safe:
+                    // https://docs.rs/tokio/1.38.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety-1
+                    // Receive a batch of commands.
+                    count = cmd_rx.recv_many(&mut cmd_messages, MESSAGE_BATCH) => {
+                        if count == 0 {
+                            break;
+                        } else {
+                            messages.extend(cmd_messages.drain(..).map(
+                                |(otel_ctx, cmd)| Message::Command(otel_ctx, cmd),
+                            ));
+                        }
+                    },
                     // `tick()` on `Interval` is cancel-safe:
                     // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
                     // Receive a single command.
@@ -4156,7 +4084,6 @@ impl Coordinator {
                         "coord::handle_message",
                         kind = msg_kind
                     );
-                    let otel_context = span.context().span().span_context().clone();
 
                     // Record the last kind of message in case we get stuck. For
                     // execute commands, we additionally stash the user's SQL,
@@ -4179,7 +4106,7 @@ impl Coordinator {
                     };
 
                     let start = Instant::now();
-                    self.handle_message(msg).instrument(span).await;
+                    self.handle_message(msg).instrument(span.clone()).await;
                     let duration = start.elapsed();
 
                     self.metrics
@@ -4189,6 +4116,7 @@ impl Coordinator {
 
                     // If something is _really_ slow, print a trace id for debugging, if OTEL is enabled.
                     if duration > warn_threshold {
+                        let otel_context = span.context().span().span_context().clone();
                         let trace_id = otel_context.is_valid().then(|| otel_context.trace_id());
                         tracing::error!(
                             ?msg_kind,
@@ -4352,7 +4280,7 @@ impl Coordinator {
 
     #[instrument(level = "debug")]
     pub(crate) fn retire_execution(
-        &mut self,
+        &self,
         reason: StatementEndedExecutionReason,
         ctx_extra: ExecuteContextExtra,
     ) {
@@ -4516,22 +4444,6 @@ impl Coordinator {
             .iter()
             .map(|(id, capability)| (id.unhandled().to_string(), format!("{capability:?}")))
             .collect();
-        let pending_peeks: BTreeMap<_, _> = self
-            .pending_peeks
-            .iter()
-            .map(|(id, peek)| (id.to_string(), format!("{peek:?}")))
-            .collect();
-        let client_pending_peeks: BTreeMap<_, _> = self
-            .client_pending_peeks
-            .iter()
-            .map(|(id, peek)| {
-                let peek: BTreeMap<_, _> = peek
-                    .iter()
-                    .map(|(uuid, storage_id)| (uuid.to_string(), storage_id))
-                    .collect();
-                (id.to_string(), peek)
-            })
-            .collect();
         let pending_linearize_read_txns: BTreeMap<_, _> = self
             .pending_linearize_read_txns
             .iter()
@@ -4542,8 +4454,6 @@ impl Coordinator {
             "global_timelines": global_timelines,
             "active_conns": active_conns,
             "txn_read_holds": txn_read_holds,
-            "pending_peeks": pending_peeks,
-            "client_pending_peeks": client_pending_peeks,
             "pending_linearize_read_txns": pending_linearize_read_txns,
             "controller": self.controller.dump().await?,
         }))
@@ -4651,38 +4561,10 @@ impl Coordinator {
         });
     }
 
-    /// The environment's current credit consumption rate, summed over all user
-    /// cluster replicas except those of `exclude_cluster`.
     fn current_credit_consumption_rate(&self, exclude_cluster: Option<ClusterId>) -> Numeric {
         self.catalog()
-            .user_cluster_replicas()
-            .filter(|replica| Some(replica.cluster_id) != exclude_cluster)
-            .filter_map(|replica| match &replica.config.location {
-                ReplicaLocation::Managed(location) => Some(self.replica_credits_per_hour(location)),
-                ReplicaLocation::Unmanaged(_) => None,
-            })
-            .sum()
-    }
-
-    /// The credit rate of a managed replica, read from the size map by its billing size.
-    ///
-    /// An unknown billing size counts as free. DDL validates `SIZE` and `BILLED AS` against
-    /// the map at replica creation, but the map is external configuration and can lose a
-    /// size later. That case is a soft panic rather than a hard one, so that in production
-    /// such a replica can still be dropped from SQL.
-    fn replica_credits_per_hour(&self, location: &ManagedReplicaLocation) -> Numeric {
-        let size = location.size_for_billing();
-        match self.catalog().cluster_replica_sizes().0.get(size) {
-            Some(allocation) => allocation.credits_per_hour,
-            None => {
-                soft_panic_or_log!(
-                    "replica of size {:?} bills as unknown replica size {:?}, counting it as free",
-                    location.size,
-                    size,
-                );
-                Numeric::zero()
-            }
-        }
+            .state()
+            .current_credit_consumption_rate(exclude_cluster)
     }
 }
 
@@ -5169,6 +5051,7 @@ pub fn serve(
                 }
 
                 let catalog = Arc::new(catalog);
+                let dyncfgs = catalog.system_config().dyncfgs().clone();
                 let max_concurrent_occ_writes =
                     usize::cast_from(catalog.system_config().max_concurrent_occ_writes());
 
@@ -5187,8 +5070,7 @@ pub fn serve(
                     transient_id_gen: Arc::new(TransientIdGen::new()),
                     active_conns: BTreeMap::new(),
                     txn_read_holds: Default::default(),
-                    pending_peeks: BTreeMap::new(),
-                    client_pending_peeks: BTreeMap::new(),
+                    peek_registry: Arc::default(),
                     pending_linearize_read_txns: BTreeMap::new(),
                     serialized_ddl: LockedVecDeque::new(),
                     active_compute_sinks: BTreeMap::new(),
@@ -5200,7 +5082,6 @@ pub fn serve(
                     hydration_history_sweep: None,
                     metric_sinks: BTreeMap::new(),
                     metric_sink_plans: BTreeMap::new(),
-                    deferred_plans: BTreeMap::new(),
                     pending_writes: Vec::new(),
                     occ_write_semaphore: Arc::new(Semaphore::new(max_concurrent_occ_writes)),
                     advance_timelines_interval,
@@ -5215,7 +5096,7 @@ pub fn serve(
                     scoped_frontend: None,
                     optimizer_metrics,
                     tracing_handle,
-                    statement_logging: StatementLogging::new(coord_now.clone()),
+                    statement_logging: StatementLogging::new(coord_now.clone(), &dyncfgs),
                     webhook_concurrency_limit,
                     timestamp_oracle_config,
                     caught_up_check: clusters_caught_up_check,
@@ -5594,22 +5475,26 @@ impl<T> LockedVecDeque<T> {
 }
 
 #[derive(Debug)]
-struct DeferredPlanStatement {
-    ctx: ExecuteContext,
-    ps: PlanStatement,
-}
-
-#[derive(Debug)]
-enum PlanStatement {
+enum DeferredDdl {
     Statement {
+        ctx: ExecuteContext,
         stmt: Arc<Statement<Raw>>,
         params: Params,
     },
-    Plan {
-        plan: mz_sql::plan::Plan,
-        resolved_ids: ResolvedIds,
-        sql_impl_resolved_ids: ResolvedIds,
-    },
+    Commit(ddl::PendingDdlCommit),
+}
+
+impl DeferredDdl {
+    fn conn_id(&self) -> &ConnectionId {
+        match self {
+            Self::Statement {
+                ctx,
+                stmt: _,
+                params: _,
+            } => ctx.session().conn_id(),
+            Self::Commit(pending) => pending.conn_id(),
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -5644,11 +5529,308 @@ pub(crate) fn infer_sql_type_for_catalog(
 
 #[cfg(test)]
 mod execute_context_tests {
+    use mz_sql::session::vars::{SystemVars, VarInput};
     use tokio::sync::{mpsc, oneshot};
 
     use super::*;
+    use crate::command::Response;
     use crate::session::Session;
     use crate::util::ClientTransmitter;
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_retire_completed_barrier_answers_without_scheduling() {
+        let (client_tx, mut client_rx) = oneshot::channel();
+        let (internal_cmd_tx, _internal_cmd_rx) = mpsc::unbounded_channel();
+        let mut ctx = ExecuteContext::from_parts(
+            ClientTransmitter::new(client_tx, internal_cmd_tx.clone()),
+            internal_cmd_tx,
+            Session::dummy(),
+            ExecuteContextGuard::default(),
+        );
+
+        ctx.delay_response_until(BuiltinTableAppendCompletion::completed());
+        assert!(ctx.response_barriers.is_empty());
+        ctx.retire(Ok(ExecuteResponse::StartedTransaction));
+
+        // No await: a task spawned on this current-thread runtime cannot run yet.
+        let response = client_rx.try_recv().expect("response must be synchronous");
+        assert!(matches!(
+            response.result,
+            Ok(ExecuteResponse::StartedTransaction)
+        ));
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_retire_pending_barrier_waits_for_completion() {
+        let (client_tx, mut client_rx) = oneshot::channel();
+        let (internal_cmd_tx, _internal_cmd_rx) = mpsc::unbounded_channel();
+        let (done_tx, done_rx) = oneshot::channel();
+        let mut ctx = ExecuteContext::from_parts(
+            ClientTransmitter::new(client_tx, internal_cmd_tx.clone()),
+            internal_cmd_tx,
+            Session::dummy(),
+            ExecuteContextGuard::default(),
+        );
+
+        ctx.delay_response_until(BuiltinTableAppendCompletion::new(Box::pin(async move {
+            done_rx.await.expect("completion sender stays alive");
+        })));
+        ctx.delay_response_until(BuiltinTableAppendCompletion::completed());
+        assert_eq!(ctx.response_barriers.len(), 1);
+        ctx.retire(Ok(ExecuteResponse::StartedTransaction));
+
+        tokio::task::yield_now().await;
+        assert!(matches!(
+            client_rx.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+        done_tx.send(()).expect("barrier must retain its receiver");
+        let response = tokio::time::timeout(Duration::from_secs(5), client_rx)
+            .await
+            .expect("response must follow completion")
+            .expect("client must be answered");
+        assert!(matches!(
+            response.result,
+            Ok(ExecuteResponse::StartedTransaction)
+        ));
+    }
+
+    fn pending_read(
+        timestamp_context: TimestampContext,
+    ) -> (PendingReadTxn, oneshot::Receiver<Response<ExecuteResponse>>) {
+        let (client_tx, client_rx) = oneshot::channel();
+        let (internal_cmd_tx, _internal_cmd_rx) = mpsc::unbounded_channel();
+        let mut session = Session::dummy();
+        session
+            .vars_mut()
+            .set_default("application_name", VarInput::Flat("session"))
+            .expect("valid default");
+        session
+            .vars_mut()
+            .set(
+                &SystemVars::new(),
+                "application_name",
+                VarInput::Flat("transaction"),
+                true,
+            )
+            .expect("valid local value");
+        let ctx = ExecuteContext::from_parts(
+            ClientTransmitter::new(client_tx, internal_cmd_tx.clone()),
+            internal_cmd_tx,
+            session,
+            ExecuteContextGuard::default(),
+        );
+        (
+            PendingReadTxn {
+                txn: PendingTxn {
+                    ctx,
+                    response: Ok(PendingTxnResponse::Committed {
+                        params: BTreeMap::from([("retained", "value".into())]),
+                    }),
+                    action: EndTransactionAction::Commit,
+                },
+                timestamp_context,
+                created: Instant::now() - Duration::from_secs(1),
+                num_requeues: 0,
+                otel_ctx: OpenTelemetryContext::obtain(),
+            },
+            client_rx,
+        )
+    }
+
+    fn timestamp_context(chosen_ts: u64, oracle_ts: Option<u64>) -> TimestampContext {
+        TimestampContext::TimelineTimestamp {
+            timeline: Timeline::EpochMilliseconds,
+            chosen_ts: chosen_ts.into(),
+            oracle_ts: oracle_ts.map(Into::into),
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_ready_read_finishes_without_scheduling() {
+        for context in [
+            TimestampContext::NoTimestamp,
+            timestamp_context(u64::MAX, None),
+            timestamp_context(0, Some(0)),
+            timestamp_context(99, Some(100)),
+            timestamp_context(100, Some(100)),
+            timestamp_context(u64::MAX, Some(u64::MAX)),
+        ] {
+            let metrics = Metrics::register_into(&MetricsRegistry::new());
+            let (pending, mut client_rx) = pending_read(context.clone());
+
+            assert!(pending.try_finish_read(&metrics).is_none(), "{context:?}");
+            // No await: a response queued onto this runtime cannot run yet.
+            let response = client_rx.try_recv().expect("response must be synchronous");
+            assert_eq!(response.session.vars().application_name(), "session");
+            let ExecuteResponse::TransactionCommitted { params } =
+                response.result.expect("commit succeeds")
+            else {
+                panic!("expected commit response");
+            };
+            assert_eq!(
+                params.get("application_name").map(String::as_str),
+                Some("session")
+            );
+            assert_eq!(params.get("retained").map(String::as_str), Some("value"));
+            assert_eq!(metrics.linearize_read_fast_path.get(), 1);
+            let histogram = metrics
+                .linearize_message_seconds
+                .with_label_values(&["read", "true"]);
+            assert_eq!(histogram.get_sample_count(), 1);
+            assert!(histogram.get_sample_sum() >= 1.0);
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_ready_read_rollback_finalizes_session() {
+        let metrics = Metrics::register_into(&MetricsRegistry::new());
+        let (mut pending, mut client_rx) = pending_read(timestamp_context(100, Some(100)));
+        let txn = &mut pending.txn;
+        txn.action = EndTransactionAction::Rollback;
+        txn.response = Ok(PendingTxnResponse::Rolledback {
+            params: BTreeMap::new(),
+        });
+
+        assert!(pending.try_finish_read(&metrics).is_none());
+        let response = client_rx.try_recv().expect("response must be synchronous");
+        assert_eq!(response.session.vars().application_name(), "session");
+        let ExecuteResponse::TransactionRolledBack { params } =
+            response.result.expect("rollback succeeds")
+        else {
+            panic!("expected rollback response");
+        };
+        assert_eq!(
+            params.get("application_name").map(String::as_str),
+            Some("session")
+        );
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_future_read_remains_pending() {
+        for (chosen, oracle) in [(1, 0), (101, 100), (u64::MAX, u64::MAX - 1)] {
+            let metrics = Metrics::register_into(&MetricsRegistry::new());
+            let context = timestamp_context(chosen, Some(oracle));
+            let (pending, mut client_rx) = pending_read(context.clone());
+            let created = pending.created;
+            let pending = pending
+                .try_finish_read(&metrics)
+                .expect("future read must wait");
+
+            assert_eq!(pending.timestamp_context, context);
+            assert_eq!(pending.created, created);
+            assert_eq!(pending.num_requeues, 0);
+            assert_eq!(
+                pending.timestamp_to_linearize(),
+                Some((&Timeline::EpochMilliseconds, &Timestamp::from(chosen)))
+            );
+            assert!(matches!(
+                client_rx.try_recv(),
+                Err(oneshot::error::TryRecvError::Empty)
+            ));
+            assert_eq!(metrics.linearize_read_fast_path.get(), 0);
+            assert_eq!(
+                metrics
+                    .linearize_message_seconds
+                    .with_label_values(&["read", "true"])
+                    .get_sample_count(),
+                0
+            );
+            let ctx = pending.take_context();
+            assert_eq!(ctx.session().vars().application_name(), "transaction");
+            ctx.retire(Err(AdapterError::Canceled));
+            assert!(matches!(
+                client_rx.try_recv().expect("cancellation responds").result,
+                Err(AdapterError::Canceled)
+            ));
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_ready_read_preserves_response_barrier() {
+        let metrics = Metrics::register_into(&MetricsRegistry::new());
+        let (mut pending, mut client_rx) = pending_read(timestamp_context(100, Some(100)));
+        let (done_tx, done_rx) = oneshot::channel();
+        let txn = &mut pending.txn;
+        txn.ctx
+            .delay_response_until(BuiltinTableAppendCompletion::new(Box::pin(async move {
+                done_rx.await.expect("completion sender stays alive");
+            })));
+
+        assert!(pending.try_finish_read(&metrics).is_none());
+        tokio::task::yield_now().await;
+        assert!(matches!(
+            client_rx.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+        done_tx.send(()).expect("barrier retains receiver");
+        let response = tokio::time::timeout(Duration::from_secs(5), client_rx)
+            .await
+            .expect("response follows completion")
+            .expect("client answered");
+        assert!(matches!(
+            response.result,
+            Ok(ExecuteResponse::TransactionCommitted { .. })
+        ));
+        assert_eq!(response.session.vars().application_name(), "session");
+        assert_eq!(metrics.linearize_read_fast_path.get(), 1);
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_applied_write_linearizes_local_reads_up_to_it() {
+        let local = Timeline::EpochMilliseconds;
+        let applied_ts = Timestamp::from(100u64);
+        for (context, expected) in [
+            (TimestampContext::NoTimestamp, true),
+            (timestamp_context(100, Some(100)), true),
+            (timestamp_context(99, Some(50)), true),
+            (timestamp_context(100, Some(50)), true),
+            (timestamp_context(101, Some(50)), false),
+            (
+                TimestampContext::TimelineTimestamp {
+                    timeline: Timeline::User("other".into()),
+                    chosen_ts: 99.into(),
+                    oracle_ts: Some(50.into()),
+                },
+                false,
+            ),
+        ] {
+            let (pending, _client_rx) = pending_read(context.clone());
+            assert_eq!(
+                pending.linearized_by(&local, &applied_ts),
+                expected,
+                "{context:?}"
+            );
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_queued_read_preserves_requeue_metric() {
+        let metrics = Metrics::register_into(&MetricsRegistry::new());
+        let (mut pending, mut client_rx) = pending_read(TimestampContext::NoTimestamp);
+        pending.num_requeues = 1;
+        pending.finish_with_metrics(&metrics, Instant::now());
+
+        assert!(matches!(
+            client_rx.try_recv().expect("queued read responds").result,
+            Ok(ExecuteResponse::TransactionCommitted { .. })
+        ));
+        assert_eq!(metrics.linearize_read_fast_path.get(), 0);
+        assert_eq!(
+            metrics
+                .linearize_message_seconds
+                .with_label_values(&["read", "false"])
+                .get_sample_count(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .linearize_message_seconds
+                .with_label_values(&["read", "true"])
+                .get_sample_count(),
+            0
+        );
+    }
 
     /// Runtime shutdown drops the barrier-waiting task that `retire` spawns. The context's `Drop`
     /// backstop must answer the client, rather than panicking on an unsent `ClientTransmitter`.

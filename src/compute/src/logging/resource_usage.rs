@@ -113,9 +113,7 @@ pub(super) fn construct(
     let trace = stream
         .mz_arrange_core::<
             _,
-            batcher::Chunker<_>,
-            Col2ValBatcher<_, _, _, _>,
-            RowRowBuilder<_, _>,
+            Col2ValBatcher<_, _, _, _, batcher::Chunker<_>, RowRowBuilder<_, _>>,
             RowRowSpine<_, _>,
         >(exchange, "Arrange ResourceUsage")
         .trace;

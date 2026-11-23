@@ -18,7 +18,7 @@ import { buildHydrationAggregateQuery } from "./hydrationAggregate";
 
 const TEST_SCHEMA = "test_hydration_aggregate";
 
-/** Shadows the four relations the query reads. Empty value lists are elided.
+/** Shadows the relations the query reads. Empty value lists are elided.
  *  `replicas` defaults to the ids the fixtures use, so statistics rows count
  *  as coming from live replicas unless a test overrides it. */
 const seed = ({
@@ -27,12 +27,16 @@ const seed = ({
   statistics = "",
   replicas = "('r1'), ('r2'), ('r3')",
   sources = "",
+  dependencies = "",
+  tables = "",
 }: {
   hydration?: string;
   statuses?: string;
   statistics?: string;
   replicas?: string;
   sources?: string;
+  dependencies?: string;
+  tables?: string;
 }) => `
   > DROP SCHEMA IF EXISTS ${TEST_SCHEMA} CASCADE;
   > CREATE SCHEMA ${TEST_SCHEMA};
@@ -59,11 +63,21 @@ const seed = ({
   > CREATE TABLE ${TEST_SCHEMA}.mz_cluster_replicas (
       id TEXT NOT NULL
     );
+  > CREATE TABLE ${TEST_SCHEMA}.mz_object_dependencies (
+      object_id TEXT NOT NULL,
+      referenced_object_id TEXT NOT NULL
+    );
+  > CREATE TABLE ${TEST_SCHEMA}.mz_tables (
+      id TEXT NOT NULL,
+      source_id TEXT
+    );
   ${hydration ? `> INSERT INTO ${TEST_SCHEMA}.mz_hydration_statuses VALUES ${hydration};` : ""}
   ${statuses ? `> INSERT INTO ${TEST_SCHEMA}.mz_source_statuses VALUES ${statuses};` : ""}
   ${statistics ? `> INSERT INTO ${TEST_SCHEMA}.mz_source_statistics VALUES ${statistics};` : ""}
   ${replicas ? `> INSERT INTO ${TEST_SCHEMA}.mz_cluster_replicas VALUES ${replicas};` : ""}
   ${sources ? `> INSERT INTO ${TEST_SCHEMA}.mz_sources VALUES ${sources};` : ""}
+  ${dependencies ? `> INSERT INTO ${TEST_SCHEMA}.mz_object_dependencies VALUES ${dependencies};` : ""}
+  ${tables ? `> INSERT INTO ${TEST_SCHEMA}.mz_tables VALUES ${tables};` : ""}
 `;
 
 const run = async () => {
@@ -204,11 +218,9 @@ describe("buildHydrationAggregateQuery", () => {
     expect(rows[1].totalReplicas).toBeNull();
   });
 
-  it("excludes subsources and progress collections from the feed", async () => {
-    // The UI hides them, and each source carries one progress collection and
-    // often several subsources, so keeping them out shrinks the subscribe.
-    // Subsources also have hydration rows of their own (they run on the
-    // parent's cluster), so the exclusion must hold on both join sides.
+  it("excludes progress collections and reports subsources by status only", async () => {
+    // Subsources have hydration rows of their own (they run on the parent's
+    // cluster), but the UI reports them by ingestion status like their parent.
     await testdrive(
       seed({
         hydration: `('u1', 'r1', true), ('u2', 'r1', true)`,
@@ -221,8 +233,41 @@ describe("buildHydrationAggregateQuery", () => {
     );
 
     const rows = await run();
-    expect(rows).toHaveLength(1);
+    expect(rows).toHaveLength(2);
     expect(rows[0]).toMatchObject({ object_id: "u1", sourceStatus: "running" });
+    expect(rows[1]).toMatchObject({ object_id: "u2", sourceStatus: "running" });
+    expect(rows[1].totalReplicas).toBeNull();
+  });
+
+  it("names the source of each subsource and source-fed table", async () => {
+    // A new table can still be snapshotting while the rest of its source runs,
+    // so each export carries its own snapshot flag.
+    await testdrive(
+      seed({
+        statuses: `
+          ('u1', 'running', NULL, 'postgres'),
+          ('u2', 'running', NULL, 'subsource'),
+          ('u3', 'running', NULL, 'table')`,
+        statistics: `('u1', 'r1', true), ('u2', 'r1', true), ('u3', 'r1', false)`,
+        sources: `('u1', 'postgres'), ('u2', 'subsource')`,
+        dependencies: `('u2', 'u1'), ('u3', 'u1')`,
+        tables: `('u3', 'u1')`,
+      }),
+    );
+
+    const rows = await run();
+    expect(rows).toHaveLength(3);
+    expect(rows[0]).toMatchObject({ object_id: "u1", parentSourceId: null });
+    expect(rows[1]).toMatchObject({
+      object_id: "u2",
+      parentSourceId: "u1",
+      snapshotCommitted: true,
+    });
+    expect(rows[2]).toMatchObject({
+      object_id: "u3",
+      parentSourceId: "u1",
+      snapshotCommitted: false,
+    });
   });
 
   it("ignores statistics rows from dropped replicas", async () => {

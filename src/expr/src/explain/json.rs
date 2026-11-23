@@ -11,7 +11,9 @@
 
 use mz_repr::explain::json::DisplayJson;
 
-use crate::explain::{ExplainMultiPlan, ExplainSinglePlan, ExplainSource, PushdownInfo};
+use crate::explain::{
+    ExplainMultiPlan, ExplainSinglePlan, ExplainSource, PushdownInfo, SourceOperators,
+};
 
 impl<'a, T: 'a> DisplayJson for ExplainSinglePlan<'a, T>
 where
@@ -22,9 +24,10 @@ where
     }
 }
 
-impl<'a, T: 'a> DisplayJson for ExplainMultiPlan<'a, T>
+impl<'a, T: 'a, O> DisplayJson for ExplainMultiPlan<'a, T, O>
 where
     T: serde::Serialize,
+    O: SourceOperators,
 {
     fn to_serde_value(&self) -> serde_json::Result<serde_json::Value> {
         let plans = self
@@ -53,9 +56,23 @@ where
                         "op": op,
                     });
 
-                    if let Some(PushdownInfo { pushdown }) = pushdown_info {
+                    if let Some(PushdownInfo {
+                        pushdown,
+                        lower_bounds,
+                        upper_bounds,
+                    }) = pushdown_info
+                    {
                         let object = json.as_object_mut().unwrap();
                         object.insert("pushdown".to_owned(), serde_json::json!(pushdown));
+                        if !lower_bounds.is_empty() || !upper_bounds.is_empty() {
+                            object.insert(
+                                "pushdown_temporal".to_owned(),
+                                serde_json::json!({
+                                    "lower_bounds": lower_bounds,
+                                    "upper_bounds": upper_bounds,
+                                }),
+                            );
+                        }
                     }
 
                     json

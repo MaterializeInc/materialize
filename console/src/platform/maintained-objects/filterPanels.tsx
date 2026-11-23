@@ -24,8 +24,8 @@ import { Column } from "@tanstack/react-table";
 import React from "react";
 
 import {
-  MAINTAINED_OBJECT_TYPES,
-  MaintainedObjectType,
+  MAINTAINED_OBJECT_LIST_TYPES,
+  MaintainedObjectListType,
 } from "~/api/materialize/maintained-objects/constants";
 import { MaterializeTheme } from "~/theme";
 import { DurationUnit, fromSeconds, toSeconds } from "~/utils/format";
@@ -173,9 +173,9 @@ export const ClusterFilterPanel = ({
 );
 
 export const ObjectTypeFilterPanel = ({ column }: { column: AnyColumn }) => (
-  <MultiSelectFilterPanel<MaintainedObjectType>
+  <MultiSelectFilterPanel<MaintainedObjectListType>
     column={column}
-    items={MAINTAINED_OBJECT_TYPES}
+    items={MAINTAINED_OBJECT_LIST_TYPES}
   />
 );
 

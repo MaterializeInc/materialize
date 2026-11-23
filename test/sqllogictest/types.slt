@@ -915,6 +915,28 @@ SELECT format_type(2211, NULL)
 ----
 regtype[]
 
+# arrays whose OID `Type::from_oid` does not resolve
+
+query T
+SELECT format_type(16463, NULL)
+----
+uint4[]
+
+query T
+SELECT format_type(16567, NULL)
+----
+mz_aclitem[]
+
+query T
+SELECT format_type(1034, NULL)
+----
+aclitem[]
+
+query T
+SELECT format_type(2287, NULL)
+----
+record[]
+
 # 🔬🔬 non-type OID
 
 query T

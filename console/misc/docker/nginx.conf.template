@@ -7,11 +7,28 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# This file is included inside the `http` block, so the directives above the
+# first `server` apply to every server.
+
+# Request metrics, served by the metrics server below. The njs module is loaded
+# in /etc/nginx/nginx.conf, since `load_module` cannot appear inside `http`.
+js_import mz_metrics from /etc/nginx/njs/metrics.js;
+js_shared_dict_zone zone=mz_console_metrics:1m type=number;
+js_set $mz_metrics_record mz_metrics.record;
+# Records each request in the log phase. `$mz_metrics_record` evaluates to an
+# empty string, so this log never writes a line.
+access_log /dev/null main if=$mz_metrics_record;
+# A request that reaches no location leaves `$mz_metrics_location` unset, and
+# is counted as `other`. Reading the unset variable would log a warning.
+uninitialized_variable_warn off;
+
 server {
 ${MZ_NGINX_LISTENER_CONFIG}
     server_name _;
 
+    # Each location names itself in the `location` label of the request metrics.
     location / {
+        set $mz_metrics_location app;
         root /usr/share/nginx/html;
         index index.html;
         try_files $uri $uri/ /index.html;
@@ -21,6 +38,7 @@ ${MZ_NGINX_LISTENER_CONFIG}
     }
 
     location /api {
+        set $mz_metrics_location api;
         client_max_body_size 100M;
         proxy_connect_timeout 600s;
         proxy_send_timeout 600s;
@@ -52,6 +70,7 @@ ${MZ_NGINX_LISTENER_CONFIG}
     # /api/mcp follow the resource_metadata URL from the 401 challenge, which
     # environmentd publishes on this host, so it must reach environmentd too.
     location /.well-known/oauth-protected-resource {
+        set $mz_metrics_location oauth_metadata;
         resolver ${NGINX_LOCAL_RESOLVERS} valid=10s;
         set $backend ${MZ_ENDPOINT};
         proxy_pass $backend;
@@ -64,6 +83,7 @@ ${MZ_NGINX_LISTENER_CONFIG}
 
     # Cache policy for static assets
     location ~* \.(js|css|png|jpg|jpeg|gif|svg|woff|woff2)$ {
+        set $mz_metrics_location static;
         root /usr/share/nginx/html;
         try_files $uri =404;
         expires 1y;
@@ -80,4 +100,21 @@ ${MZ_NGINX_LISTENER_CONFIG}
     gzip_buffers 16 8k;
 
     error_page 404 /404.html;
+}
+
+# Prometheus metrics, on a plain HTTP listener of their own so that they never
+# share the console's port or its TLS settings.
+server {
+${MZ_NGINX_METRICS_LISTENER_CONFIG}
+    server_name _;
+    # Scrapes are neither logged nor counted as requests.
+    access_log off;
+
+    location = /metrics {
+        js_content mz_metrics.render;
+    }
+
+    location / {
+        return 404;
+    }
 }

@@ -10,8 +10,7 @@
 use std::fmt::Write;
 use std::str::FromStr;
 
-use mysql_common::value::convert::from_value_opt;
-use mysql_common::{Row as MySqlRow, Value};
+use mysql_async::{Row as MySqlRow, Value, from_value_opt};
 
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;

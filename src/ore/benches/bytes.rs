@@ -11,7 +11,7 @@ use mz_alloc_default as _;
 use std::io::{Read, Seek, SeekFrom};
 
 use bytes::Bytes;
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use mz_bench_util::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 

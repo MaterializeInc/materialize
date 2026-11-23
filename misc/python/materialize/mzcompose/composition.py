@@ -150,6 +150,7 @@ class Composition:
         self._tls = threading.local()
         self.sources_and_sinks_ignored_from_validation = set()
         self.is_sanity_restart_mz = sanity_restart_mz
+        self.sanity_restart_max_retries = 60
         self.current_test_case_name_override: str | None = None
         self.host_network = host_network
         self.resolve_image_specs = resolve_image_specs
@@ -1270,12 +1271,20 @@ class Composition:
             exclusion_clause = f"name NOT IN ({excluded_items})"
 
         # starting sources are currently expected if no new data is produced, see database-issues#6605
+        # A source export with an empty write frontier is sealed, for example after a definite
+        # error ended its ingestion. A restart leaves it out of the dataflow, so its last status
+        # stays in place.
         results = self.sql_query(f"""
             SELECT name, status, error, details
             FROM mz_internal.mz_source_statuses
             WHERE NOT(
                 status IN ('running', 'created', 'paused') OR
                 (type = 'progress' AND status = 'created')
+            )
+            AND id NOT IN (
+                SELECT object_id
+                FROM mz_internal.mz_frontiers
+                WHERE write_frontier IS NULL
             )
             AND {exclusion_clause}
             """)
@@ -1388,15 +1397,14 @@ class Composition:
 
             self.sql("SELECT 1")
 
-            NUM_RETRIES = 60
-            for i in range(NUM_RETRIES + 1):
+            num_retries = self.sanity_restart_max_retries
+            for i in range(num_retries + 1):
                 error = self.validate_sources_sinks_clusters()
                 if not error:
                     break
-                if i == NUM_RETRIES:
+                if i == num_retries:
                     raise ValueError(error)
-                # Sources and cluster replicas need a few seconds to start up
-                print(f"Retrying ({i + 1}/{NUM_RETRIES})...")
+                print(f"Retrying ({i + 1}/{num_retries})...")
                 time.sleep(1)
         else:
             ui.header(

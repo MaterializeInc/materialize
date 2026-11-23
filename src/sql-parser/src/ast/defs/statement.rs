@@ -65,6 +65,7 @@ pub enum Statement<T: AstInfo> {
     CreateClusterReplica(CreateClusterReplicaStatement<T>),
     CreateSecret(CreateSecretStatement<T>),
     CreateNetworkPolicy(CreateNetworkPolicyStatement<T>),
+    CreateQueryPolicy(CreateQueryPolicyStatement<T>),
     AlterCluster(AlterClusterStatement<T>),
     AlterOwner(AlterOwnerStatement<T>),
     AlterObjectRename(AlterObjectRenameStatement),
@@ -80,6 +81,7 @@ pub enum Statement<T: AstInfo> {
     AlterSystemResetAll(AlterSystemResetAllStatement),
     AlterConnection(AlterConnectionStatement<T>),
     AlterNetworkPolicy(AlterNetworkPolicyStatement<T>),
+    AlterQueryPolicy(AlterQueryPolicyStatement<T>),
     AlterRole(AlterRoleStatement<T>),
     AlterTableAddColumn(AlterTableAddColumnStatement<T>),
     AlterMaterializedViewApplyReplacement(AlterMaterializedViewApplyReplacementStatement),
@@ -145,8 +147,10 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::CreateCluster(stmt) => f.write_node(stmt),
             Statement::CreateClusterReplica(stmt) => f.write_node(stmt),
             Statement::CreateNetworkPolicy(stmt) => f.write_node(stmt),
+            Statement::CreateQueryPolicy(stmt) => f.write_node(stmt),
             Statement::AlterCluster(stmt) => f.write_node(stmt),
             Statement::AlterNetworkPolicy(stmt) => f.write_node(stmt),
+            Statement::AlterQueryPolicy(stmt) => f.write_node(stmt),
             Statement::AlterOwner(stmt) => f.write_node(stmt),
             Statement::AlterObjectRename(stmt) => f.write_node(stmt),
             Statement::AlterRetainHistory(stmt) => f.write_node(stmt),
@@ -202,6 +206,89 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
 impl_display_t!(Statement);
 
 impl StatementKind {
+    /// Whether this statement explains a query or catalog object.
+    pub fn is_explain(&self) -> bool {
+        match self {
+            Self::ExplainPlan
+            | Self::ExplainPushdown
+            | Self::ExplainTimestamp
+            | Self::ExplainSinkSchema
+            | Self::ExplainAnalyzeObject
+            | Self::ExplainAnalyzeCluster => true,
+            Self::Select
+            | Self::Insert
+            | Self::Copy
+            | Self::Update
+            | Self::Delete
+            | Self::CreateConnection
+            | Self::CreateDatabase
+            | Self::CreateSchema
+            | Self::CreateWebhookSource
+            | Self::CreateSource
+            | Self::CreateSubsource
+            | Self::CreateSink
+            | Self::CreateMetricSink
+            | Self::CreateView
+            | Self::CreateMaterializedView
+            | Self::CreateTable
+            | Self::CreateTableFromSource
+            | Self::CreateIndex
+            | Self::CreateType
+            | Self::CreateRole
+            | Self::CreateCluster
+            | Self::CreateClusterReplica
+            | Self::CreateSecret
+            | Self::CreateNetworkPolicy
+            | Self::CreateQueryPolicy
+            | Self::AlterCluster
+            | Self::AlterOwner
+            | Self::AlterObjectRename
+            | Self::AlterObjectSwap
+            | Self::AlterRetainHistory
+            | Self::AlterIndex
+            | Self::AlterSecret
+            | Self::AlterSetCluster
+            | Self::AlterSink
+            | Self::AlterSource
+            | Self::AlterSystemSet
+            | Self::AlterSystemReset
+            | Self::AlterSystemResetAll
+            | Self::AlterConnection
+            | Self::AlterNetworkPolicy
+            | Self::AlterQueryPolicy
+            | Self::AlterRole
+            | Self::AlterTableAddColumn
+            | Self::AlterMaterializedViewApplyReplacement
+            | Self::Discard
+            | Self::DropObjects
+            | Self::DropOwned
+            | Self::SetVariable
+            | Self::ResetVariable
+            | Self::Show
+            | Self::StartTransaction
+            | Self::SetTransaction
+            | Self::Commit
+            | Self::Rollback
+            | Self::Subscribe
+            | Self::Declare
+            | Self::Fetch
+            | Self::Close
+            | Self::Prepare
+            | Self::Execute
+            | Self::ExecuteUnitTest
+            | Self::Deallocate
+            | Self::Raise
+            | Self::GrantRole
+            | Self::RevokeRole
+            | Self::GrantPrivileges
+            | Self::RevokePrivileges
+            | Self::AlterDefaultPrivileges
+            | Self::ReassignOwned
+            | Self::ValidateConnection
+            | Self::Comment => false,
+        }
+    }
+
     /// Whether this kind of statement can carry secret values, i.e. `CREATE
     /// SECRET` or `ALTER SECRET`. Such secret material must never be persisted
     /// verbatim (e.g. in `mz_statement_execution_history`), not even in error
@@ -253,12 +340,14 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::CreateClusterReplica => "create_cluster_replica",
         StatementKind::CreateSecret => "create_secret",
         StatementKind::CreateNetworkPolicy => "create_network_policy",
+        StatementKind::CreateQueryPolicy => "create_query_policy",
         StatementKind::AlterCluster => "alter_cluster",
         StatementKind::AlterObjectRename => "alter_object_rename",
         StatementKind::AlterRetainHistory => "alter_retain_history",
         StatementKind::AlterObjectSwap => "alter_object_swap",
         StatementKind::AlterIndex => "alter_index",
         StatementKind::AlterNetworkPolicy => "alter_network_policy",
+        StatementKind::AlterQueryPolicy => "alter_query_policy",
         StatementKind::AlterRole => "alter_role",
         StatementKind::AlterSecret => "alter_secret",
         StatementKind::AlterSetCluster => "alter_set_cluster",
@@ -2269,6 +2358,109 @@ impl AstDisplay for NetworkPolicyRuleOptionName {
 
 impl_display_for_with_option!(NetworkPolicyRuleOption);
 
+/// A `CREATE QUERY POLICY` statement. Query policies have a flat namespace.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateQueryPolicyStatement<T: AstInfo> {
+    pub name: Ident,
+    pub options: Vec<QueryPolicyOption<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for CreateQueryPolicyStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("CREATE QUERY POLICY ");
+        f.write_node(&self.name);
+        f.write_str(" (");
+        f.write_node(&display::comma_separated(&self.options));
+        f.write_str(")");
+    }
+}
+impl_display_t!(CreateQueryPolicyStatement);
+
+/// An `ALTER QUERY POLICY ... SET` statement.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AlterQueryPolicyStatement<T: AstInfo> {
+    pub name: Ident,
+    pub options: Vec<QueryPolicyOption<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for AlterQueryPolicyStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("ALTER QUERY POLICY ");
+        f.write_node(&self.name);
+        f.write_str(" SET (");
+        f.write_node(&display::comma_separated(&self.options));
+        f.write_str(")");
+    }
+}
+impl_display_t!(AlterQueryPolicyStatement);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum QueryPolicyOption<T: AstInfo> {
+    Mode(Value),
+    Rules(Vec<QueryPolicyRuleDefinition<T>>),
+}
+
+impl<T: AstInfo> AstDisplay for QueryPolicyOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            Self::Mode(value) => {
+                f.write_str("MODE = ");
+                f.write_node(value);
+            }
+            Self::Rules(rules) => {
+                f.write_str("RULES (");
+                f.write_node(&display::comma_separated(rules));
+                f.write_str(")");
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct QueryPolicyRuleDefinition<T: AstInfo> {
+    pub name: Ident,
+    pub options: Vec<QueryPolicyRuleOption<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for QueryPolicyRuleDefinition<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        f.write_str(" (");
+        f.write_node(&display::comma_separated(&self.options));
+        f.write_str(")");
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct QueryPolicyRuleOption<T: AstInfo> {
+    pub name: QueryPolicyRuleOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum QueryPolicyRuleOptionName {
+    Action,
+    Metric,
+    Value,
+}
+
+impl AstDisplay for QueryPolicyRuleOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            Self::Action => "ACTION",
+            Self::Metric => "METRIC",
+            Self::Value => "VALUE",
+        });
+    }
+}
+
+impl WithOptionName for QueryPolicyRuleOptionName {
+    fn redact_value(&self) -> bool {
+        false
+    }
+}
+impl_display_for_with_option!(QueryPolicyRuleOption);
+
 /// A `CREATE SECRET` statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateSecretStatement<T: AstInfo> {
@@ -2364,6 +2556,8 @@ pub enum ClusterOptionName {
     Schedule,
     /// The `WORKLOAD CLASS` option.
     WorkloadClass,
+    /// The durable query-policy attachment.
+    QueryPolicy,
 }
 
 impl AstDisplay for ClusterOptionName {
@@ -2383,6 +2577,7 @@ impl AstDisplay for ClusterOptionName {
             ClusterOptionName::Size => f.write_str("SIZE"),
             ClusterOptionName::Schedule => f.write_str("SCHEDULE"),
             ClusterOptionName::WorkloadClass => f.write_str("WORKLOAD CLASS"),
+            ClusterOptionName::QueryPolicy => f.write_str("QUERY POLICY"),
         }
     }
 }
@@ -2406,7 +2601,8 @@ impl WithOptionName for ClusterOptionName {
             | ClusterOptionName::ReplicationFactor
             | ClusterOptionName::Size
             | ClusterOptionName::Schedule
-            | ClusterOptionName::WorkloadClass => false,
+            | ClusterOptionName::WorkloadClass
+            | ClusterOptionName::QueryPolicy => false,
         }
     }
 }
@@ -3637,6 +3833,7 @@ pub enum ShowObjectType<T: AstInfo> {
         role: Option<T::RoleName>,
     },
     NetworkPolicy,
+    QueryPolicy,
 }
 /// `SHOW <object>S`
 ///
@@ -3680,6 +3877,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             ShowObjectType::DefaultPrivileges { .. } => "DEFAULT PRIVILEGES",
             ShowObjectType::RoleMembership { .. } => "ROLE MEMBERSHIP",
             ShowObjectType::NetworkPolicy => "NETWORK POLICIES",
+            ShowObjectType::QueryPolicy => "QUERY POLICIES",
         });
 
         if let ShowObjectType::Index { on_object, .. } = &self.object_type {
@@ -3731,9 +3929,11 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
         if let ShowObjectType::Privileges { object_type, role } = &self.object_type {
             if let Some(object_type) = object_type {
                 f.write_str(" ON ");
-                f.write_node(object_type);
-                if let SystemObjectType::Object(_) = object_type {
-                    f.write_str("S");
+                match object_type {
+                    SystemObjectType::System => f.write_str("SYSTEM"),
+                    SystemObjectType::Object(object_type) => {
+                        write_grant_object_type_plural(f, object_type);
+                    }
                 }
             }
             if let Some(role) = role {
@@ -3745,8 +3945,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
         if let ShowObjectType::DefaultPrivileges { object_type, role } = &self.object_type {
             if let Some(object_type) = object_type {
                 f.write_str(" ON ");
-                f.write_node(object_type);
-                f.write_str("S");
+                write_grant_object_type_plural(f, object_type);
             }
             if let Some(role) = role {
                 f.write_str(" FOR ");
@@ -4483,6 +4682,7 @@ pub enum ObjectType {
     Func,
     Subsource,
     NetworkPolicy,
+    QueryPolicy,
 }
 
 impl ObjectType {
@@ -4505,7 +4705,8 @@ impl ObjectType {
             | ObjectType::Cluster
             | ObjectType::ClusterReplica
             | ObjectType::Role
-            | ObjectType::NetworkPolicy => false,
+            | ObjectType::NetworkPolicy
+            | ObjectType::QueryPolicy => false,
         }
     }
 }
@@ -4531,6 +4732,7 @@ impl AstDisplay for ObjectType {
             ObjectType::Func => "FUNCTION",
             ObjectType::Subsource => "SUBSOURCE",
             ObjectType::NetworkPolicy => "NETWORK POLICY",
+            ObjectType::QueryPolicy => "QUERY POLICY",
         })
     }
 }
@@ -5643,6 +5845,7 @@ pub enum Privilege {
     CREATEDB,
     CREATECLUSTER,
     CREATENETWORKPOLICY,
+    CREATEQUERYPOLICY,
 }
 
 impl AstDisplay for Privilege {
@@ -5658,6 +5861,7 @@ impl AstDisplay for Privilege {
             Privilege::CREATEDB => "CREATEDB",
             Privilege::CREATECLUSTER => "CREATECLUSTER",
             Privilege::CREATENETWORKPOLICY => "CREATENETWORKPOLICY",
+            Privilege::CREATEQUERYPOLICY => "CREATEQUERYPOLICY",
         });
     }
 }
@@ -5728,6 +5932,7 @@ fn write_grant_object_type_plural<W: fmt::Write>(
 ) {
     match object_type {
         ObjectType::NetworkPolicy => f.write_str("POLICIES"),
+        ObjectType::QueryPolicy => f.write_str("QUERY POLICIES"),
         other => {
             f.write_node(other);
             f.write_str("S");
@@ -6048,6 +6253,7 @@ pub enum CommentObjectType<T: AstInfo> {
     Cluster { name: T::ClusterName },
     ClusterReplica { name: QualifiedReplica },
     NetworkPolicy { name: T::NetworkPolicyName },
+    QueryPolicy { name: Ident },
 }
 
 impl<T: AstInfo> AstDisplay for CommentObjectType<T> {
@@ -6121,6 +6327,10 @@ impl<T: AstInfo> AstDisplay for CommentObjectType<T> {
             }
             NetworkPolicy { name } => {
                 f.write_str("NETWORK POLICY ");
+                f.write_node(name);
+            }
+            QueryPolicy { name } => {
+                f.write_str("QUERY POLICY ");
                 f.write_node(name);
             }
         }

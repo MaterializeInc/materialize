@@ -106,7 +106,7 @@ export function buildWhereConditions(expressions: Array<undefined | string>) {
 }
 
 /**
- * Adds a limit clause to the end of a query.
+ * Sets a query's limit clause.
  * Materialize does not support parameters in the limit clause currently, so we have to
  * hard code the limit value as a work around.
  * https://github.com/MaterializeInc/materialize/issues/19867
@@ -115,7 +115,7 @@ export function rawLimit<DB, TB extends keyof DB, O>(
   query: SelectQueryBuilder<DB, TB, O>,
   value: number,
 ) {
-  return query.modifyEnd(sql`limit ${sql.raw(value.toString())}`);
+  return query.limit(sql.lit(value));
 }
 
 export function createNamespace(

@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { hcl } from "d3";
+import { hcl, ScaleTime } from "d3";
 
 import { clamp } from "~/util";
 
@@ -110,4 +110,50 @@ function decimalPlaces(step: number): number {
     );
   }
   return String(step).split(".")[1]?.length ?? 0;
+}
+
+/**
+ * The room one time label takes, with a gap: "Oct. 27, 2026" in the 12px
+ * monospace the axis uses is about 94px wide.
+ */
+export const X_TICK_SPACING_PX = 110;
+
+/** Half a label's width: how far a tick must sit from an edge to show whole. */
+export const X_TICK_LABEL_HALF_WIDTH_PX = 48;
+
+/**
+ * Time-axis ticks on round clock times, spaced at least `X_TICK_SPACING_PX`
+ * apart, and none so near an edge that its centered label would be clipped.
+ */
+export function timeAxisTicks(scale: ScaleTime<number, number>): Date[] {
+  const [left, right] = scale.range();
+  // NOTE: `ticks(count)` treats the count as a hint and can return more, so
+  // ask for fewer until the gaps fit.
+  for (
+    let count = Math.floor((right - left) / X_TICK_SPACING_PX);
+    count >= 1;
+    count--
+  ) {
+    const ticks = scale
+      .ticks(count)
+      // Below a few minutes the scale ticks every few seconds, and labels
+      // that stop at the minute would repeat.
+      .filter(
+        (tick) => tick.getSeconds() === 0 && tick.getMilliseconds() === 0,
+      );
+    const fits = ticks.every(
+      (tick, i) =>
+        i === 0 || scale(tick) - scale(ticks[i - 1]) >= X_TICK_SPACING_PX,
+    );
+    if (fits) {
+      return ticks.filter((tick) => {
+        const x = scale(tick);
+        return (
+          x - left >= X_TICK_LABEL_HALF_WIDTH_PX &&
+          right - x >= X_TICK_LABEL_HALF_WIDTH_PX
+        );
+      });
+    }
+  }
+  return [];
 }

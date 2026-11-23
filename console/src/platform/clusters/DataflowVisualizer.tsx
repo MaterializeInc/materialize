@@ -55,9 +55,9 @@ const DotViz = ({ dot, onClickedNode }: DotVizProps) => {
         gv.renderDot(dot, function () {
           gv.resetZoom();
 
-          const regions = d3.selectAll(".region");
+          const regions = d3.selectAll<Element, unknown>(".region");
           regions.on("dblclick", function (event) {
-            const clickedId = event.currentTarget.getAttribute("id")!;
+            const clickedId = this.getAttribute("id")!;
             if (clickedId) {
               event.stopPropagation();
               onClickedNode(clickedId);

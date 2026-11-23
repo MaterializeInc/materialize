@@ -250,24 +250,24 @@
 
 {% macro materialize__get_refresh_interval_sql(relation, refresh_interval_dict) -%}
   {%- set refresh_interval = adapter.parse_refresh_interval(refresh_interval_dict) -%}
-    {% if refresh_interval.at -%}
-      refresh at '{{ refresh_interval.at }}'
-    {%- endif %}
-    {% if refresh_interval.at_creation -%}
-      refresh at creation
-    {%- endif %}
-    {% if refresh_interval.every -%}
-      {% if refresh_interval.at or refresh_interval.at_creation -%}
-        ,
-      {%- endif %}
-      refresh every '{{ refresh_interval.every }}'
-      {% if refresh_interval.aligned_to -%}
-        aligned to '{{ refresh_interval.aligned_to }}'
-      {%- endif %}
-    {%- endif %}
-    {% if refresh_interval.on_commit -%}
-      refresh on commit
-    {%- endif %}
+  {%- set clauses = [] -%}
+  {%- if refresh_interval.at -%}
+    {%- do clauses.append("refresh at '" ~ refresh_interval.at ~ "'") -%}
+  {%- endif -%}
+  {%- if refresh_interval.at_creation -%}
+    {%- do clauses.append("refresh at creation") -%}
+  {%- endif -%}
+  {%- if refresh_interval.every -%}
+    {%- set every = "refresh every '" ~ refresh_interval.every ~ "'" -%}
+    {%- if refresh_interval.aligned_to -%}
+      {%- set every = every ~ " aligned to '" ~ refresh_interval.aligned_to ~ "'" -%}
+    {%- endif -%}
+    {%- do clauses.append(every) -%}
+  {%- endif -%}
+  {%- if refresh_interval.on_commit -%}
+    {%- do clauses.append("refresh on commit") -%}
+  {%- endif -%}
+  {{ clauses | join(", ") }}
 {%- endmacro %}
 
 {% macro materialize__alter_column_comment_single(relation, column_name, quote, comment) %}

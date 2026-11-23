@@ -38,7 +38,8 @@ class SshDeployment(K8sDeployment):
         ports = [V1ContainerPort(container_port=22, name="ssh")]
         container = V1Container(
             name="ssh-bastion-host",
-            image="panubo/sshd:1.5.0",
+            # renovate: datasource=docker depName=panubo/sshd versioning=docker
+            image="panubo/sshd:1.5.0@sha256:800caeb3dab8e0acf3c47c5cc8af6e8a3d378b40078b323219eada05e38c277d",
             env=env,
             ports=ports,
         )

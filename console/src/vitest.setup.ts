@@ -108,7 +108,8 @@ beforeAll(async () => {
 
   Sentry.init({});
 
-  server.listen({ onUnhandledRequest: "error" });
+  server.configure({ onUnhandledFrame: "error" });
+  server.enable();
 });
 
 beforeEach(async () => {
@@ -131,10 +132,10 @@ afterEach(() => {
 });
 
 // Clean up after the tests are finished.
-afterAll(() => {
+afterAll(async () => {
   server.events.removeAllListeners();
 
-  server.close();
+  await server.disable();
 });
 
 // Jsdom doesn't provide a ResizeObserver. Provide a polyfill.

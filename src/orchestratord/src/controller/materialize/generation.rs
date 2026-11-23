@@ -85,6 +85,17 @@ static V26_42_0: LazyLock<Version> = LazyLock::new(|| Version {
     build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
 });
 
+/// Version at which `environmentd` learned
+/// `--orchestrator-kubernetes-enable-user-namespaces`. Older images reject the
+/// unknown argument and fail to start.
+static V26_50_0: LazyLock<Version> = LazyLock::new(|| Version {
+    major: 26,
+    minor: 50,
+    patch: 0,
+    pre: Prerelease::new("dev.0").expect("dev.0 is valid prerelease"),
+    build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
+});
+
 static V26_1_0: LazyLock<Version> = LazyLock::new(|| Version {
     major: 26,
     minor: 1,
@@ -987,6 +998,11 @@ fn create_environmentd_statefulset_object(
     if config.enable_prometheus_scrape_annotations {
         args.push("--orchestrator-kubernetes-enable-prometheus-scrape-annotations".into());
     }
+    // Older environmentd images reject the unknown argument, so their clusterd
+    // pods keep running in the host user namespace.
+    if config.enable_user_namespaces && mz.meets_minimum_version(&V26_50_0) {
+        args.push("--orchestrator-kubernetes-enable-user-namespaces".into());
+    }
 
     // the --disable-license-key-checks environmentd flag only existed
     // between these versions
@@ -1049,7 +1065,7 @@ fn create_environmentd_statefulset_object(
         .expect("external SQL listener is always configured")
         .addr
         .port();
-    let probe = Probe {
+    let base_probe = Probe {
         initial_delay_seconds: Some(1),
         failure_threshold: Some(12),
         tcp_socket: Some(TCPSocketAction {
@@ -1058,6 +1074,27 @@ fn create_environmentd_statefulset_object(
         }),
         ..Default::default()
     };
+    let readiness_probe = environmentd_probe(
+        base_probe.clone(),
+        config.environmentd_default_readiness_probe.as_ref(),
+        mz.spec.environmentd_readiness_probe.as_ref(),
+    );
+    let liveness_probe = environmentd_probe(
+        base_probe.clone(),
+        config.environmentd_default_liveness_probe.as_ref(),
+        mz.spec.environmentd_liveness_probe.as_ref(),
+    );
+    // Unlike readiness and liveness, environmentd has no startup probe unless
+    // one is configured.
+    let startup_probe = (config.environmentd_default_startup_probe.is_some()
+        || mz.spec.environmentd_startup_probe.is_some())
+    .then(|| {
+        environmentd_probe(
+            base_probe,
+            config.environmentd_default_startup_probe.as_ref(),
+            mz.spec.environmentd_startup_probe.as_ref(),
+        )
+    });
 
     let security_context = if config.enable_security_context {
         // Since we want to adhere to the most restrictive security context, all
@@ -1174,8 +1211,9 @@ fn create_environmentd_statefulset_object(
         args: Some(args),
         env: Some(env),
         volume_mounts: Some(volume_mounts),
-        liveness_probe: Some(probe.clone()),
-        readiness_probe: Some(probe),
+        startup_probe,
+        liveness_probe: Some(liveness_probe),
+        readiness_probe: Some(readiness_probe),
         resources: mz
             .spec
             .environmentd_resource_requirements
@@ -1299,6 +1337,10 @@ fn create_environmentd_statefulset_object(
                 run_as_group: Some(999),
                 ..Default::default()
             }),
+            // `None` rather than `Some(true)` when disabled, so the pod spec
+            // (and therefore the generation's resource hash) is unchanged from
+            // before user namespace support.
+            host_users: config.enable_user_namespaces.then_some(false),
             tolerations,
             // This (apparently) has the side effect of automatically starting a new pod
             // when the previous pod is currently terminating. This side steps the statefulset fencing
@@ -1352,6 +1394,84 @@ fn create_environmentd_statefulset_object(
         },
         spec: Some(statefulset_spec),
         status: None,
+    }
+}
+
+/// Rejects a probe that sets more than one handler (`exec`, `grpc`, `httpGet`,
+/// `tcpSocket`), which Kubernetes would reject when the pod is created.
+///
+/// `environmentd_probe` only produces a valid probe if every layer passes
+/// this check.
+pub fn validate_probe_handlers(probe: &Probe) -> Result<(), anyhow::Error> {
+    let handlers: Vec<_> = [
+        ("exec", probe.exec.is_some()),
+        ("grpc", probe.grpc.is_some()),
+        ("httpGet", probe.http_get.is_some()),
+        ("tcpSocket", probe.tcp_socket.is_some()),
+    ]
+    .into_iter()
+    .filter_map(|(name, set)| set.then_some(name))
+    .collect();
+    if handlers.len() > 1 {
+        anyhow::bail!(
+            "probe sets more than one handler ({}), but at most one is allowed",
+            handlers.join(", ")
+        );
+    }
+    Ok(())
+}
+
+/// Layers the operator-wide default and then the per-environment override onto
+/// `base`, so each layer only has to set the fields it changes.
+///
+/// Fields set in a later layer win. The handler (`exec`, `grpc`, `httpGet`,
+/// `tcpSocket`) is replaced as a unit when a later layer sets any of them,
+/// because Kubernetes rejects a probe with more than one handler.
+fn environmentd_probe(
+    base: Probe,
+    operator_default: Option<&Probe>,
+    environment_override: Option<&Probe>,
+) -> Probe {
+    [operator_default, environment_override]
+        .into_iter()
+        .flatten()
+        .fold(base, overlay_probe)
+}
+
+fn overlay_probe(base: Probe, overlay: &Probe) -> Probe {
+    // Exhaustive so that a new `Probe` field fails to compile here instead of
+    // being silently dropped.
+    let Probe {
+        exec,
+        failure_threshold,
+        grpc,
+        http_get,
+        initial_delay_seconds,
+        period_seconds,
+        success_threshold,
+        tcp_socket,
+        termination_grace_period_seconds,
+        timeout_seconds,
+    } = overlay.clone();
+    let has_handler =
+        exec.is_some() || grpc.is_some() || http_get.is_some() || tcp_socket.is_some();
+    let (exec, grpc, http_get, tcp_socket) = if has_handler {
+        (exec, grpc, http_get, tcp_socket)
+    } else {
+        (base.exec, base.grpc, base.http_get, base.tcp_socket)
+    };
+    Probe {
+        exec,
+        failure_threshold: failure_threshold.or(base.failure_threshold),
+        grpc,
+        http_get,
+        initial_delay_seconds: initial_delay_seconds.or(base.initial_delay_seconds),
+        period_seconds: period_seconds.or(base.period_seconds),
+        success_threshold: success_threshold.or(base.success_threshold),
+        tcp_socket,
+        termination_grace_period_seconds: termination_grace_period_seconds
+            .or(base.termination_grace_period_seconds),
+        timeout_seconds: timeout_seconds.or(base.timeout_seconds),
     }
 }
 
@@ -1586,4 +1706,89 @@ enum BecomeLeaderResult {
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 struct SkipCatchupError {
     message: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use k8s_openapi::api::core::v1::{HTTPGetAction, Probe, TCPSocketAction};
+    use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
+
+    use super::{environmentd_probe, validate_probe_handlers};
+
+    fn base() -> Probe {
+        Probe {
+            initial_delay_seconds: Some(1),
+            failure_threshold: Some(12),
+            tcp_socket: Some(TCPSocketAction {
+                host: None,
+                port: IntOrString::Int(6877),
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[mz_ore::test]
+    fn environmentd_probe_without_overrides_is_base() {
+        assert_eq!(environmentd_probe(base(), None, None), base());
+    }
+
+    #[mz_ore::test]
+    fn environmentd_probe_layers_fields() {
+        let operator_default = Probe {
+            failure_threshold: Some(30),
+            period_seconds: Some(20),
+            ..Default::default()
+        };
+        let environment_override = Probe {
+            period_seconds: Some(5),
+            ..Default::default()
+        };
+        assert_eq!(
+            environmentd_probe(base(), Some(&operator_default), Some(&environment_override)),
+            Probe {
+                failure_threshold: Some(30),
+                period_seconds: Some(5),
+                ..base()
+            }
+        );
+    }
+
+    #[mz_ore::test]
+    fn environmentd_probe_replaces_handler_as_unit() {
+        let http_get = HTTPGetAction {
+            path: Some("/api/readyz".to_owned()),
+            port: IntOrString::Int(6878),
+            ..Default::default()
+        };
+        let environment_override = Probe {
+            http_get: Some(http_get.clone()),
+            ..Default::default()
+        };
+        assert_eq!(
+            environmentd_probe(base(), None, Some(&environment_override)),
+            Probe {
+                tcp_socket: None,
+                http_get: Some(http_get),
+                ..base()
+            }
+        );
+    }
+
+    #[mz_ore::test]
+    fn validate_probe_handlers_rejects_multiple_handlers() {
+        assert!(validate_probe_handlers(&Probe::default()).is_ok());
+        assert!(validate_probe_handlers(&base()).is_ok());
+        let both = Probe {
+            http_get: Some(HTTPGetAction {
+                port: IntOrString::Int(6878),
+                ..Default::default()
+            }),
+            ..base()
+        };
+        let err = validate_probe_handlers(&both).unwrap_err();
+        assert!(
+            err.to_string().contains("httpGet, tcpSocket"),
+            "unexpected error: {err}"
+        );
+    }
 }

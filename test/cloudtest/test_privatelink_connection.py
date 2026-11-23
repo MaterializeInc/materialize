@@ -229,10 +229,10 @@ def test_background_drop_privatelink_connection(mz: MaterializeApplication) -> N
     aws_connection_id = mz.environmentd.sql_query(
         "SELECT id FROM mz_connections WHERE name = 'privatelinkconn'"
     )[0][0]
-    mz.environmentd.sql("SET FAILPOINTS = 'drop_vpc_endpoint=pause'")
+    mz.environmentd.sql("SET unsafe_failpoints = 'drop_vpc_endpoint=pause'")
     mz.environmentd.sql("DROP CONNECTION privatelinkconn CASCADE")
     exists(resource=f"vpcendpoint/connection-{aws_connection_id}")
-    mz.environmentd.sql("SET FAILPOINTS = 'drop_vpc_endpoint=off'")
+    mz.environmentd.sql("SET unsafe_failpoints = 'drop_vpc_endpoint=off'")
     not_exists(resource=f"vpcendpoint/connection-{aws_connection_id}")
 
 
@@ -255,10 +255,10 @@ def test_retry_drop_privatelink_connection(mz: MaterializeApplication) -> None:
     aws_connection_id = mz.environmentd.sql_query(
         "SELECT id FROM mz_connections WHERE name = 'privatelinkconn'"
     )[0][0]
-    mz.environmentd.sql("SET FAILPOINTS = 'drop_vpc_endpoint=return(failed)'")
+    mz.environmentd.sql("SET unsafe_failpoints = 'drop_vpc_endpoint=return(failed)'")
     mz.environmentd.sql("DROP CONNECTION privatelinkconn CASCADE")
     exists(resource=f"vpcendpoint/connection-{aws_connection_id}")
-    mz.environmentd.sql("SET FAILPOINTS = 'drop_vpc_endpoint=off'")
+    mz.environmentd.sql("SET unsafe_failpoints = 'drop_vpc_endpoint=off'")
     retry(
         f=lambda: not_exists(resource=f"vpcendpoint/connection-{aws_connection_id}"),
         max_attempts=10,

@@ -348,7 +348,7 @@ object_name  text  Fully␠qualified␠object␠name␠(database.schema.name).
 cluster  text  Cluster␠hosting␠the␠object's␠index␠or␠compute.␠Reads␠still␠work␠from␠any␠cluster␠you␠can␠use,␠but␠only␠reads␠on␠this␠cluster␠benefit␠from␠the␠index.␠Shown␠only␠when␠your␠role␠has␠USAGE␠on␠it␠(otherwise␠null).
 description  text  Index␠comment␠if␠available,␠otherwise␠object␠comment.␠Used␠as␠data␠product␠description.
 schema  jsonb  JSON␠Schema␠describing␠the␠object's␠columns␠and␠types.
-hydration  jsonb  Readiness␠summary␠as␠a␠JSON␠object␠with␠`hydrated`␠(bool),␠`replica_count`␠(int),␠and␠`hydrated_replica_count`␠(int).␠`hydrated`␠is␠true␠only␠when␠the␠cluster␠has␠at␠least␠one␠replica␠and␠the␠dataflow␠is␠hydrated␠on␠every␠replica.␠Reads␠against␠a␠non-hydrated␠data␠product␠block␠until␠the␠dataflow␠catches␠up␠(they␠never␠return␠partial␠data).␠Check␠this␠before␠reading:␠if␠`hydrated`␠is␠false␠and␠`replica_count␠>␠0`,␠wait␠and␠retry;␠if␠`replica_count`␠is␠0,␠the␠cluster␠has␠no␠replicas␠and␠that␠needs␠operator␠action,␠not␠a␠retry.
+hydration  jsonb  Readiness␠summary␠as␠a␠JSON␠object␠with␠`hydrated`␠(bool),␠`replica_count`␠(int),␠and␠`hydrated_replica_count`␠(int).␠`hydrated`␠is␠true␠only␠when␠the␠cluster␠has␠at␠least␠one␠replica␠and␠the␠dataflow␠is␠hydrated␠on␠every␠replica.␠Reads␠against␠a␠non-hydrated␠data␠product␠block␠until␠the␠dataflow␠catches␠up␠(they␠never␠return␠partial␠data).␠Check␠this␠before␠reading:␠if␠`hydrated`␠is␠false␠and␠`replica_count␠>␠0`,␠wait␠and␠retry;␠if␠`replica_count`␠is␠0,␠the␠cluster␠has␠no␠replicas␠and␠that␠needs␠operator␠action,␠not␠a␠retry.␠A␠null␠`cluster`␠means␠your␠role␠lacks␠USAGE␠on␠that␠cluster,␠and␠only␠materialized␠views␠appear␠that␠way,␠since␠a␠view␠is␠listed␠only␠with␠an␠index␠on␠a␠cluster␠you␠can␠use.␠A␠read␠of␠such␠a␠row␠runs␠on␠another␠cluster␠and␠returns␠the␠materialized␠view's␠stored␠results,␠so␠`hydration`␠then␠reports␠the␠materialized␠view's␠own␠cluster,␠the␠one␠that␠keeps␠those␠results␠current.
 
 query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_dependencies' ORDER BY position
@@ -812,6 +812,8 @@ mz_aggregates
 mz_aws_connections
 mz_aws_privatelink_connection_status_history
 mz_aws_privatelink_connection_statuses
+mz_builtin_columns
+mz_builtin_index_columns
 mz_builtin_indexes
 mz_builtin_log_indexes
 mz_builtin_materialized_views
@@ -886,6 +888,9 @@ mz_pending_cluster_replicas
 mz_postgres_source_tables
 mz_postgres_sources
 mz_prepared_statement_history
+mz_query_policies
+mz_query_policy_attachments
+mz_query_policy_rules
 mz_recent_activity_log
 mz_recent_activity_log_redacted
 mz_recent_activity_log_thinned
@@ -918,6 +923,7 @@ mz_show_my_schema_privileges
 mz_show_my_system_privileges
 mz_show_network_policies
 mz_show_object_privileges
+mz_show_query_policies
 mz_show_role_members
 mz_show_roles
 mz_show_schema_privileges

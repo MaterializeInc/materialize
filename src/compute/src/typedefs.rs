@@ -17,10 +17,13 @@ use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
 use differential_dataflow::trace::wrappers::enter::TraceEnter;
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
-use mz_repr::Diff;
-use mz_timely_util::columnation::{ColInternalMerger, ColumnationStack};
-
-use mz_row_spine::RowValBuilder;
+use mz_repr::{Diff, Row};
+use mz_row_spine::{RowRowBuilder, RowRowColPagedBuilder, RowValBuilder};
+use mz_timely_util::columnar::batcher::{Chunker, ColumnChunker};
+use mz_timely_util::columnar::chunk::{AccountedChunkBatcher, ComputeSpill, UnchunkBuilder};
+use mz_timely_util::columnar::{Col2ValBatcher, Col2ValColBatcher};
+use mz_timely_util::columnation::{ColInternalMerger, ColumnationChunker, ColumnationStack};
+use mz_timely_util::operator::ConsolidatingBatcher;
 
 use crate::render::errors::DataflowErrorSer;
 use crate::typedefs::spines::{ColKeyBatcher, ColKeyBuilder, ColValBatcher, ColValBuilder};
@@ -43,13 +46,13 @@ pub(crate) mod spines {
 
     /// A spine for generic keys and values.
     pub type ColValSpine<K, V, T, R> = Spine<ArcBatch<OrdValBatch<MzStack<((K, V), T, R)>>>>;
-    pub type ColValBatcher<K, V, T, R> = KeyValBatcher<K, V, T, R>;
+    pub type ColValBatcher<K, V, T, R> = KeyValBatcher<K, V, T, R, ColValBuilder<K, V, T, R>>;
     pub type ColValBuilder<K, V, T, R> =
         ArcBuilder<OrdValBuilder<MzStack<((K, V), T, R)>, ColumnationStack<((K, V), T, R)>>>;
 
     /// A spine for generic keys
     pub type ColKeySpine<K, T, R> = Spine<ArcBatch<OrdKeyBatch<MzStack<((K, ()), T, R)>>>>;
-    pub type ColKeyBatcher<K, T, R> = KeyBatcher<K, T, R>;
+    pub type ColKeyBatcher<K, T, R> = KeyBatcher<K, T, R, ColKeyBuilder<K, T, R>>;
     pub type ColKeyBuilder<K, T, R> =
         ArcBuilder<OrdKeyBuilder<MzStack<((K, ()), T, R)>, ColumnationStack<((K, ()), T, R)>>>;
 
@@ -116,9 +119,43 @@ pub type RowErrSpine<T, R> = RowValSpine<DataflowErrorSer, T, R>;
 pub type RowErrBatcher<T, R> = RowValBatcher<DataflowErrorSer, T, R>;
 pub type RowErrBuilder<T, R> = RowValBuilder<DataflowErrorSer, T, R>;
 
-// Batchers for consolidation
-pub type KeyBatcher<K, T, D> = KeyValBatcher<K, (), T, D>;
-pub type KeyValBatcher<K, V, T, D> = MergeBatcher<ColInternalMerger<(K, V), T, D>>;
+// Batchers that chunk `Vec` input into columnation chains. `Se`, a spine builder, seals an
+// extracted chain into a batch. Consolidation that wants the chain itself uses
+// `mz_timely_util::operator::ConsolidatingBatcher`.
+pub type KeyBatcher<K, T, D, Se> = KeyValBatcher<K, (), T, D, Se>;
+pub type KeyValBatcher<K, V, T, D, Se> =
+    MergeBatcher<ColumnationChunker<((K, V), T, D)>, ColInternalMerger<(K, V), T, D>, Se>;
+
+// Row-to-row arrangement batchers, one per `ArrangementBatcher` flavor. `C` is the input
+// container the columnation chunker melds.
+pub type RowRowChunkedBatcher<T> = AccountedChunkBatcher<
+    (Row, Row),
+    T,
+    Diff,
+    ComputeSpill,
+    UnchunkBuilder<RowRowColPagedBuilder<T, Diff>, (Row, Row), T, Diff, ComputeSpill>,
+>;
+pub type RowRowColumnarBatcher<T> = Col2ValColBatcher<
+    Row,
+    Row,
+    T,
+    Diff,
+    ColumnChunker<((Row, Row), T, Diff)>,
+    RowRowColPagedBuilder<T, Diff>,
+>;
+pub type RowRowColumnationBatcher<C, T> =
+    Col2ValBatcher<Row, Row, T, Diff, Chunker<C>, RowRowBuilder<T, Diff>>;
+
+/// The batcher a consolidation wants: chunks `Vec` input, hands the chain back unsealed.
+pub type ConsolidateKeyValBatcher<K, V, T, D> =
+    ConsolidatingBatcher<ColumnationChunker<((K, V), T, D)>, ColInternalMerger<(K, V), T, D>>;
+/// [`ConsolidateKeyValBatcher`] with unit values.
+pub type ConsolidateBatcher<K, T, D> = ConsolidateKeyValBatcher<K, (), T, D>;
+/// [`ConsolidateKeyValBatcher`] over `Column` input rather than `Vec` input.
+pub type ConsolidateColumnBatcher<K, V, T, D> = ConsolidatingBatcher<
+    Chunker<ColumnationStack<((K, V), T, D)>>,
+    ColInternalMerger<(K, V), T, D>,
+>;
 
 /// Timestamp trait for rendering, constraint to support [`MzData`] and [timely::progress::Timestamp].
 pub trait MzTimestamp:
@@ -138,6 +175,7 @@ where
 /// columnation.
 pub trait MzData:
     columnation::Columnation
+    + mz_timely_util::columnar::chunk::PoolColumnar
     + for<'a> columnar::Columnar<
         Container: Container<Ref<'a>: Copy + Ord> + Clone + Send + columnar::Push<Self>,
     >
@@ -147,6 +185,7 @@ pub trait MzData:
 impl<T> MzData for T
 where
     T: columnation::Columnation,
+    T: mz_timely_util::columnar::chunk::PoolColumnar,
     T: columnar::Columnar<Container: Clone + Send + columnar::Push<T>>,
     for<'a> Ref<'a, T>: Copy + Ord,
 {

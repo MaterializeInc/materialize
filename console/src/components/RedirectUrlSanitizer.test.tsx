@@ -12,15 +12,22 @@ import React from "react";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it } from "vitest";
 
+import {
+  type ISignUpCompletePayload,
+  type IUserVerifiedPayload,
+  UserVerifiedOriginTypes,
+} from "~/external-library-wrappers/frontegg";
+
+import { buildFronteggEvents } from "./fronteggEvents";
 import { RedirectUrlSanitizer } from "./RedirectUrlSanitizer";
 
 const TestContent = () => <div data-testid="test-content">Test Content</div>;
 const LoginPage = () => <div data-testid="login-page">Login Page</div>;
 
-const renderWithRouter = () => {
+const renderWithRouter = (allowedOrigins: string[] = []) => {
   return render(
     <BrowserRouter>
-      <RedirectUrlSanitizer>
+      <RedirectUrlSanitizer allowedOrigins={allowedOrigins}>
         <Routes>
           <Route path="/account/login" element={<LoginPage />} />
           <Route path="*" element={<TestContent />} />
@@ -33,6 +40,7 @@ const renderWithRouter = () => {
 describe("RedirectUrlSanitizer", () => {
   beforeEach(() => {
     history.pushState(undefined, "", "/");
+    localStorage.removeItem("FRONTEGG_AFTER_AUTH_REDIRECT_URL");
   });
 
   describe("non-login routes", () => {
@@ -146,5 +154,147 @@ describe("RedirectUrlSanitizer", () => {
       expect(window.location.search).toBe("");
       expect(window.location.pathname).toBe("/account/login");
     });
+  });
+
+  describe("login route with an allowed external redirectUrl", () => {
+    const allowedOrigins = ["https://materialize.com"];
+    const search = "?redirectUrl=https%3A%2F%2Fmaterialize.com%2Fpricing%2F";
+
+    it("keeps the redirectUrl and remembers it for social sign-in", () => {
+      history.pushState(undefined, "", `/account/login${search}`);
+      renderWithRouter(allowedOrigins);
+
+      expect(screen.getByTestId("login-page")).toBeInTheDocument();
+      expect(window.location.search).toBe(search);
+      expect(localStorage.getItem("FRONTEGG_AFTER_AUTH_REDIRECT_URL")).toBe(
+        "https://materialize.com/pricing/",
+      );
+    });
+
+    it("strips it when the origin is not allowed", () => {
+      history.pushState(undefined, "", `/account/login${search}`);
+      renderWithRouter();
+
+      expect(window.location.search).toBe("");
+      expect(
+        localStorage.getItem("FRONTEGG_AFTER_AUTH_REDIRECT_URL"),
+      ).toBeNull();
+    });
+
+    it("strips look-alike origins", () => {
+      history.pushState(
+        undefined,
+        "",
+        "/account/login?redirectUrl=https%3A%2F%2Fmaterialize.com.evil.com%2F",
+      );
+      renderWithRouter(allowedOrigins);
+
+      expect(window.location.search).toBe("");
+      expect(
+        localStorage.getItem("FRONTEGG_AFTER_AUTH_REDIRECT_URL"),
+      ).toBeNull();
+    });
+
+    it("clears a remembered redirect when sign-in starts without one", () => {
+      localStorage.setItem(
+        "FRONTEGG_AFTER_AUTH_REDIRECT_URL",
+        "https://materialize.com/pricing/",
+      );
+      history.pushState(undefined, "", "/account/login");
+      renderWithRouter(allowedOrigins);
+
+      expect(
+        localStorage.getItem("FRONTEGG_AFTER_AUTH_REDIRECT_URL"),
+      ).toBeNull();
+    });
+
+    it("clears a remembered redirect on the Console's own sign-in entry", () => {
+      // Signed-out Console visitors are sent to /account/login?redirectUrl=<path>.
+      for (const entrySearch of [
+        "?redirectUrl=%2F",
+        "?redirectUrl=%2Fregions",
+      ]) {
+        localStorage.setItem(
+          "FRONTEGG_AFTER_AUTH_REDIRECT_URL",
+          "https://materialize.com/pricing/",
+        );
+        history.pushState(undefined, "", `/account/login${entrySearch}`);
+        const { unmount } = renderWithRouter(allowedOrigins);
+
+        expect(window.location.search).toBe(entrySearch);
+        expect(
+          localStorage.getItem("FRONTEGG_AFTER_AUTH_REDIRECT_URL"),
+          entrySearch,
+        ).toBeNull();
+        unmount();
+      }
+    });
+
+    it("clears a remembered redirect when the new one is stripped", () => {
+      localStorage.setItem(
+        "FRONTEGG_AFTER_AUTH_REDIRECT_URL",
+        "https://materialize.com/pricing/",
+      );
+      history.pushState(
+        undefined,
+        "",
+        "/account/login?redirectUrl=https%3A%2F%2Fevil.com%2F",
+      );
+      renderWithRouter(allowedOrigins);
+
+      expect(window.location.search).toBe("");
+      expect(
+        localStorage.getItem("FRONTEGG_AFTER_AUTH_REDIRECT_URL"),
+      ).toBeNull();
+    });
+
+    it("keeps Frontegg's own internal redirects", () => {
+      localStorage.setItem("FRONTEGG_AFTER_AUTH_REDIRECT_URL", "/regions");
+      history.pushState(undefined, "", "/account/login");
+      renderWithRouter(allowedOrigins);
+
+      expect(localStorage.getItem("FRONTEGG_AFTER_AUTH_REDIRECT_URL")).toBe(
+        "/regions",
+      );
+    });
+  });
+
+  describe("signing up after clicking Sign In on the website", () => {
+    const allowedOrigins = ["https://materialize.com"];
+    const events = buildFronteggEvents(allowedOrigins);
+
+    for (const callback of ["/account/social/success", "/account/activate"]) {
+      it(`sends a new user returning via ${callback} to the Console`, () => {
+        // Sign In on the website lands on the login page.
+        history.pushState(
+          undefined,
+          "",
+          "/account/login?redirectUrl=https%3A%2F%2Fmaterialize.com%2Fpricing%2F",
+        );
+        renderWithRouter(allowedOrigins).unmount();
+        expect(localStorage.getItem("FRONTEGG_AFTER_AUTH_REDIRECT_URL")).toBe(
+          "https://materialize.com/pricing/",
+        );
+
+        // "Sign up" goes to materialize.com/register; the new user comes back
+        // here, and Frontegg reports the sign-up before it navigates.
+        history.pushState(undefined, "", callback);
+        renderWithRouter(allowedOrigins).unmount();
+        if (callback === "/account/activate") {
+          events?.userVerified?.({
+            email: "ada@example.com",
+            origin: UserVerifiedOriginTypes.ACTIVATION_LINK,
+          } satisfies IUserVerifiedPayload);
+        } else {
+          events?.signUpComplete?.({
+            email: "ada@example.com",
+          } as ISignUpCompletePayload);
+        }
+
+        expect(
+          localStorage.getItem("FRONTEGG_AFTER_AUTH_REDIRECT_URL"),
+        ).toBeNull();
+      });
+    }
   });
 });

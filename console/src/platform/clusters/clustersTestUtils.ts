@@ -42,6 +42,7 @@ export function buildClusterServerResponse(
     name: "default",
     size: "small",
     managed: true,
+    replicationFactor: 1,
     ownerId: "u1",
     replicas: replicas,
     latestStatusUpdate: "2024-01-01T00:00:00.000Z",
@@ -58,6 +59,7 @@ export function detailPageSetupHelpers() {
     name: "default",
     size: "50cc",
     managed: true,
+    replicationFactor: 1,
     disk: true,
     ownerId: "u1",
     replicas: [

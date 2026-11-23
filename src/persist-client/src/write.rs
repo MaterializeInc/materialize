@@ -350,7 +350,7 @@ where
     /// This uses a bounded amount of memory, even when `updates` is very large.
     /// Individual records, however, should be small enough that we can
     /// reasonably chunk them up: O(KB) is definitely fine, O(MB) come talk to
-    /// us.
+    /// us. See [`Self::batch`] for how long this holds the calling worker.
     ///
     /// The clunky multi-level Result is to enable more obvious error handling
     /// in the caller. See <http://sled.rs/errors.html> for details.
@@ -398,7 +398,7 @@ where
     /// This uses a bounded amount of memory, even when `updates` is very large.
     /// Individual records, however, should be small enough that we can
     /// reasonably chunk them up: O(KB) is definitely fine, O(MB) come talk to
-    /// us.
+    /// us. See [`Self::batch`] for how long this holds the calling worker.
     ///
     /// The clunky multi-level Result is to enable more obvious error handling
     /// in the caller. See <http://sled.rs/errors.html> for details.
@@ -882,6 +882,26 @@ where
         )
     }
 
+    /// Like [Self::builder], but for batches that go through [Batch::rewrite_ts], e.g. txn-wal
+    /// commits. These never contain hollow runs, whose parts the rewrite can't reach.
+    pub fn rewritable_builder(&self, lower: Antichain<T>) -> BatchBuilder<K, V, T, D> {
+        let mut compact_cfg = CompactConfig::new(&self.cfg, self.shard_id());
+        // Never spill a run into a hollow run.
+        compact_cfg.batch.run_length_limit = usize::MAX;
+        Self::builder_inner(
+            &self.cfg,
+            compact_cfg,
+            Arc::clone(&self.metrics),
+            Arc::clone(&self.machine.applier.shard_metrics),
+            &self.metrics.user,
+            Arc::clone(&self.isolated_runtime),
+            Arc::clone(&self.blob),
+            self.shard_id(),
+            self.write_schemas.clone(),
+            lower,
+        )
+    }
+
     /// Implementation of [Self::builder], so that we can share the
     /// implementation in `PersistClient`.
     pub(crate) fn builder_inner(
@@ -942,6 +962,9 @@ where
 
     /// Uploads the given `updates` as one `Batch` to the blob store and returns
     /// a handle to the batch.
+    ///
+    /// Encoding does not yield until a part reaches `blob_target_size`, so a
+    /// large `updates` keeps the calling Tokio worker busy for the whole encode.
     #[instrument(level = "trace", fields(shard = %self.machine.shard_id()))]
     pub async fn batch<SB, KB, VB, TB, DB, I>(
         &mut self,

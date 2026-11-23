@@ -181,6 +181,7 @@ impl Default for TestHarness {
                             profiling: RouteGroup::Disabled,
                             mcp_agent: RouteGroup::Disabled,
                             mcp_developer: RouteGroup::Disabled,
+                            mcp: RouteGroup::Disabled,
                             console_config: RouteGroup::Enabled(AllowedRoles::Normal),
                         },
                     },
@@ -196,6 +197,7 @@ impl Default for TestHarness {
                             profiling: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                             mcp_agent: RouteGroup::Disabled,
                             mcp_developer: RouteGroup::Disabled,
+                            mcp: RouteGroup::Disabled,
                             console_config: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                         },
                     },
@@ -237,6 +239,10 @@ impl Default for TestHarness {
             // This and startup_log_filter below are both (?) needed to suppress clusterd messages.
             // If we need those in the future, we might need to change both.
             system_parameter_defaults: BTreeMap::from([
+                (
+                    "enable_frontend_transaction_completion".to_string(),
+                    "true".to_string(),
+                ),
                 ("log_filter".to_string(), "error".to_string()),
                 (
                     ENABLE_CLUSTER_RECONFIGURATION_LAG_GATE.name().to_string(),
@@ -260,6 +266,19 @@ impl Default for TestHarness {
             capture: None,
         }
     }
+}
+
+/// An MCP route group with the listener's `base` policy, falling back to
+/// `NormalAndInternal` if `base` is disabled (e.g. a metrics-only listener).
+fn mcp_route_group(routes: &HttpRoutesEnabled, enabled: bool) -> RouteGroup {
+    if !enabled {
+        return RouteGroup::Disabled;
+    }
+    let roles = routes
+        .base
+        .allowed_roles()
+        .unwrap_or(AllowedRoles::NormalAndInternal);
+    RouteGroup::Enabled(roles)
 }
 
 impl TestHarness {
@@ -288,7 +307,7 @@ impl TestHarness {
         self,
         tls_reload_certs: ReloadTrigger,
     ) -> Result<TestServer, anyhow::Error> {
-        let listeners = Listeners::new(&self).await?;
+        let listeners = Listeners::new(&self)?;
         listeners.serve_with_trigger(self, tls_reload_certs).await
     }
 
@@ -372,6 +391,7 @@ impl TestHarness {
                         profiling: RouteGroup::Disabled,
                         mcp_agent: RouteGroup::Disabled,
                         mcp_developer: RouteGroup::Disabled,
+                        mcp: RouteGroup::Disabled,
                         console_config: RouteGroup::Enabled(AllowedRoles::Normal),
                     },
                 },
@@ -387,6 +407,7 @@ impl TestHarness {
                         profiling: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                         mcp_agent: RouteGroup::Disabled,
                         mcp_developer: RouteGroup::Disabled,
+                        mcp: RouteGroup::Disabled,
                         console_config: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                     },
                 },
@@ -431,6 +452,7 @@ impl TestHarness {
                         profiling: RouteGroup::Disabled,
                         mcp_agent: RouteGroup::Disabled,
                         mcp_developer: RouteGroup::Disabled,
+                        mcp: RouteGroup::Disabled,
                         console_config: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                     },
                 },
@@ -446,6 +468,7 @@ impl TestHarness {
                         profiling: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                         mcp_agent: RouteGroup::Disabled,
                         mcp_developer: RouteGroup::Disabled,
+                        mcp: RouteGroup::Disabled,
                         console_config: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                     },
                 },
@@ -505,6 +528,7 @@ impl TestHarness {
                         profiling: RouteGroup::Enabled(AllowedRoles::Internal),
                         mcp_agent: RouteGroup::Disabled,
                         mcp_developer: RouteGroup::Disabled,
+                        mcp: RouteGroup::Disabled,
                         console_config: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                     },
                 },
@@ -520,6 +544,7 @@ impl TestHarness {
                         profiling: RouteGroup::Disabled,
                         mcp_agent: RouteGroup::Disabled,
                         mcp_developer: RouteGroup::Disabled,
+                        mcp: RouteGroup::Disabled,
                         console_config: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                     },
                 },
@@ -553,6 +578,7 @@ impl TestHarness {
                         profiling: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                         mcp_agent: RouteGroup::Disabled,
                         mcp_developer: RouteGroup::Disabled,
+                        mcp: RouteGroup::Disabled,
                         console_config: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                     },
                 },
@@ -568,6 +594,7 @@ impl TestHarness {
                         profiling: RouteGroup::Disabled,
                         mcp_agent: RouteGroup::Disabled,
                         mcp_developer: RouteGroup::Disabled,
+                        mcp: RouteGroup::Disabled,
                         console_config: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                     },
                 },
@@ -673,23 +700,16 @@ impl TestHarness {
 
     pub fn with_mcp_routes(mut self, agent: bool, developer: bool) -> Self {
         for config in self.listeners_config.http.values_mut() {
-            // Match the MCP routes to the listener's `base` policy (falling back
-            // to `NormalAndInternal` if `base` is disabled, e.g. a metrics-only
-            // listener), then enable/disable them.
-            let roles = config
-                .routes
-                .base
-                .allowed_roles()
-                .unwrap_or(AllowedRoles::NormalAndInternal);
-            let group = |enabled| {
-                if enabled {
-                    RouteGroup::Enabled(roles)
-                } else {
-                    RouteGroup::Disabled
-                }
-            };
-            config.routes.mcp_agent = group(agent);
-            config.routes.mcp_developer = group(developer);
+            config.routes.mcp_agent = mcp_route_group(&config.routes, agent);
+            config.routes.mcp_developer = mcp_route_group(&config.routes, developer);
+        }
+        self
+    }
+
+    /// Enables the unified `/api/mcp` route on every HTTP listener.
+    pub fn with_mcp_unified_route(mut self) -> Self {
+        for config in self.listeners_config.http.values_mut() {
+            config.routes.mcp = mcp_route_group(&config.routes, true);
         }
         self
     }
@@ -730,8 +750,8 @@ pub struct Listeners {
 }
 
 impl Listeners {
-    pub async fn new(config: &TestHarness) -> Result<Listeners, anyhow::Error> {
-        let inner = crate::Listeners::bind(config.listeners_config.clone()).await?;
+    pub fn new(config: &TestHarness) -> Result<Listeners, anyhow::Error> {
+        let inner = crate::Listeners::bind(config.listeners_config.clone())?;
         Ok(Listeners { inner })
     }
 
@@ -856,6 +876,7 @@ impl Listeners {
             config.orchestrator_tracing_cli_args,
         ));
         let tracing_handle = if config.enable_tracing {
+            #[allow(deprecated)]
             let config = TracingConfig::<fn(&tracing::Metadata) -> sentry_tracing::EventFilter> {
                 service_name: "environmentd",
                 stderr_log: StderrLogConfig {
@@ -932,6 +953,7 @@ impl Listeners {
                 frontegg_oauth_issuer_url: None,
                 unsafe_mode: config.unsafe_mode,
                 all_features: false,
+                restarted_in_place: false,
                 metrics_registry: metrics_registry.clone(),
                 now: config.now,
                 environment_id: config.environment_id,
@@ -972,6 +994,7 @@ impl Listeners {
                 license_key: ValidatedLicenseKey::for_tests(),
                 external_login_password_mz_system: config.external_login_password_mz_system,
                 force_builtin_schema_migration: config.force_builtin_schema_migration,
+                force_catalog_migration: false,
             })
             .await?;
 

@@ -901,9 +901,7 @@ pub struct HollowBatchPart<T> {
     pub deprecated_schema_id: Option<SchemaId>,
 }
 
-/// A [Batch] but with the updates themselves stored externally.
-///
-/// [Batch]: differential_dataflow::trace::BatchReader
+/// A differential trace batch, but with the updates themselves stored externally.
 #[derive(Clone, PartialEq, Eq)]
 pub struct HollowBatch<T> {
     /// Describes the times of the updates in the batch.
@@ -1196,17 +1194,23 @@ impl<T: Timestamp + TotalOrder> HollowBatch<T> {
                 [T::minimum()],
             ));
         }
-        for part in self.parts.iter() {
-            let Some(ts_rewrite) = part.ts_rewrite() else {
-                continue;
+        let mut parts = Vec::with_capacity(self.parts.len());
+        for part in self.parts.iter_mut() {
+            // A hollow run's parts live in a separate blob this rewrite can't edit.
+            // `WriteHandle::rewritable_builder` never makes one.
+            let RunPart::Single(part) = &mut *part else {
+                return Err(format!("unexpected rewrite of a hollow run: {part:?}"));
             };
-            if PartialOrder::less_than(frontier, ts_rewrite) {
+            if let Some(ts_rewrite) = part.ts_rewrite()
+                && PartialOrder::less_than(frontier, ts_rewrite)
+            {
                 return Err(format!(
                     "rewrite frontier {:?} < batch rewrite {:?}",
                     frontier.elements(),
                     ts_rewrite.elements(),
                 ));
             }
+            parts.push(part);
         }
 
         self.desc = Description::new(
@@ -1214,19 +1218,10 @@ impl<T: Timestamp + TotalOrder> HollowBatch<T> {
             new_upper,
             self.desc.since().clone(),
         );
-        for part in &mut self.parts {
+        for part in parts {
             match part {
-                RunPart::Single(BatchPart::Hollow(part)) => {
-                    part.ts_rewrite = Some(frontier.clone())
-                }
-                RunPart::Single(BatchPart::Inline { ts_rewrite, .. }) => {
-                    *ts_rewrite = Some(frontier.clone())
-                }
-                RunPart::Many(runs) => {
-                    // Currently unreachable: we only apply rewrites to user batches, and we don't
-                    // ever generate runs of >1 part for those.
-                    panic!("unexpected rewrite of a hollow runs ref: {runs:?}");
-                }
+                BatchPart::Hollow(part) => part.ts_rewrite = Some(frontier.clone()),
+                BatchPart::Inline { ts_rewrite, .. } => *ts_rewrite = Some(frontier.clone()),
             }
         }
         Ok(())
@@ -1305,6 +1300,9 @@ pub struct HollowRollup {
     pub key: PartialRollupKey,
     /// The encoded size of this rollup, if known.
     pub encoded_size_bytes: Option<usize>,
+    /// Whether the state this rolls up is finalized, recorded only while
+    /// `persist_gc_remove_finalized_rollups` is on. GC keeps these.
+    pub finalized: bool,
 }
 
 /// A pointer to a blob stored externally.
@@ -1479,9 +1477,13 @@ where
     pub fn remove_rollups(
         &mut self,
         remove_rollups: &[(SeqNo, PartialRollupKey)],
+        remove_finalized: bool,
     ) -> ControlFlow<NoOpStateTransition<Vec<SeqNo>>, Vec<SeqNo>> {
         if self.is_tombstone() {
-            return Break(NoOpStateTransition(vec![]));
+            if !remove_finalized || !self.is_finalized() {
+                return Break(NoOpStateTransition(vec![]));
+            }
+            return self.remove_finalized_rollups(remove_rollups);
         }
 
         // This state transition is called at the end of the GC process, so we
@@ -1512,6 +1514,39 @@ where
             }
         }
 
+        Continue(removed)
+    }
+
+    /// Removes only rollups written before the shard was finalized. Each
+    /// removal asks for a new rollup, so removing those too would loop.
+    ///
+    /// NOTE: A no-op must not commit, even just to clear `active_gc`. See the
+    /// soft assert in `compute_next_state_locked`.
+    fn remove_finalized_rollups(
+        &mut self,
+        remove_rollups: &[(SeqNo, PartialRollupKey)],
+    ) -> ControlFlow<NoOpStateTransition<Vec<SeqNo>>, Vec<SeqNo>> {
+        let latest = self.rollups.keys().next_back().copied();
+        let mut removed = vec![];
+        for (seqno, key) in remove_rollups {
+            if Some(*seqno) == latest {
+                mz_ore::soft_panic_or_log!("GC asked to remove a finalized shard's latest rollup");
+                continue;
+            }
+            // Misses are expected when GC replays a committed removal.
+            if self
+                .rollups
+                .get(seqno)
+                .is_some_and(|x| &x.key == key && !x.finalized)
+            {
+                self.rollups.remove(seqno);
+                removed.push(*seqno);
+            }
+        }
+        if removed.is_empty() {
+            return Break(NoOpStateTransition(vec![]));
+        }
+        self.active_gc = None;
         Continue(removed)
     }
 
@@ -1664,8 +1699,8 @@ where
                         .map(|(id, x)| (id, K::decode_schema(&x.key)))
                         .collect::<Vec<_>>()
                 );
-                // Until we implement persist schema changes, only allow at most
-                // one registered schema.
+                // This state may predate the schema's registration, see
+                // `Machine::register_schema`.
                 Break(NoOpStateTransition(None))
             }
         }
@@ -2200,6 +2235,11 @@ where
             && self.critical_readers.is_empty()
     }
 
+    /// A tombstone that has shrunk to a single empty batch.
+    pub(crate) fn is_finalized(&self) -> bool {
+        self.is_tombstone() && self.is_single_empty_batch()
+    }
+
     pub(crate) fn is_single_empty_batch(&self) -> bool {
         let mut batch_count = 0;
         let mut is_empty = true;
@@ -2444,12 +2484,22 @@ where
     }
 }
 
+/// See [State::finalized_gc_step].
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) enum FinalizedGcStep {
+    WriteRollup,
+    /// GC through this seqno.
+    Gc(SeqNo),
+}
+
 #[derive(Copy, Clone, Debug)]
 pub struct GcConfig {
     pub use_active_gc: bool,
     pub fallback_threshold_ms: u64,
     pub min_versions: usize,
     pub max_versions: usize,
+    /// Mirrors `persist_gc_remove_finalized_rollups`.
+    pub remove_finalized_rollups: bool,
 }
 
 impl<T> State<T>
@@ -2516,6 +2566,55 @@ where
         self.collections.seqno_since(self.seqno)
     }
 
+    /// Whether a tombstone has committed anything after linking its latest
+    /// rollup. A rollup of seqno X is linked at X+1, so a settled tombstone
+    /// has exactly those two live diffs.
+    fn tombstone_needs_rollup(&self) -> bool {
+        let (latest, _) = self.latest_rollup();
+        self.collections.is_tombstone() && latest.next() < self.seqno
+    }
+
+    /// The next step toward finishing GC on a finalized shard, or `None` when
+    /// it's done. `earliest_live` is the earliest live diff's seqno in
+    /// consensus, which state doesn't record.
+    ///
+    /// Each pass that removes old rollups adds one rollup of finalized state,
+    /// which is kept, so a shard GC'd in several passes keeps one per pass.
+    pub(crate) fn finalized_gc_step(
+        &self,
+        earliest_live: SeqNo,
+        max_versions: usize,
+        remove_finalized_rollups: bool,
+    ) -> Option<FinalizedGcStep> {
+        // GC can only delete what a commit after the latest rollup removed
+        // (shrinking batches, or old rollups) by truncating to a later rollup.
+        if self.tombstone_needs_rollup() {
+            return Some(FinalizedGcStep::WriteRollup);
+        }
+        let (latest, _) = self.latest_rollup();
+        // GC keeps the newest rollup <= new_seqno_since and truncates to it. With
+        // only one rollup in range it removes and truncates nothing, so cap the
+        // versions one pass fetches at max_versions, but extend to the next rollup
+        // so every pass makes progress.
+        let mut later_rollups = self.collections.rollups.range(earliest_live.next()..);
+        let next_rollup = later_rollups.next().map(|(seqno, _)| *seqno);
+        let capped = SeqNo(earliest_live.0.saturating_add(u64::cast_from(max_versions)));
+        let new_seqno_since = self.seqno.min(capped.max(next_rollup.unwrap_or(capped)));
+        // A rollup older than `latest` is still live in consensus, so there's one
+        // to truncate away.
+        if earliest_live < *latest {
+            return Some(FinalizedGcStep::Gc(new_seqno_since));
+        }
+        // Consensus is already truncated to `latest`, but state can still list older
+        // rollups: a prior GC died after truncating but before removing them from
+        // state, or ran with remove_finalized_rollups off.
+        let mut old_rollups = self.collections.rollups.values().rev().skip(1);
+        if remove_finalized_rollups && old_rollups.any(|x| !x.finalized) {
+            return Some(FinalizedGcStep::Gc(new_seqno_since));
+        }
+        None
+    }
+
     // Returns whether the cmd proposing this state has been selected to perform
     // background garbage collection work.
     //
@@ -2533,6 +2632,7 @@ where
             fallback_threshold_ms,
             min_versions,
             max_versions,
+            remove_finalized_rollups,
         } = cfg;
         // This is an arbitrary-ish threshold that scales with seqno, but never
         // gets particularly big. It probably could be much bigger and certainly
@@ -2574,10 +2674,10 @@ where
         let should_gc = should_gc && (is_write || self.collections.writers.is_empty());
         // Always assign GC work to a tombstoned shard to have the chance to
         // clean up any residual blobs. This is safe (won't cause excess gc)
-        // as the only allowed command after becoming a tombstone is to write
-        // the final rollup.
+        // as a tombstone only commits a few rollups and, once finalized, the
+        // `remove_rollups` that drop the older ones.
         let tombstone_needs_gc = self.collections.is_tombstone();
-        let should_gc = should_gc || tombstone_needs_gc;
+        let should_gc = should_gc || (tombstone_needs_gc && !remove_finalized_rollups);
         let should_gc = if use_active_gc {
             // If we have an active gc, we should only gc if the active gc is
             // sufficiently old. This is to avoid doing more gc work than
@@ -2590,6 +2690,10 @@ where
         } else {
             should_gc
         };
+        // A no-op GC on a tombstone leaves `active_gc` set, which would block
+        // GC on the final `add_rollup`. Nothing commits after that, so the old
+        // rollups would leak.
+        let should_gc = should_gc || (tombstone_needs_gc && remove_finalized_rollups);
         if should_gc {
             self.collections.last_gc_req = gc_until_seqno;
             Some(GcReq {
@@ -2704,7 +2808,7 @@ where
         // transition (in this case from X to X+1), the minimum number of
         // live diffs is actually two. Detect when we're in this minimal
         // two diff state and stop the (otherwise) infinite iteration.
-        if self.collections.is_tombstone() && latest_rollup_seqno.next() < self.seqno {
+        if self.tombstone_needs_rollup() {
             return Some(self.seqno);
         }
 
@@ -2884,7 +2988,7 @@ pub(crate) mod tests {
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_dyncfg::ConfigUpdates;
     use mz_ore::now::SYSTEM_TIME;
-    use mz_ore::{assert_none, assert_ok};
+    use mz_ore::{assert_err, assert_none, assert_ok};
     use mz_proto::RustType;
     use proptest::prelude::*;
     use proptest::strategy::ValueTree;
@@ -3244,6 +3348,25 @@ pub(crate) mod tests {
                 .collect(),
             len,
         )
+    }
+
+    #[mz_ore::test]
+    fn rewrite_ts_hollow_run() {
+        let mut batch = hollow(0u64, 1, &["a"], 2);
+        batch.parts.push(RunPart::Many(HollowRunRef {
+            key: PartialBatchKey("b".to_owned()),
+            hollow_bytes: 0,
+            max_part_bytes: 0,
+            key_lower: vec![],
+            structured_key_lower: None,
+            diffs_sum: None,
+            _phantom_data: PhantomData,
+        }));
+        let before = batch.clone();
+
+        let res = batch.rewrite_ts(&Antichain::from_elem(2), Antichain::from_elem(3));
+        assert_err!(res);
+        assert_eq!(batch, before);
     }
 
     #[mz_ore::test]
@@ -3923,6 +4046,7 @@ pub(crate) mod tests {
             fallback_threshold_ms: 5000,
             min_versions: 99,
             max_versions: 500,
+            remove_finalized_rollups: true,
         };
         let now_fn = SYSTEM_TIME.clone();
 
@@ -4044,6 +4168,7 @@ pub(crate) mod tests {
             fallback_threshold_ms: 5000,
             min_versions: 16,
             max_versions: 128,
+            remove_finalized_rollups: true,
         };
         const NOW_MS: u64 = 0;
 
@@ -4123,6 +4248,7 @@ pub(crate) mod tests {
         let rollup = HollowRollup {
             key: PartialRollupKey::new(rollup_seqno, &RollupId::new()),
             encoded_size_bytes: None,
+            finalized: false,
         };
 
         assert!(
@@ -4223,6 +4349,7 @@ pub(crate) mod tests {
         let rollup = HollowRollup {
             key: PartialRollupKey::new(rollup_seqno, &RollupId::new()),
             encoded_size_bytes: None,
+            finalized: false,
         };
         assert!(
             state
@@ -4273,6 +4400,7 @@ pub(crate) mod tests {
         let rollup = HollowRollup {
             key: PartialRollupKey::new(rollup_seqno, &RollupId::new()),
             encoded_size_bytes: None,
+            finalized: false,
         };
 
         assert!(
@@ -4349,6 +4477,7 @@ pub(crate) mod tests {
         let rollup = HollowRollup {
             key: PartialRollupKey::new(rollup_seqno, &RollupId::new()),
             encoded_size_bytes: None,
+            finalized: false,
         };
         assert!(
             state
@@ -4524,11 +4653,13 @@ pub(crate) mod tests {
         let older = HollowRollup {
             key: PartialRollupKey::new(older_seqno, &RollupId::new()),
             encoded_size_bytes: None,
+            finalized: false,
         };
         let newer_seqno = SeqNo(20);
         let newer = HollowRollup {
             key: PartialRollupKey::new(newer_seqno, &RollupId::new()),
             encoded_size_bytes: None,
+            finalized: false,
         };
         let add_older = |state: &mut StateCollections<u64>| state.add_rollup((older_seqno, &older));
 
@@ -4552,7 +4683,7 @@ pub(crate) mod tests {
         // contains the kept rollup; the older entry is gone.
         let _ = state
             .collections
-            .remove_rollups(&[(older_seqno, older.key.clone())]);
+            .remove_rollups(&[(older_seqno, older.key.clone())], false);
         assert!(!state.collections.rollups.contains_key(&older_seqno));
         assert!(state.collections.rollups.contains_key(&newer_seqno));
 
@@ -4563,5 +4694,74 @@ pub(crate) mod tests {
         assert_eq!(add_older(&mut state.collections), Continue(false));
         assert!(!state.collections.rollups.contains_key(&older_seqno));
         assert_eq!(state.collections.rollups.len(), 1);
+    }
+
+    #[mz_ore::test]
+    fn finalized_rollups() {
+        let mut state = TypedState::<String, String, u64, i64>::new(
+            DUMMY_BUILD_INFO.semver_version(),
+            ShardId::new(),
+            "".to_owned(),
+            0,
+        );
+        state.collections.trace.downgrade_since(&Antichain::new());
+        let _ = state
+            .collections
+            .trace
+            .push_batch(StateCollections::tombstone_batch());
+        assert!(state.collections.is_finalized());
+
+        let rollup = |seqno, finalized| HollowRollup {
+            key: PartialRollupKey::new(SeqNo(seqno), &RollupId::new()),
+            encoded_size_bytes: None,
+            finalized,
+        };
+        let (old, kept, latest) = (rollup(1, false), rollup(3, true), rollup(5, true));
+        for (seqno, rollup) in [(1, &old), (3, &kept), (5, &latest)] {
+            assert_eq!(
+                state.collections.add_rollup((SeqNo(seqno), rollup)),
+                Continue(true)
+            );
+        }
+        let remove_old = [(SeqNo(1), old.key.clone()), (SeqNo(3), kept.key.clone())];
+
+        // The final rollup at v5 is added at v6, and GC's removal of v1 at v7
+        // asks for one more.
+        for (seqno, need) in [(6, None), (7, Some(SeqNo(7)))] {
+            state.seqno = SeqNo(seqno);
+            assert_eq!(state.need_rollup(3, false, 0, 0), need);
+        }
+
+        let noop = Break(NoOpStateTransition(vec![]));
+        assert_eq!(
+            state.collections.remove_rollups(&remove_old, false),
+            noop,
+            "kill switch off"
+        );
+
+        state.collections.active_gc = Some(ActiveGc {
+            seqno: SeqNo(6),
+            start_ms: 0,
+        });
+        assert_eq!(state.collections.remove_rollups(&[], true), noop);
+        assert!(
+            state.collections.active_gc.is_some(),
+            "a no-op must not commit to clear active_gc"
+        );
+
+        assert_eq!(
+            state.collections.remove_rollups(&remove_old, true),
+            Continue(vec![SeqNo(1)])
+        );
+        assert_eq!(state.collections.active_gc, None);
+        assert_eq!(
+            state.collections.rollups.keys().collect::<Vec<_>>(),
+            vec![&SeqNo(3), &SeqNo(5)]
+        );
+        assert_eq!(
+            state.collections.remove_rollups(&remove_old, true),
+            noop,
+            "replayed removal"
+        );
     }
 }

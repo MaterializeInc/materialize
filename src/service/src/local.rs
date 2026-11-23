@@ -10,10 +10,10 @@
 //! Process-local transport for the [client](crate::client) module.
 
 use std::fmt;
+use std::task::{Context, Poll};
 use std::thread::Thread;
 
 use anyhow::anyhow;
-use async_trait::async_trait;
 use itertools::Itertools;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
@@ -30,7 +30,6 @@ pub struct LocalClient<C, R> {
     thread: Thread,
 }
 
-#[async_trait]
 impl<C, R> GenericClient<C, R> for LocalClient<C, R>
 where
     C: fmt::Debug + Send,
@@ -43,14 +42,8 @@ where
         Ok(())
     }
 
-    /// # Cancel safety
-    ///
-    /// This method is cancel safe. If `recv` is used as the event in a [`tokio::select!`]
-    /// statement and some other branch completes first, it is guaranteed that no messages were
-    /// received by this client.
-    async fn recv(&mut self) -> Result<Option<R>, anyhow::Error> {
-        // `mpsc::UnboundedReceiver::recv` is documented as cancel safe.
-        Ok(self.rx.recv().await)
+    fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Result<Option<R>, anyhow::Error>> {
+        self.rx.poll_recv(cx).map(Ok)
     }
 }
 

@@ -11,6 +11,7 @@ import { interpret } from "@xstate/fsm";
 
 import { ErrorCode, MzDataType } from "~/api/materialize/types";
 
+import { EXECUTION_TIME_NOTICE_CODE } from "../executionTime";
 import { createHistoryId } from "../historyId";
 import webSocketFsm, { createInterruptedCommandError } from "./webSocketFsm";
 
@@ -278,6 +279,80 @@ describe("webSocketFsm", () => {
       ).toBeTruthy();
       expect(machine.state.context.latestCommandOutput?.error).toEqual(error);
     });
+  });
+
+  // The server sends the execution time notice before the statement's
+  // CommandComplete; src/environmentd/tests/testdata/http/ws pins that order.
+  it("attributes each execution time notice to the statement it precedes", () => {
+    const machine = interpret(webSocketFsm);
+    machine.start();
+    machine.send("READY_FOR_QUERY");
+    machine.send({
+      type: "SEND",
+      command: "INSERT INTO t VALUES (1); SELECT 1;",
+      statements: [
+        { query: "INSERT INTO t VALUES (1)" },
+        { query: "SELECT 1" },
+      ],
+    });
+    const insertNotice = {
+      code: EXECUTION_TIME_NOTICE_CODE,
+      message: "execution time: 20.000 ms",
+      severity: "Notice" as const,
+    };
+    const selectNotice = {
+      code: EXECUTION_TIME_NOTICE_CODE,
+      message: "execution time: 1.000 ms",
+      severity: "Notice" as const,
+    };
+
+    machine.send("COMMAND_STARTING_DEFAULT");
+    machine.send({ type: "NOTICE", notice: insertNotice });
+    machine.send({
+      type: "COMMAND_COMPLETE",
+      commandCompletePayload: "INSERT 0 1",
+    });
+    machine.send("COMMAND_STARTING_HAS_ROWS");
+    machine.send({ type: "ROWS", rows: { columns: [] } });
+    machine.send({ type: "ROW", row: [1] });
+    machine.send({ type: "NOTICE", notice: selectNotice });
+    machine.send({
+      type: "COMMAND_COMPLETE",
+      commandCompletePayload: "SELECT 1",
+    });
+    machine.send("READY_FOR_QUERY");
+
+    const results = machine.state.context.latestCommandOutput?.commandResults;
+    expect(results?.map((result) => result.notices)).toEqual([
+      [insertNotice],
+      [selectNotice],
+    ]);
+  });
+
+  // The execution time notice of a statement without rows arrives in this
+  // state, before the statement's CommandComplete.
+  it("keeps a statement without rows in progress when a notice arrives", () => {
+    const machine = interpret(webSocketFsm);
+    machine.start();
+    machine.send("READY_FOR_QUERY");
+    machine.send({
+      type: "SEND",
+      command: "CREATE TABLE t (a int);",
+      statements: [{ query: "CREATE TABLE t (a int)" }],
+    });
+    machine.send("COMMAND_STARTING_DEFAULT");
+    const notice = {
+      code: EXECUTION_TIME_NOTICE_CODE,
+      message: "execution time: 1.000 ms",
+      severity: "Notice" as const,
+      detail: '{"duration_us":1000,"kind":"completed"}',
+    };
+    machine.send({ type: "NOTICE", notice });
+
+    expect(machine.state.matches("commandInProgressDefault")).toBe(true);
+    const [result] =
+      machine.state.context.latestCommandOutput?.commandResults ?? [];
+    expect(result.notices).toEqual([notice]);
   });
 
   it("should merge a notice into a command that results in an error", () => {

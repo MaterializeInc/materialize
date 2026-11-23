@@ -21,7 +21,6 @@ export const getCloudRegions = ({
       {
         provider: impersonation.provider,
         region: impersonation.region,
-        regionApiUrl: "",
       },
     ];
   }

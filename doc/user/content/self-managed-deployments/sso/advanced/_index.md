@@ -57,7 +57,7 @@ The stack is built from [Ory](https://www.ory.sh/docs/) components:
 |---|---|
 | **Polis** | Optional. Acts as the SAML service provider for your IdP, translates SAML to OIDC for Kratos, and serves the SCIM endpoint for IdP-driven user provisioning. |
 | **Kratos** | Stores identities, runs the login flow, and federates upstream OIDC providers. |
-| **Selfservice UI** | Renders the login and consent pages, and mediates between the browser and Kratos and Hydra. |
+| **Selfservice UI** | Materialize's [ory-selfservice](https://github.com/MaterializeInc/ory-selfservice). Renders the sign-in pages, handles Hydra's login, consent, and logout steps, and puts the user's email and groups on every token Hydra issues. |
 | **Hydra** | The OAuth2 and OIDC authorization server that Materialize trusts. Issues the JWTs. |
 | **Materialize** | The protected application. Trusts Hydra's JWTs and creates SQL roles from the `email` claim on first sign-in. |
 

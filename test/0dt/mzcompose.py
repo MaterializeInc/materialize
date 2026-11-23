@@ -13,6 +13,7 @@ version, no upgrade).
 """
 
 import json
+import re
 import time
 from datetime import UTC, datetime, timedelta
 from textwrap import dedent
@@ -55,11 +56,26 @@ HYDRATED_SELECT_FACTOR = 10 if sanitizer_enabled() else 1
 
 SYSTEM_PARAMETER_DEFAULTS = get_default_system_parameters()
 
+
+def _mz_new(*, force_catalog_migration: bool = False) -> Materialized:
+    return Materialized(
+        name="mz_new",
+        sanity_restart=False,
+        deploy_generation=1,
+        system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
+        restart="on-failure",
+        external_metadata_store=True,
+        default_replication_factor=2,
+        force_catalog_migration=force_catalog_migration,
+    )
+
+
 SERVICES = [
     DockerService(
         name="hydration-flags",
         config={
-            "image": "python:3.12-slim",
+            # renovate: datasource=docker depName=python versioning=docker
+            "image": "python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
             "volumes": ["./mock_hydration_flags.py:/app/server.py"],
             "command": ["python3", "-u", "/app/server.py"],
             "healthcheck": {
@@ -88,14 +104,17 @@ SERVICES = [
         external_metadata_store=True,
         default_replication_factor=2,
     ),
+    _mz_new(),
+    # A second process of mz_new's generation, as the container entrypoint
+    # starts it after `restart_in_place!`.
     Materialized(
-        name="mz_new",
+        name="mz_restarted_in_place",
         sanity_restart=False,
         deploy_generation=1,
         system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
-        restart="on-failure",
         external_metadata_store=True,
         default_replication_factor=2,
+        environment_extra=["MZ_RESTARTED_IN_PLACE=true"],
     ),
     Testdrive(
         materialize_url="postgres://materialize@mz_old:6875",
@@ -398,6 +417,18 @@ def workflow_read_only(c: Composition) -> None:
             contains: cannot write in read-only mode
             ! CREATE INDEX t_idx2 ON t (a, b)
             contains: cannot write in read-only mode
+            ! CREATE SOURCE readonly_source FROM LOAD GENERATOR COUNTER;
+            contains: cannot write in read-only mode
+            ! CREATE TABLE readonly_export FROM SOURCE kafka_source (REFERENCE "testdrive-kafka-${{testdrive.seed}}") FORMAT BYTES;
+            contains: cannot write in read-only mode
+            ! ALTER SOURCE postgres_source REFRESH REFERENCES;
+            contains: cannot write in read-only mode
+            ! CREATE CONNECTION readonly_conn TO KAFKA (BROKER 'localhost:1', SECURITY PROTOCOL = 'PLAINTEXT');
+            contains: cannot write in read-only mode
+            ! ALTER CONNECTION kafka_conn SET (BROKER 'localhost:1');
+            contains: cannot write in read-only mode
+            > SELECT 1;
+            1
             ! CREATE MATERIALIZED VIEW mv2 AS SELECT sum(a) FROM t;
             contains: cannot write in read-only mode
 
@@ -515,6 +546,11 @@ def workflow_read_only(c: Composition) -> None:
             """))
 
 
+def workflow_basic_forced_catalog_migration(c: Composition) -> None:
+    with c.override(_mz_new(force_catalog_migration=True)):
+        workflow_basic(c)
+
+
 def workflow_basic(c: Composition) -> None:
     """Verify basic 0dt deployment flow."""
     c.down(destroy_volumes=True)
@@ -534,6 +570,10 @@ def workflow_basic(c: Composition) -> None:
     c.testdrive(dedent(f"""
         > SET CLUSTER = cluster;
         > CREATE TABLE t (a int, b int);
+        # drop_idx exists only to be dropped while mz_new is in read-only mode.
+        # Nothing reads from it, unlike t_idx, which mv reads from.
+        > CREATE TABLE drop_t (a int);
+        > CREATE INDEX drop_idx ON drop_t (a);
 
         > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL = 'PLAINTEXT';
         > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';
@@ -804,7 +844,16 @@ def workflow_basic(c: Composition) -> None:
         > INSERT INTO t VALUES (5, 6);
         > SELECT * FROM mv;
         9
+        > DROP INDEX drop_idx
+        # NOTE: This deliberately orphans t_idx, which mv reads from, to cover
+        # the first upgrade from a release that allowed it: mz_new has to
+        # follow an old leader whose catalog no longer has an index that a
+        # running dataflow reads.
+        $ postgres-execute connection=mz_system
+        ALTER SYSTEM SET enable_drop_in_use_index = true
         > DROP INDEX t_idx
+        $ postgres-execute connection=mz_system
+        ALTER SYSTEM RESET enable_drop_in_use_index
         > CREATE INDEX t_idx2 ON t (a, b)
         > CREATE MATERIALIZED VIEW mv2 AS SELECT sum(a) FROM t;
 
@@ -1684,6 +1733,10 @@ def workflow_kafka_source_failpoint(c: Composition) -> None:
         Service("testdrive", idle=True),
     )
 
+    # The fail_state_multi_put failpoint exists only in the v1 upsert
+    # operator. Under v2 it is never hit and the source stays running.
+    upsert_v1 = {"enable_upsert_v2": "false"}
+
     # Start the original Materialized instance with the failpoint enabled.
     with c.override(
         Materialized(
@@ -1691,6 +1744,7 @@ def workflow_kafka_source_failpoint(c: Composition) -> None:
             sanity_restart=False,
             deploy_generation=0,
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
+            additional_system_parameter_defaults=upsert_v1,
             external_metadata_store=True,
             environment_extra=["FAILPOINTS=fail_state_multi_put=return"],
             default_replication_factor=2,
@@ -1727,6 +1781,7 @@ def workflow_kafka_source_failpoint(c: Composition) -> None:
             sanity_restart=False,
             deploy_generation=1,
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
+            additional_system_parameter_defaults=upsert_v1,
             restart="on-failure",
             external_metadata_store=True,
             default_replication_factor=2,
@@ -2353,6 +2408,11 @@ def workflow_upsert_sources(c: Composition) -> None:
         thread.join()
 
 
+def workflow_ddl_forced_catalog_migration(c: Composition) -> None:
+    with c.override(_mz_new(force_catalog_migration=True)):
+        workflow_ddl(c)
+
+
 def workflow_ddl(c: Composition) -> None:
     """Verify basic 0dt deployment flow with DDLs running during the 0dt deployment."""
     c.down(destroy_volumes=True)
@@ -2373,6 +2433,10 @@ def workflow_ddl(c: Composition) -> None:
     c.testdrive(dedent(f"""
         > SET CLUSTER = cluster;
         > CREATE TABLE t (a int, b int);
+        # drop_idx exists only to be dropped while mz_new is in read-only mode.
+        # Nothing reads from it, unlike t_idx, which mv reads from.
+        > CREATE TABLE drop_t (a int);
+        > CREATE INDEX drop_idx ON drop_t (a);
 
         > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL = 'PLAINTEXT';
         > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';
@@ -2647,7 +2711,16 @@ def workflow_ddl(c: Composition) -> None:
         > INSERT INTO t VALUES (5, 6);
         > SELECT * FROM mv;
         9
+        > DROP INDEX drop_idx
+        # NOTE: This deliberately orphans t_idx, which mv reads from, to cover
+        # the first upgrade from a release that allowed it: mz_new has to
+        # follow an old leader whose catalog no longer has an index that a
+        # running dataflow reads.
+        $ postgres-execute connection=mz_system
+        ALTER SYSTEM SET enable_drop_in_use_index = true
         > DROP INDEX t_idx
+        $ postgres-execute connection=mz_system
+        ALTER SYSTEM RESET enable_drop_in_use_index
         > CREATE INDEX t_idx2 ON t (a, b)
         > CREATE MATERIALIZED VIEW mv2 AS SELECT sum(a) FROM t;
 
@@ -2928,6 +3001,43 @@ def workflow_stuck_collection(c: Composition) -> None:
     c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
     c.promote_mz("mz_new", retire_mz_service="mz_old")
     c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
+
+
+def workflow_unreadable_input_drags_as_of(c: Composition) -> None:
+    """Verify that an input without readable data doesn't drag index as-ofs back.
+
+    `mv` never ran, like a builtin MV replaced in an upgrade. `v_idx` can't hydrate before `mv`
+    advances, so it must not drag its input `t_idx` back to the since `mv` holds on `t`.
+    """
+    c.down(destroy_volumes=True)
+    c.up("mz_old")
+    c.sql(
+        """
+        CREATE CLUSTER paused SIZE 'scale=1,workers=1', REPLICATION FACTOR 0;
+        CREATE CLUSTER test SIZE 'scale=1,workers=1';
+        CREATE TABLE t (a int);
+        CREATE MATERIALIZED VIEW mv IN CLUSTER paused AS SELECT * FROM t;
+        CREATE INDEX t_idx IN CLUSTER test ON t (a);
+        CREATE VIEW v AS SELECT a FROM t JOIN mv USING (a);
+        CREATE INDEX v_idx IN CLUSTER test ON v (a);
+        """,
+        service="mz_old",
+    )
+    # Ages the since `mv` holds on `t`, which is what `t_idx` would get dragged back to.
+    time.sleep(30)
+
+    started = time.time()
+    c.up("mz_new")
+    as_ofs = []
+    for _ in range(60):
+        logs = c.invoke("logs", "mz_new", capture=True).stdout
+        as_ofs = re.findall(r"dataflow name=\S+\.t_idx .* as_of=\[(\d+)\]", logs)
+        if as_ofs:
+            break
+        time.sleep(1)
+    assert as_ofs, "no `creating dataflow` log line for t_idx on mz_new"
+    lag = started - int(as_ofs[-1]) / 1000
+    assert lag < 15, f"t_idx starts {lag:.0f}s in the past on the read-only deployment"
 
 
 def workflow_caught_up_stability(c: Composition) -> None:
@@ -3770,3 +3880,144 @@ def workflow_ddl_detection_ephemeral_items(c: Composition) -> None:
         conn.close()
     except Exception:
         pass
+
+
+def workflow_restarted_in_place_after_promotion(c: Composition) -> None:
+    """A process restarted in place halts once its generation has been promoted.
+
+    Booting writable instead would fence the promoted leader of its generation.
+    """
+    c.down(destroy_volumes=True)
+    c.up("mz_old")
+    c.sql("CREATE TABLE t (a int); INSERT INTO t VALUES (1);", service="mz_old")
+
+    c.up("mz_new")
+    c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+    c.promote_mz("mz_new", retire_mz_service="mz_old")
+    c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
+
+    c.up("mz_restarted_in_place", wait=False)
+    deadline = time.time() + 300
+    while c.is_running("mz_restarted_in_place"):
+        assert time.time() < deadline, "mz_restarted_in_place did not halt"
+        time.sleep(1)
+    exit_code = c.invoke(
+        "ps",
+        "--all",
+        "--format",
+        "{{.ExitCode}}",
+        "mz_restarted_in_place",
+        capture=True,
+        silent=True,
+    ).stdout.strip()
+    assert exit_code == "166", f"mz_restarted_in_place exited with {exit_code}"
+    logs = c.invoke("logs", "mz_restarted_in_place", capture=True).stdout
+    assert (
+        "restarted in place, but deployment generation 1 has been promoted; halting"
+        in logs
+    ), "mz_restarted_in_place did not halt on the marker"
+
+    c.sql("INSERT INTO t VALUES (2)", service="mz_new")
+    assert c.sql_query("SELECT count(*) FROM t", service="mz_new")[0][0] == 2
+    assert _leader_status(c, "mz_new") == DeploymentStatus.IS_LEADER.value
+
+
+def _replica_ids_of_cluster(
+    c: Composition, mz_service: str, cluster_id: str
+) -> set[str]:
+    """Returns the ids of the replica processes of *cluster_id* running in *mz_service*."""
+    prefix = "--opentelemetry-resource=replica_id="
+    ids = set()
+    for line in c.exec(
+        mz_service, "ps", "-eo", "args=", capture=True, silent=True
+    ).stdout.splitlines():
+        args = line.split()
+        if f"--opentelemetry-resource=cluster_id={cluster_id}" in args:
+            ids.update(
+                arg.removeprefix(prefix) for arg in args if arg.startswith(prefix)
+            )
+    return ids
+
+
+def workflow_system_replica_id_collision(c: Composition) -> None:
+    """A system replica id the leader reuses leaves no orphaned replica behind.
+
+    A controller resize names the leader's mz_catalog_server replica r2, so the
+    read-only generation's catalog open creates r1 in memory with the next
+    system replica id. The leader then gives that id to an mz_analytics replica,
+    and the read-only generation reboots on DDL and gives its r1 a new id. Its
+    process for the old id must go.
+    """
+    new_size = "scale=1,workers=1"
+    c.down(destroy_volumes=True)
+    c.up("mz_old")
+    c.sql(
+        f"""
+        ALTER SYSTEM SET with_0dt_deployment_ddl_check_interval = '1s';
+        ALTER CLUSTER mz_catalog_server SET (SIZE = '{new_size}');
+        """,
+        service="mz_old",
+        port=6877,
+        user="mz_system",
+    )
+    deadline = time.time() + 120
+    while True:
+        replicas = c.sql_query(
+            "SELECT r.name, r.size FROM mz_cluster_replicas r JOIN mz_clusters c ON c.id = r.cluster_id "
+            "WHERE c.name = 'mz_catalog_server'",
+            service="mz_old",
+        )
+        if [size for _name, size in replicas] == [new_size]:
+            break
+        assert time.time() < deadline, f"the resize did not finish: {replicas}"
+        time.sleep(1)
+    assert replicas[0][0] != "r1", "the controller named the resized replica r1"
+
+    c.up("mz_new")
+    deadline = time.time() + 120
+    while not (ids := _replica_ids_of_cluster(c, "mz_new", "s2")):
+        assert (
+            time.time() < deadline
+        ), "mz_new never started an mz_catalog_server replica"
+        time.sleep(1)
+    assert len(ids) == 1, ids
+    (old_id,) = ids
+
+    # The leader allocates the id the read-only generation holds in memory. Only
+    # the cluster's owner can alter it, and the controller creates the replica on
+    # its next tick.
+    c.sql(
+        "ALTER CLUSTER mz_analytics SET (REPLICATION FACTOR 1)",
+        service="mz_old",
+        port=6877,
+        user="mz_analytics",
+    )
+    deadline = time.time() + 60
+    while not (
+        taken := c.sql_query(
+            "SELECT r.id FROM mz_cluster_replicas r JOIN mz_clusters c ON c.id = r.cluster_id "
+            "WHERE c.name = 'mz_analytics'",
+            service="mz_old",
+        )
+    ):
+        assert (
+            time.time() < deadline
+        ), "the leader never created an mz_analytics replica"
+        time.sleep(1)
+    assert taken == [
+        (old_id,)
+    ], f"leader took {taken}, read-only generation holds {old_id}"
+
+    # The leader's new system replica does not make mz_new reboot, because its DDL
+    # check compares user items and user replicas only. User DDL does. Only a
+    # reboot gives mz_new's mz_catalog_server replica another id.
+    c.sql("CREATE TABLE collision_trigger (a int)", service="mz_old")
+    deadline = time.time() + 300
+    while True:
+        ids = _replica_ids_of_cluster(c, "mz_new", "s2")
+        if len(ids) == 1 and old_id not in ids:
+            break
+        assert (
+            time.time() < deadline
+        ), f"mz_new runs {ids}, expected one id other than {old_id}"
+        time.sleep(1)

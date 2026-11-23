@@ -9,7 +9,30 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# lint-versions - Check rust version
+# lint-versions - Check pinned tool and library versions
+
+rust_version=$(sed -n 's/^rust-version = "\([^"]*\)"$/\1/p' Cargo.toml)
+if ! grep -Fq "\"rust\": \"$rust_version\"" .github/renovate.json5; then
+  echo "Set constraints.rust in .github/renovate.json5 to $rust_version to match Cargo.toml"
+  exit 1
+fi
+
+patched=$(sed -n '/^\[patch\.crates-io\]$/,/^\[/s/^\([A-Za-z0-9_-]*\) = .*/"\1"/p' Cargo.toml | paste -sd, - | sed 's/,/, /g')
+if ! grep -Fq "\"matchPackageNames\": [$patched]," .github/renovate.json5; then
+  echo "Set the patched-crates rule in .github/renovate.json5 to \"matchPackageNames\": [$patched] to match [patch.crates-io] in Cargo.toml"
+  exit 1
+fi
 
 grep "rust-version = " Cargo.toml | grep -q "1\.98\.1" || \
-(echo "Please validate new Rust versions for compilation time performance regressions or ask Team Testing to do so. Afterwards change the tested version in bin/lint-versions" && exit 1)
+{ echo "Please validate new Rust versions for compilation time performance regressions or ask Team Testing to do so. Afterwards change the tested version in bin/lint-versions"; exit 1; }
+
+# The libduckdb that ci/builder installs must match the version libduckdb-sys
+# was generated against. Its crate version encodes the DuckDB version as
+# 1.MAJOR_MINOR_PATCH.x, e.g. 1.10506.1 is DuckDB 1.5.6.
+encoded=$(grep -A1 '^name = "libduckdb-sys"$' Cargo.lock | sed -n 's/^version = "1\.\([0-9]*\)\..*"$/\1/p')
+duckdb_version="$((encoded / 10000)).$((encoded / 100 % 100)).$((encoded % 100))"
+if grep -o 'duckdb/releases/download/v[^/]*/' ci/builder/Dockerfile | grep -qv "/v$duckdb_version/" \
+  || ! grep -q "duckdb/releases/download/v$duckdb_version/" ci/builder/Dockerfile; then
+  echo "ci/builder/Dockerfile must install libduckdb $duckdb_version to match libduckdb-sys in Cargo.lock"
+  exit 1
+fi

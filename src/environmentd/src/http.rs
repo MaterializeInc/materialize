@@ -546,8 +546,10 @@ impl HttpServer {
         }
 
         // MCP (Model Context Protocol) endpoints
-        // Enabled via runtime `routes_enabled.mcp_agent` and `routes_enabled.mcp_developer` configuration
-        if routes_enabled.mcp_agent.is_enabled() || routes_enabled.mcp_developer.is_enabled() {
+        if routes_enabled.mcp_agent.is_enabled()
+            || routes_enabled.mcp_developer.is_enabled()
+            || routes_enabled.mcp.is_enabled()
+        {
             use tracing::info;
 
             // RFC 9728 Protected Resource Metadata. Public route: MCP
@@ -559,11 +561,14 @@ impl HttpServer {
             // RFC 9728 §3.1 lets clients look up per-resource metadata
             // via a path-suffixed well-known URI before falling back to
             // the bare one. The MCP endpoints share an identical
-            // metadata view today, so we serve the same handler at all
-            // three paths.
+            // metadata view, so we serve the same handler at every path.
             let oauth_metadata_router = Router::new()
                 .route(
                     oauth_metadata::PROTECTED_RESOURCE_METADATA_PATH,
+                    routing::get(oauth_metadata::handle_protected_resource_metadata),
+                )
+                .route(
+                    oauth_metadata::PROTECTED_RESOURCE_METADATA_PATH_UNIFIED,
                     routing::get(oauth_metadata::handle_protected_resource_metadata),
                 )
                 .route(
@@ -606,6 +611,18 @@ impl HttpServer {
                     )
                     .authorize(mcp_developer_roles);
                 mcp_router = mcp_router.merge(developer_router);
+            }
+
+            if let RouteGroup::Enabled(mcp_roles) = routes_enabled.mcp {
+                info!("Enabling MCP endpoint: /api/mcp");
+                let unified_router = Router::new()
+                    .route(
+                        "/api/mcp",
+                        routing::post(mcp::handle_mcp_unified)
+                            .get(mcp::handle_mcp_method_not_allowed),
+                    )
+                    .authorize(mcp_roles);
+                mcp_router = mcp_router.merge(unified_router);
             }
 
             // The MCP handlers perform a server-side Origin check against this
@@ -898,18 +915,20 @@ impl AuthedClient {
         let connection_guard = active_connection_counter.allocate_connection(session.user())?;
 
         session_config(&mut session);
-        let system_vars = adapter_client.get_system_vars().await;
-        for (key, val) in options {
-            const LOCAL: bool = false;
-            if let Err(err) =
-                session
-                    .vars_mut()
-                    .set(&system_vars, &key, VarInput::Flat(&val), LOCAL)
-            {
-                session.add_notice(AdapterNotice::BadStartupSetting {
-                    name: key.to_string(),
-                    reason: err.to_string(),
-                })
+        if !options.is_empty() {
+            let system_vars = adapter_client.get_system_vars().await;
+            for (key, val) in options {
+                const LOCAL: bool = false;
+                if let Err(err) =
+                    session
+                        .vars_mut()
+                        .set(&system_vars, &key, VarInput::Flat(&val), LOCAL)
+                {
+                    session.add_notice(AdapterNotice::BadStartupSetting {
+                        name: key.to_string(),
+                        reason: err.to_string(),
+                    })
+                }
             }
         }
         let adapter_client = adapter_client.startup(session).await?;

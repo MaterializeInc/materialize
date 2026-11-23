@@ -199,6 +199,11 @@ pub(super) struct PlannedMetricSink {
 }
 
 impl Coordinator {
+    /// Whether `id` is the compute export of an installed curated metric sink.
+    pub(super) fn is_metric_sink(&self, id: GlobalId) -> bool {
+        self.metric_sinks.values().any(|sink| sink.sink_id == id)
+    }
+
     /// Installs the curated metric sinks on all existing replicas.
     pub(super) async fn bootstrap_metric_sinks(&mut self) {
         for (cluster_id, replica_id) in self.all_cluster_replicas() {

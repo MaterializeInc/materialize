@@ -1,0 +1,26 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Starts slack_notify_labeled.yml for a pull request.
+
+name: Slack Label Notifications trigger
+
+on:
+  pull_request:
+    types: [labeled]
+
+permissions: {}
+
+jobs:
+  request:
+    name: request-label-notification
+    if: github.event.label.name == 'release-blocker'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "slack_notify_labeled.yml notifies Slack about this pull request once this run completes."

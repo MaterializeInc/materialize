@@ -210,14 +210,10 @@ class SessionState(Check):
             > SELECT count(*) FROM session_state_temp_view2
             4
 
-            # DISCARD ALL drops temporary objects.
-            # TODO: Reenable when SQL-529 is fixed: assert that
-            # extra_float_digits is back to its default, once DISCARD ALL
-            # resets session variables on the extended protocol.
             > DISCARD ALL
             ! SELECT * FROM session_state_temp_view2
             contains: unknown catalog item 'session_state_temp_view2'
-            > RESET extra_float_digits
+            >[version<2603600] RESET extra_float_digits
             >[version>=2603600] SHOW extra_float_digits
             1
             >[version<2603600] SHOW extra_float_digits

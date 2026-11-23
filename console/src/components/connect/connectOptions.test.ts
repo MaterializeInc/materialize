@@ -196,6 +196,22 @@ describe("buildMcpSnippet", () => {
       `[mcp_servers.materialize_agent]\nurl = "${BASE_URL}/api/mcp/agent"\nhttp_headers = { "Authorization" = "Basic dG9rZW4=" }`,
     );
   });
+
+  it.each(MCP_SERVERS)(
+    "logs Codex in under the TOML table name for $id",
+    (mcpServer) => {
+      const codex = client("codex");
+      const snippet = buildMcpSnippet({
+        client: codex,
+        server: mcpServer,
+        baseUrl: BASE_URL,
+      });
+      const tableName = snippet.match(/^\[mcp_servers\.(.+)\]/)?.[1];
+      expect(codex.authenticateCommand?.(mcpServer.serverName)).toEqual(
+        `codex mcp login ${tableName}`,
+      );
+    },
+  );
 });
 
 describe("buildMcpInstallLink", () => {

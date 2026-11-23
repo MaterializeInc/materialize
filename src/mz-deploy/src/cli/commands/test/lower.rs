@@ -662,6 +662,17 @@ fn normalize_type(t: &str) -> String {
         "timestamp" | "timestamp without time zone" => "timestamp without time zone".to_string(),
         "timestamptz" | "timestamp with time zone" => "timestamp with time zone".to_string(),
 
+        // The function `pg_catalog.format_type` used to spell these arrays with a `_` prefix
+        // rather than a `[]` suffix. Thus we need to create aliases for lock files and mocks written
+        // against an older `format_type`.
+        "_aclitem" => "aclitem[]".to_string(),
+        "_mz_aclitem" => "mz_aclitem[]".to_string(),
+        "_mz_timestamp" => "mz_timestamp[]".to_string(),
+        "_record" => "record[]".to_string(),
+        "_uint2" => "uint2[]".to_string(),
+        "_uint4" => "uint4[]".to_string(),
+        "_uint8" => "uint8[]".to_string(),
+
         _ => {
             if normalized.starts_with("varchar") || normalized.starts_with("character varying") {
                 "text".to_string()
@@ -1594,6 +1605,20 @@ mod tests {
         assert_eq!(normalize_type("uint2"), "uint2");
         assert_eq!(normalize_type("uint4"), "uint4");
         assert_eq!(normalize_type("uint8"), "uint8");
+    }
+
+    #[mz_ore::test]
+    fn test_normalize_type_custom_array_spellings() {
+        assert_eq!(normalize_type("_aclitem"), "aclitem[]");
+        assert_eq!(normalize_type("_mz_aclitem"), "mz_aclitem[]");
+        assert_eq!(normalize_type("_mz_timestamp"), "mz_timestamp[]");
+        assert_eq!(normalize_type("_record"), "record[]");
+        assert_eq!(normalize_type("_uint2"), "uint2[]");
+        assert_eq!(normalize_type("_uint4"), "uint4[]");
+        assert_eq!(normalize_type("_uint8"), "uint8[]");
+        assert_eq!(normalize_type("_UINT4"), "uint4[]");
+        assert_eq!(normalize_type("uint4[]"), "uint4[]");
+        assert_eq!(normalize_type("_uint4"), normalize_type("uint4[]"));
     }
 
     #[mz_ore::test]

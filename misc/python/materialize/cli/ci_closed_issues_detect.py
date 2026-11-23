@@ -32,6 +32,11 @@ ISSUE_RE = re.compile(
     | ( materialize-terraform-self-managed\# | materialize-terraform-self-managed/issues/ ) (?P<materializeterraformselfmanaged>[0-9]+)
     # Linear issue identifiers like linear#SEC-308 or full Linear URLs
     | (linear\# | linear\.app/\S+/issue/) (?P<linear>[A-Z][A-Z0-9]+-[0-9]+)
+    | (?<![\w\[-])
+      (?P<linear_bare>
+        (?:ANA|CDX|CLO|CLU|CNS|CPU|CS|DB|DEP|DEX|EDU|GTM|MZC|OPE|PER|PRD|QAR|SAS|SEC|SQL|SS|STG|WEB)-[0-9]+
+      )
+      (?![\w-])
     # only match from the beginning of the line or after a space character to avoid matching Buildkite URLs
     | (^|\s) \# (?P<ambiguous>[0-9]+)
     )
@@ -47,6 +52,7 @@ GROUP_REPO = {
     "databaseissues": "MaterializeInc/database-issues",
     "materializeterraformselfmanaged": "MaterializeInc/materialize-terraform-self-managed",
     "linear": "linear",
+    "linear_bare": "linear",
     "ambiguous": None,
 }
 
@@ -106,6 +112,7 @@ IGNORE_FILENAME_RE = re.compile(
     ( .*\.(svg|png|jpg|jpeg|avif|avro|ico|woff)
     | doc/developer/design/20230223_stabilize_with_mutually_recursive.md
     | \.(agents|claude)/skills/.*
+    | misc/python/materialize/cli/ci_closed_issues_detect_test\.py
     | test/sqllogictest/cockroach/.*
     )
     """,
@@ -187,10 +194,11 @@ def detect_referenced_issues(filename: str) -> list[IssueRef]:
                 ):
                     continue
 
+                repository = GROUP_REPO[group]
                 issue_refs.append(
                     IssueRef(
-                        GROUP_REPO[group],
-                        issue_id if group == "linear" else int(issue_id),
+                        repository,
+                        issue_id if repository == "linear" else int(issue_id),
                         filename,
                         line_number,
                         text.strip(),
@@ -239,21 +247,10 @@ def is_issue_closed_on_linear(identifier: str) -> bool:
             )
         return False
 
-    parts = identifier.split("-", 1)
-    if len(parts) != 2:
-        return False
-    team_key, number_str = parts
-    try:
-        number = int(number_str)
-    except ValueError:
-        return False
-
     query = """
-    query($teamKey: String!, $number: Float!) {
-      issues(filter: { number: { eq: $number }, team: { key: { eq: $teamKey } } }) {
-        nodes {
-          state { type name }
-        }
+    query($identifier: String!) {
+      issue(id: $identifier) {
+        state { type name }
       }
     }
     """
@@ -261,18 +258,18 @@ def is_issue_closed_on_linear(identifier: str) -> bool:
     response = requests.post(
         "https://api.linear.app/graphql",
         headers={"Authorization": token, "Content-Type": "application/json"},
-        json={"query": query, "variables": {"teamKey": team_key, "number": number}},
+        json={"query": query, "variables": {"identifier": identifier}},
     )
 
     if response.status_code != 200:
         return False
 
     result = response.json()
-    nodes = result.get("data", {}).get("issues", {}).get("nodes", [])
-    if not nodes:
+    issue = (result.get("data") or {}).get("issue")
+    if not issue:
         return False
 
-    state = nodes[0]["state"]
+    state = issue["state"]
     if state["type"] not in LINEAR_CLOSED_STATE_TYPES:
         return False
     return state["name"].lower() not in LINEAR_STALE_STATE_NAMES

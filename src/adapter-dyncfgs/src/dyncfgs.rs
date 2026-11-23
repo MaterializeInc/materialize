@@ -119,14 +119,6 @@ pub const ENABLE_INTROSPECTION_SUBSCRIBES: Config<bool> = Config::new(
     ParameterScope::Environment,
 );
 
-/// Enable sending subscribes down the new frontend-peek path.
-pub const ENABLE_FRONTEND_SUBSCRIBES: Config<bool> = Config::new(
-    "enable_frontend_subscribes",
-    true,
-    "Enable sending subscribes down the new frontend-peek path.",
-    ParameterScope::Environment,
-);
-
 /// The plan insights notice will not investigate fast path clusters if plan optimization took longer than this.
 pub const PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION: Config<Duration> = Config::new(
     "plan_insights_notice_fast_path_clusters_optimize_duration",
@@ -228,7 +220,7 @@ pub const OIDC_GROUP_ROLE_SYNC_STRICT: Config<bool> = Config::new(
 
 pub const PERSIST_FAST_PATH_ORDER: Config<bool> = Config::new(
     "persist_fast_path_order",
-    false,
+    true,
     "If set, send queries with a compatible literal constraint or ordering clause down the Persist fast path.",
     ParameterScope::Environment,
 );
@@ -288,13 +280,13 @@ pub const ENABLE_MCP_DEVELOPER_QUERY_TOOL: Config<bool> = Config::new(
     ParameterScope::Environment,
 );
 
-/// Whether the MCP endpoints serve the 2026-07-28 protocol alongside
-/// 2025-11-25. When off, every request is served as today, including one that
-/// asks for 2026-07-28, so modern clients keep falling back to `initialize`.
-pub const ENABLE_MCP_PROTOCOL_2026_07_28: Config<bool> = Config::new(
-    "enable_mcp_protocol_2026_07_28",
+/// Whether the unified MCP endpoint at `/api/mcp` is enabled. Separate from the
+/// `/api/mcp/agent` and `/api/mcp/developer` flags, so each route rolls out on
+/// its own.
+pub const ENABLE_MCP_UNIFIED: Config<bool> = Config::new(
+    "enable_mcp_unified",
     false,
-    "Whether the MCP endpoints serve the 2026-07-28 protocol revision alongside 2025-11-25. When false, requests are served on the 2025-11-25 protocol only.",
+    "Whether the unified MCP HTTP endpoint is enabled. When false, requests to /api/mcp return 503 Service Unavailable.",
     ParameterScope::Environment,
 );
 
@@ -575,7 +567,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_0DT_HYDRATE_MIGRATED_BUILTIN_MVS)
         .add(&ENABLE_STATEMENT_LIFECYCLE_LOGGING)
         .add(&ENABLE_INTROSPECTION_SUBSCRIBES)
-        .add(&ENABLE_FRONTEND_SUBSCRIBES)
         .add(&PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION)
         .add(&ENABLE_EXPRESSION_CACHE)
         .add(&ENABLE_PASSWORD_AUTH)
@@ -593,7 +584,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_MCP_AGENT_READ_DATA_PRODUCT_TOOL)
         .add(&ENABLE_MCP_DEVELOPER)
         .add(&ENABLE_MCP_DEVELOPER_QUERY_TOOL)
-        .add(&ENABLE_MCP_PROTOCOL_2026_07_28)
+        .add(&ENABLE_MCP_UNIFIED)
         .add(&ENABLE_PUBLIC_METRICS_ENDPOINT)
         .add(&MCP_MAX_RESPONSE_SIZE)
         .add(&MCP_REQUEST_TIMEOUT)

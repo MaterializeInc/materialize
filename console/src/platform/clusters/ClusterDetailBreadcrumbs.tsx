@@ -26,7 +26,11 @@ import AlterClusterMenuItem from "./AlterClusterMenuItem";
 import { useOwners } from "./queries";
 import { useShowSystemObjects } from "./useShowSystemObjects";
 
-export const ClusterDetailBreadcrumbs = (props: { crumbs: Breadcrumb[] }) => {
+export const ClusterDetailBreadcrumbs = (props: {
+  crumbs: Breadcrumb[];
+  /** Off where the page has its own way to alter and drop the cluster. */
+  showActions?: boolean;
+}) => {
   const [showSystemObjects] = useShowSystemObjects();
   const { clusterId, clusterName } = useParams<ClusterParams>();
   const { data: clusters, getClusterById } = useAllClusters();
@@ -74,7 +78,7 @@ export const ClusterDetailBreadcrumbs = (props: { crumbs: Breadcrumb[] }) => {
             label="Show the new cluster details page"
             optOutLabel="Show classic cluster details page"
           />
-          {cluster && (
+          {cluster && props.showActions !== false && (
             <OverflowMenuContainer
               cluster={{ ...cluster, isOwner: isOwner(cluster.ownerId) }}
             />

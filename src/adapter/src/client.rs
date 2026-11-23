@@ -64,13 +64,13 @@ use crate::coord::read_then_write::DependencyPolicy;
 use crate::coord::{Coordinator, ExecuteContextGuard};
 use crate::error::AdapterError;
 use crate::frontend_read_then_write::{
-    FrontendWriteAttemptState, FrontendWriteCancellation, contains_mz_now,
-    validate_selection_dependencies,
+    WriteAttemptState, WriteCancellation, contains_mz_now, validate_selection_dependencies,
 };
 use crate::metrics::Metrics;
+use crate::notice::ExecutionTimeKind;
 use crate::optimize::dataflows::{EvalTime, ExprPrepOneShot};
 use crate::optimize::{self, Optimize, OptimizerError};
-use crate::peek_client::{CoordinatorClient, ExecutionLogging, TakeOver};
+use crate::peek_client::{CoordinatorClient, ExecutionLogging, PeekCancelSafety, TakeOver};
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, SessionConfig, StateRevision, TransactionId,
     TransactionStatus,
@@ -78,7 +78,10 @@ use crate::session::{
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use crate::telemetry::{self, EventDetails, SegmentClientExt, StatementFailureType};
 use crate::webhook::AppendWebhookResponse;
-use crate::{AdapterNotice, AppendWebhookError, PeekClient, PeekResponseUnary, StartupResponse};
+use crate::{
+    AdapterNotice, AppendWebhookError, ExecutionTime, PeekClient, PeekResponseUnary,
+    StartupResponse,
+};
 
 /// A handle to a running coordinator.
 ///
@@ -294,6 +297,7 @@ impl Client {
         // handle termination.
         // Build the PeekClient with controller handles returned from startup.
         let StartupResponse {
+            connection_peeks,
             role_id,
             write_notify,
             session_defaults,
@@ -307,10 +311,12 @@ impl Client {
             occ_write_semaphore,
             group_commit_notifier,
             read_only,
+            frontend_cancel_rx,
         } = response;
 
         let peek_client = PeekClient::new(
             CoordinatorClient::Session(self.clone()),
+            connection_peeks,
             &catalog,
             storage_collections,
             transient_id_gen,
@@ -329,6 +335,8 @@ impl Client {
             environment_id: self.environment_id.clone(),
             segment_client: self.segment_client.clone(),
             peek_client,
+            enable_frontend_transaction_completion: false,
+            frontend_cancel_rx,
         };
 
         let session = client.session();
@@ -467,6 +475,11 @@ Issue a SQL query to get started. Need help?
             }
         }
 
+        let enable_frontend_transaction_completion =
+            mz_sql::session::vars::ENABLE_FRONTEND_TRANSACTION_COMPLETION
+                .require(catalog.system_vars())
+                .is_ok();
+        client.enable_frontend_transaction_completion = enable_frontend_transaction_completion;
         Ok(client)
     }
 
@@ -648,6 +661,8 @@ pub struct SessionClient {
     environment_id: EnvironmentId,
     /// Client for frontend peek sequencing; populated at connection startup.
     peek_client: PeekClient,
+    enable_frontend_transaction_completion: bool,
+    frontend_cancel_rx: tokio::sync::watch::Receiver<()>,
 }
 
 impl SessionClient {
@@ -799,6 +814,7 @@ impl SessionClient {
         outer_ctx_extra: Option<ExecuteContextGuard>,
     ) -> Result<(ExecuteResponse, Instant), AdapterError> {
         let execute_started = Instant::now();
+        self.frontend_cancel_rx.borrow_and_update();
         let cancel_future = cancel_future.map(|_| ()).shared();
 
         // Owning the end-of-execution obligation in this frame is what lets
@@ -825,8 +841,8 @@ impl SessionClient {
         cancel_future: impl Future<Output = ()> + Send + Clone,
     ) -> Result<ExecuteResponse, AdapterError> {
         // Unroll SQL `EXECUTE <prepared> (...)` so the inner statement
-        // flows through `try_frontend_peek` /
-        // `try_frontend_read_then_write` below, rather than being
+        // flows through `try_peek` /
+        // `try_read_then_write` below, rather than being
         // re-dispatched via `Command::Execute` from the coordinator's
         // `Plan::Execute` handler. Without this, a prepared statement
         // would route differently from the same statement issued
@@ -840,8 +856,9 @@ impl SessionClient {
 
         // Attempt peek sequencing in the session task.
         // If unsupported, fall back to the Coordinator path.
-        // TODO(peek-seq): wire up cancel_future
-        let peek_result = self.try_frontend_peek(&portal_name, logging).await?;
+        let peek_result = self
+            .try_peek(&portal_name, logging, cancel_future.clone())
+            .await?;
         if let Some(resp) = peek_result {
             debug!("frontend peek succeeded");
             return Ok(resp);
@@ -850,7 +867,7 @@ impl SessionClient {
 
         // Attempt read-then-write sequencing in the session task.
         let rtw_result = self
-            .try_frontend_read_then_write_with_cancel(&portal_name, logging, cancel_future.clone())
+            .try_read_then_write_with_cancel(&portal_name, logging, cancel_future.clone())
             .await?;
         if let Some(resp) = rtw_result {
             debug!("frontend read-then-write succeeded");
@@ -876,8 +893,8 @@ impl SessionClient {
     /// If the named portal binds a SQL `EXECUTE <prepared>`, resolve the
     /// prepared statement, install a fresh portal for the inner statement
     /// (carrying the EXECUTE's actual parameter values), and return that
-    /// portal's name so the caller can run `try_frontend_peek` /
-    /// `try_frontend_read_then_write` against it.
+    /// portal's name so the caller can run `try_peek` /
+    /// `try_read_then_write` against it.
     ///
     /// Only ever unrolls one level: the parser rejects
     /// `PREPARE foo AS EXECUTE bar` (matching Postgres), so the inner
@@ -895,8 +912,8 @@ impl SessionClient {
             let session = self.session.as_ref().expect("SessionClient invariant");
             let portal = match session.get_portal_unverified(&portal_name) {
                 Some(p) => p,
-                // No portal: let `try_frontend_peek` /
-                // `try_frontend_read_then_write` surface the
+                // No portal: let `try_peek` /
+                // `try_read_then_write` surface the
                 // standard "missing portal" error.
                 None => return Ok(portal_name),
             };
@@ -1059,6 +1076,17 @@ impl SessionClient {
         &mut self,
         action: EndTransactionAction,
     ) -> Result<ExecuteResponse, AdapterError> {
+        if self.enable_frontend_transaction_completion {
+            if let Some(completion) = self.session().read_only_completion(action) {
+                return crate::frontend_transaction::complete_read_only_transaction(
+                    self.session.as_mut().expect("session invariant violated"),
+                    &mut self.peek_client,
+                    &mut self.frontend_cancel_rx,
+                    completion,
+                )
+                .await;
+            }
+        }
         let res = self
             .send(|tx, session| Command::Commit {
                 action,
@@ -1071,6 +1099,28 @@ impl SessionClient {
         // any data that the Coordinator must act on for correctness.
         let _ = self.session().clear_transaction();
         res
+    }
+
+    /// Settles a statement whose result is about to be reported. If `commit_implicit_transaction`
+    /// and the session is in an implicit transaction, commits it first, which clears the session's
+    /// transaction state, portals included. Returns the parameters the commit reverted, or the
+    /// commit's error.
+    ///
+    /// Committing before the result means that a client sees the statement's success or the
+    /// commit's failure, never both, as with the last statement of a simple query in PostgreSQL
+    /// (`exec_simple_query`).
+    pub async fn settle_statement(
+        &mut self,
+        commit_implicit_transaction: bool,
+    ) -> Result<SettledStatement, AdapterError> {
+        let mut reverted = BTreeMap::new();
+        if commit_implicit_transaction && self.session().transaction().is_implicit() {
+            let response = self.end_transaction(EndTransactionAction::Commit).await?;
+            if let ExecuteResponse::TransactionCommitted { params } = response {
+                reverted = params;
+            }
+        }
+        Ok(SettledStatement { reverted })
     }
 
     /// Fails a transaction.
@@ -1354,10 +1404,8 @@ impl SessionClient {
                 | Command::ExecuteCopyTo { .. }
                 | Command::ExecuteSideEffectingFunc { .. }
                 | Command::LookupConnection { .. }
-                | Command::RegisterFrontendPeek { .. }
-                | Command::UnregisterFrontendPeek { .. }
+                | Command::InstallPeekWatchSets { .. }
                 | Command::ExplainTimestamp { .. }
-                | Command::FrontendStatementLogging(..)
                 | Command::InjectAuditEvents { .. }
                 | Command::RegisterConnectionCancelWatch { .. }
                 | Command::CreateInternalSubscribe { .. }
@@ -1440,15 +1488,42 @@ impl SessionClient {
     /// Returns `Ok(Some(response))` if we handled the peek, or `Ok(None)` if the statement is
     /// not one that the frontend peek sequencing handles, in which case the Coordinator sequences
     /// it. If it returns an error, it should be returned to the user.
-    pub(crate) async fn try_frontend_peek(
+    pub(crate) async fn try_peek(
         &mut self,
         portal_name: &str,
         logging: &mut ExecutionLogging,
+        connection_closed: impl Future<Output = ()> + Send,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
+        let connection = Arc::clone(self.peek_client.connection_peeks());
+        let mut cancellation = self.frontend_cancel_rx.clone();
+        let cancel_safety = PeekCancelSafety::new();
         let session = self.session.as_mut().expect("SessionClient invariant");
-        self.peek_client
-            .try_frontend_peek(portal_name, session, logging)
-            .await
+        let attempt = self
+            .peek_client
+            .try_peek(portal_name, session, logging, &cancel_safety);
+        tokio::pin!(attempt);
+        let connection_cancel = async move {
+            if cancellation.changed().await.is_err() {
+                futures::future::pending::<()>().await;
+            }
+        };
+        tokio::select! {
+            biased;
+            _ = connection_cancel => {}
+            _ = connection_closed => {}
+            result = &mut attempt => return result,
+        }
+        if cancel_safety.can_abort() {
+            // Invalidate registration's execution epoch before dropping
+            // the future. Commands already queued for slow peeks carry
+            // the same lifecycle and cannot issue after this cancellation.
+            connection.cancel();
+            Err(AdapterError::Canceled)
+        } else {
+            // A non-peek command can already have a side effect. Dropping
+            // its waiter would lose its definitive response and ownership.
+            attempt.await
+        }
     }
 
     /// Whether the frontend read-then-write path could take this portal over.
@@ -1458,7 +1533,7 @@ impl SessionClient {
     /// the peek path is tested against it. Everything expensive, including the
     /// coordinator round-trip that registers the connection cancel watch, sits
     /// behind it.
-    fn frontend_read_then_write_applies(&self, portal_name: &str) -> bool {
+    fn read_then_write_applies(&self, portal_name: &str) -> bool {
         let session = self.session.as_ref().expect("SessionClient invariant");
         match session.get_portal_unverified(portal_name) {
             Some(portal) => portal
@@ -1474,12 +1549,12 @@ impl SessionClient {
     ///
     /// Returns `Ok(None)` when the statement is not eligible for this path and
     /// the caller must fall back to the coordinator, either because
-    /// `try_frontend_read_then_write` declined it or because this wrapper did.
+    /// `try_read_then_write` declined it or because this wrapper did.
     ///
     /// Cancellation and statement timeout are never reported for a write that
     /// may have committed. Once a write has been submitted we await its
     /// definitive result instead of returning the cancellation.
-    async fn try_frontend_read_then_write_with_cancel(
+    async fn try_read_then_write_with_cancel(
         &mut self,
         portal_name: &str,
         logging: &mut ExecutionLogging,
@@ -1489,14 +1564,15 @@ impl SessionClient {
         // synchronous round-trip through the coordinator's command loop. A
         // statement this path will not take over must not pay for it, and must
         // not add queueing latency for other sessions either.
-        if !self.frontend_read_then_write_applies(portal_name) {
+        if !self.read_then_write_applies(portal_name) {
             return Ok(None);
         }
 
+        self.session().require_coordinator_completion();
         let conn_id = self.session().conn_id().clone();
         let statement_timeout = *self.session().vars().statement_timeout();
         let inner_client = self.inner().clone();
-        let attempt_state = Arc::new(FrontendWriteAttemptState::new());
+        let attempt_state = Arc::new(WriteAttemptState::new());
 
         let mut cancel_future = pin::pin!(cancel_future);
         let statement_timeout = async move {
@@ -1547,15 +1623,15 @@ impl SessionClient {
         };
         tokio::pin!(connection_cancel);
 
-        let frontend_read_then_write =
-            self.try_frontend_read_then_write(portal_name, logging, Arc::clone(&attempt_state));
-        tokio::pin!(frontend_read_then_write);
+        let read_then_write =
+            self.try_read_then_write(portal_name, logging, Arc::clone(&attempt_state));
+        tokio::pin!(read_then_write);
 
         let requested = tokio::select! {
-            response = &mut frontend_read_then_write => return response,
-            _ = &mut cancel_future => FrontendWriteCancellation::Canceled,
-            _ = &mut connection_cancel => FrontendWriteCancellation::Canceled,
-            _ = &mut statement_timeout => FrontendWriteCancellation::StatementTimeout,
+            response = &mut read_then_write => return response,
+            _ = &mut cancel_future => WriteCancellation::Canceled,
+            _ = &mut connection_cancel => WriteCancellation::Canceled,
+            _ = &mut statement_timeout => WriteCancellation::StatementTimeout,
         };
 
         attempt_state.request(requested);
@@ -1569,7 +1645,7 @@ impl SessionClient {
 
         // A submitted write can already be durable. Await its definitive result
         // rather than reporting cancellation or timeout incorrectly.
-        frontend_read_then_write.await
+        read_then_write.await
     }
 
     /// Attempt to sequence a read-then-write (DELETE/UPDATE/INSERT INTO ..
@@ -1578,13 +1654,13 @@ impl SessionClient {
     /// Returns `Ok(Some(response))` if we handled the operation, or `Ok(None)`
     /// to fall back to the Coordinator's sequencing. If it returns an error, it
     /// should be returned to the user.
-    async fn try_frontend_read_then_write(
+    async fn try_read_then_write(
         &mut self,
         portal_name: &str,
         logging: &mut ExecutionLogging,
-        attempt_state: Arc<FrontendWriteAttemptState>,
+        attempt_state: Arc<WriteAttemptState>,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
-        let catalog = self.catalog_snapshot("try_frontend_read_then_write").await;
+        let catalog = self.catalog_snapshot("try_read_then_write").await;
 
         let stmt = {
             let session = self.session.as_ref().expect("SessionClient invariant");
@@ -1759,11 +1835,11 @@ impl SessionClient {
         }
 
         // Wait for any in-flight startup builtin-table appends that this plan
-        // depends on. Mirrors the frontend_peek and coordinator sequencer
-        // paths, and is a no-op for plans that don't depend on builtin tables.
+        // depends on. Mirrors the frontend peek sequencing, and is a no-op for
+        // plans that don't depend on builtin tables.
         {
             let session = self.session.as_mut().expect("SessionClient invariant");
-            if let Some((_, wait_future)) =
+            if let Some(wait_future) =
                 crate::coord::appends::waiting_on_startup_appends(&catalog, session, &plan)
             {
                 wait_future.await;
@@ -1773,7 +1849,7 @@ impl SessionClient {
         // `allows_writes` is only defined inside a transaction, which is also
         // the only place it can be false: outside one the session task opens a
         // fresh transaction with no ops. Autocommit statements therefore rely on
-        // the check in `PeekClient::frontend_read_then_write` instead.
+        // the check in `PeekClient::session_read_then_write` instead.
         {
             let session = self.session.as_ref().expect("SessionClient invariant");
             if session.transaction().is_in_multi_statement_transaction()
@@ -1912,7 +1988,7 @@ impl SessionClient {
         };
 
         // The syntactic predicate for "reads persisted state", see the module
-        // docs on `frontend_read_then_write`. Inside a transaction, only a write
+        // docs on `session_read_then_write`. Inside a transaction, only a write
         // that reads nothing can run on this path.
         //
         // The AST gate above is not enough to establish this. It admits
@@ -1946,7 +2022,7 @@ impl SessionClient {
 
         let session = self.session.as_mut().expect("SessionClient invariant");
         self.peek_client
-            .frontend_read_then_write(
+            .session_read_then_write(
                 session,
                 rtw_plan,
                 target_cluster,
@@ -2120,6 +2196,15 @@ impl Timeout {
     }
 }
 
+/// Additions to a statement's result that are known only after any commit that the result waits
+/// for, such as the session parameters that the commit reverted.
+#[derive(Debug)]
+pub struct SettledStatement {
+    /// Session parameters that committing the statement's implicit transaction reverted, if any,
+    /// such as a value set with `SET LOCAL`.
+    pub reverted: BTreeMap<&'static str, String>,
+}
+
 /// A wrapper around a Stream of PeekResponseUnary that records when it sees the
 /// first row data in the given histogram. It also keeps track of whether we have already observed
 /// the end of the underlying stream.
@@ -2142,6 +2227,8 @@ pub struct RecordFirstRowStream {
     pub no_more_rows: bool,
     /// Whether the first-to-last-byte metric has already been recorded for this stream.
     pub metric_recorded: bool,
+    execution_time: Option<ExecutionTime>,
+    execution_time_reported: bool,
 }
 
 impl RecordFirstRowStream {
@@ -2162,6 +2249,8 @@ impl RecordFirstRowStream {
             recorded_first_row_instant: None,
             no_more_rows: false,
             metric_recorded: false,
+            execution_time: None,
+            execution_time_reported: false,
         }
     }
 
@@ -2194,7 +2283,7 @@ impl RecordFirstRowStream {
     }
 
     pub async fn recv(&mut self) -> Option<PeekResponseUnary> {
-        let msg = self.rows.next().await;
+        let mut msg = self.rows.next().await;
         if !self.saw_rows && matches!(msg, Some(PeekResponseUnary::Rows(_))) {
             self.saw_rows = true;
             self.time_to_first_row_seconds
@@ -2204,7 +2293,36 @@ impl RecordFirstRowStream {
         if msg.is_none() {
             self.no_more_rows = true;
         }
+        if self.execution_time.is_none() && !self.execution_time_reported {
+            let kind = match &mut msg {
+                // An empty batch does not end the interval. A stashed result can start with an
+                // empty inline batch, and an `OFFSET` can empty whole stashed batches.
+                Some(PeekResponseUnary::Rows(rows)) => {
+                    rows.peek().is_some().then_some(ExecutionTimeKind::FirstRow)
+                }
+                None => Some(ExecutionTimeKind::EmptyResult),
+                _ => None,
+            };
+            self.execution_time = kind.map(|kind| ExecutionTime {
+                kind,
+                elapsed: self.execute_started.elapsed(),
+            });
+        }
         msg
+    }
+
+    /// Disables execution time notices for an unbounded subscription.
+    pub fn without_execution_time(mut self) -> Self {
+        self.execution_time = None;
+        self.execution_time_reported = true;
+        self
+    }
+
+    /// Takes the timing on the first execution step only, if a row or EOF was observed.
+    /// Later steps must not include a client's pause, even if the first step was `FETCH 0`.
+    pub fn take_execution_time(&mut self) -> Option<ExecutionTime> {
+        self.execution_time_reported = true;
+        self.execution_time.take()
     }
 }
 

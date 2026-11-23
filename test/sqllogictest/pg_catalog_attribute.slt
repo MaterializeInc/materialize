@@ -171,15 +171,15 @@ where
 order by
     attr.attnum;
 ----
-c_int4  NULL  false  true  false  true  0  base  int4  false
-c_text  NULL  false  true  false  true  0  base  text  false
-c_int4_array  NULL  false  true  false  true  1  base  int4  false
-c_text_array  NULL  false  true  false  true  1  base  text  false
-c_int4_list  NULL  false  true  false  true  0  NULL  list  false
-c_text_list  NULL  false  true  false  true  0  NULL  list  false
-c_int4_list_list  NULL  false  true  false  true  0  NULL  list  false
-c_int4_list_list_list  NULL  false  true  false  true  0  NULL  list  false
-c_int4_named_list  NULL  false  true  false  true  0  base  int4_named_list  false
+c_int4  NULL  false  true  false  false  0  base  int4  false
+c_text  NULL  false  true  false  false  0  base  text  false
+c_int4_array  NULL  false  true  false  false  1  base  int4  false
+c_text_array  NULL  false  true  false  false  1  base  text  false
+c_int4_list  NULL  false  true  false  false  0  NULL  list  false
+c_text_list  NULL  false  true  false  false  0  NULL  list  false
+c_int4_list_list  NULL  false  true  false  false  0  NULL  list  false
+c_int4_list_list_list  NULL  false  true  false  false  0  NULL  list  false
+c_int4_named_list  NULL  false  true  false  false  0  base  int4_named_list  false
 
 # Test that pg_type.typelem is correctly populated for named list types.
 # Named list types (created via CREATE TYPE) should have typelem pointing to their element type.

@@ -26,6 +26,7 @@ use mz_dyncfg::{Config, ParameterScope};
 use mz_ore::cast::CastLossy;
 use mz_ore::halt;
 use mz_ore::instrument;
+use mz_ore::process::halt_with_code;
 use mz_ore::task::JoinHandle;
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::columnar::{ColumnDecoder, Schema};
@@ -348,15 +349,26 @@ where
                     self.frontier,
                     lease
                 )
-            } else {
-                // Ideally we'd percolate this error up, so callers could eg. restart a dataflow
-                // instead of restarting a process...
+            } else if self.handle.machine.applier.is_tombstone() {
+                // Finalizing the shard removes every reader, which is not a lost lease.
                 halt!(
-                    "Listen on {} received a batch {:?} advanced past the listen frontier {:?} after the reader has expired. \
-                     This can happen in exceptional cases: a machine goes to sleep or is running out of memory or CPU, for example.",
+                    "Listen on {} received a batch {:?} advanced past the listen frontier {:?} after the shard was tombstoned",
                     self.handle.machine.shard_id(),
                     batch.desc,
                     self.frontier
+                )
+            } else {
+                // Ideally we'd percolate this error up, so callers could eg. restart a dataflow
+                // instead of restarting a process...
+                halt_with_code(
+                    READER_LEASE_EXPIRED_EXIT_CODE,
+                    format_args!(
+                        "Listen on {} received a batch {:?} advanced past the listen frontier {:?} after the reader has expired. \
+                     This can happen in exceptional cases: a machine goes to sleep or is running out of memory or CPU, for example.",
+                        self.handle.machine.shard_id(),
+                        batch.desc,
+                        self.frontier
+                    ),
                 )
             }
         }
@@ -610,6 +622,13 @@ pub struct ReadHandle<K: Codec, V: Codec, T, D> {
     pub(crate) hold_state: AwaitableState<ReadHolds<T>>,
     pub(crate) unexpired_state: Option<UnexpiredReadHandleState>,
 }
+
+/// The exit code of a process halted because a live reader lost its lease.
+///
+/// Distinct from [`halt!`]'s 166 so alerting can tell a lost lease from a
+/// routine restart; cloud alerting matches on it. Under Kubernetes the pod is
+/// restarted (with crash backoff), as for any non-zero exit.
+pub const READER_LEASE_EXPIRED_EXIT_CODE: i32 = 168;
 
 /// Length of time after a reader's last operation after which the reader may be
 /// expired.

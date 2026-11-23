@@ -83,7 +83,7 @@ class BuildDataStorage(BaseDataStorage):
         job_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_JOB_ID)
         step_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_STEP_ID)
         step_key = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_STEP_KEY)
-        # TODO: remove NULL casting when database-issues#8100 is resolved
+        # TODO: remove NULL casting when SQL-856 is resolved
         shard_index = buildkite.get_var(
             BuildkiteEnvVar.BUILDKITE_PARALLEL_JOB, "NULL::INT"
         )
@@ -144,7 +144,8 @@ class BuildDataStorage(BaseDataStorage):
         sql_statements.append(f"""
             UPDATE build_job
             SET is_latest_retry = FALSE
-            WHERE build_step_id = {as_sanitized_literal(step_id)}
+            WHERE build_id = {as_sanitized_literal(build_id)}
+            AND build_step_id = {as_sanitized_literal(step_id)}
             AND (shard_index = {shard_index} OR shard_index IS NULL)
             AND build_job_id <> {as_sanitized_literal(job_id)}
             ;

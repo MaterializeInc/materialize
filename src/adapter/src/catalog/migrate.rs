@@ -90,34 +90,6 @@ where
     Ok(())
 }
 
-fn rewrite_items<F>(
-    tx: &mut Transaction<'_>,
-    cat: &ConnCatalog<'_>,
-    mut f: F,
-) -> Result<(), anyhow::Error>
-where
-    F: for<'a> FnMut(
-        &'a mut Transaction<'_>,
-        &'a &ConnCatalog<'_>,
-        CatalogItemId,
-        &'a mut Statement<Raw>,
-    ) -> Result<(), anyhow::Error>,
-{
-    let mut updated_items = BTreeMap::new();
-    let items = tx.get_items();
-    for mut item in items {
-        let mut stmt = mz_sql::parse::parse(&item.create_sql)?.into_element().ast;
-
-        f(tx, &cat, item.id, &mut stmt)?;
-
-        item.create_sql = stmt.to_ast_string_stable();
-
-        updated_items.insert(item.id, item);
-    }
-    tx.update_items(updated_items)?;
-    Ok(())
-}
-
 pub(crate) struct MigrateResult {
     pub(crate) builtin_table_updates: Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
     pub(crate) catalog_updates: Vec<ParsedStateUpdate>,
@@ -158,6 +130,7 @@ pub(crate) async fn migrate(
         ast_rewrite_kafka_metadata_refresh_intervals(stmt)?;
         ast_rewrite_small_commit_intervals(stmt)?;
         ast_rewrite_strip_builtin_version_pins(stmt)?;
+        ast_rewrite_strip_unsupported_column_collations(stmt)?;
         Ok(())
     })?;
 
@@ -204,32 +177,11 @@ pub(crate) async fn migrate(
 
     info!("migrating from catalog version {:?}", catalog_version);
 
-    let conn_cat = state.for_system_session();
-
     // Special block for `ast_rewrite_sources_to_tables` migration
     // since it requires a feature flag needs to update multiple AST items at once.
     if force_source_table_syntax {
-        rewrite_sources_to_tables(tx, &conn_cat)?;
+        rewrite_sources_to_tables(tx, &state.for_system_session())?;
     }
-
-    rewrite_items(tx, &conn_cat, |_tx, _conn_cat, _id, _stmt| {
-        let _catalog_version = catalog_version.clone();
-        // Add per-item, post-planning AST migrations below. Most
-        // migrations should be in the above `rewrite_ast_items` block.
-        //
-        // Each migration should be a function that takes `item` (the AST
-        // representing the creation SQL for the item) as input. Any
-        // mutations to `item` will be staged for commit to the catalog.
-        //
-        // Be careful if you reference `conn_cat`. Doing so is *weird*,
-        // as you'll be rewriting the catalog while looking at it. If
-        // possible, make your migration independent of `conn_cat`, and only
-        // consider a single item at a time.
-        //
-        // Migration functions may also take `tx` as input to stage
-        // arbitrary changes to the catalog.
-        Ok(())
-    })?;
 
     if force_source_table_syntax {
         state
@@ -416,7 +368,9 @@ fn rewrite_sources_to_tables(
         match &mut connection {
             CreateSourceConnection::Postgres { options, .. } => {
                 options.retain(|o| match o.name {
-                    PgConfigOptionName::Details | PgConfigOptionName::Publication => true,
+                    PgConfigOptionName::Details
+                    | PgConfigOptionName::Publication
+                    | PgConfigOptionName::Failover => true,
                     PgConfigOptionName::TextColumns | PgConfigOptionName::ExcludeColumns => false,
                 });
             }
@@ -832,8 +786,7 @@ pub(crate) fn durable_migrate(
         .get_setting(MOCK_AUTHENTICATION_NONCE_KEY.to_string())
         .is_none()
     {
-        let mut nonce = [0u8; 24];
-        openssl::rand::rand_bytes(&mut nonce).expect("failed to generate nonce");
+        let nonce: [u8; 24] = rand::random();
         let nonce = BASE64_STANDARD.encode(nonce);
         tx.set_setting(MOCK_AUTHENTICATION_NONCE_KEY.to_string(), Some(nonce))?;
     }
@@ -1267,6 +1220,24 @@ fn ast_rewrite_small_commit_intervals(stmt: &mut Statement<Raw>) -> Result<(), a
     rewrite_interval_option_floor_1s(interval, "commit interval")
 }
 
+/// Planning rejects unsupported column collations, but `CREATE TABLE` used to
+/// accept and ignore them. Strip them so the table still plans after an
+/// upgrade. The planner never applied them, so the table's columns are
+/// unchanged.
+fn ast_rewrite_strip_unsupported_column_collations(
+    stmt: &mut Statement<Raw>,
+) -> Result<(), anyhow::Error> {
+    let Statement::CreateTable(stmt) = stmt else {
+        return Ok(());
+    };
+    for column in &mut stmt.columns {
+        column
+            .collation
+            .take_if(|collation| !mz_sql::plan::is_supported_collation(collation));
+    }
+    Ok(())
+}
+
 /// Rewrites an interval option value to `'1s'` if it is below 1 second.
 fn rewrite_interval_option_floor_1s(
     value: &mut mz_sql::ast::WithOptionValue<Raw>,
@@ -1332,6 +1303,22 @@ mod tests {
         );
         assert!(!out.contains("VERSION"), "unexpected version: {out}");
         assert!(out.contains("s518"), "reference dropped: {out}");
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` (SQL parser stack growth)
+    fn strips_unsupported_column_collations() {
+        let mut stmt = mz_sql::parse::parse(
+            r#"CREATE TABLE "materialize"."public"."t" ("a" [s20 AS "pg_catalog"."text"] COLLATE "unicode", "b" [s21 AS "pg_catalog"."int4"] COLLATE "nonexistent", "c" [s20 AS "pg_catalog"."text"] COLLATE "pg_catalog"."default" NOT NULL)"#,
+        )
+        .expect("test sql parses")
+        .into_element()
+        .ast;
+        ast_rewrite_strip_unsupported_column_collations(&mut stmt).expect("rewrite succeeds");
+        assert_eq!(
+            stmt.to_ast_string_stable(),
+            r#"CREATE TABLE "materialize"."public"."t" ("a" [s20 AS "pg_catalog"."text"], "b" [s21 AS "pg_catalog"."int4"], "c" [s20 AS "pg_catalog"."text"] COLLATE "pg_catalog"."default" NOT NULL)"#,
+        );
     }
 
     fn add_doc_on_ids(

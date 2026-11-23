@@ -20,7 +20,8 @@ SERVICES = [
     Service(
         name="ruby",
         config={
-            "image": "ruby:3.2.2-bookworm",
+            # renovate: datasource=docker depName=ruby versioning=docker
+            "image": "ruby:3.4.13-bookworm@sha256:a3d6cdfcefbf681f482be2ad848207f42193745d35695abe3a56327f45bdb515",
             "volumes": [
                 "../../../:/workdir",
             ],

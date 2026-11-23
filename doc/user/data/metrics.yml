@@ -273,6 +273,31 @@ metrics:
   - source
   source: src/balancerd/src/lib.rs
   visibility: internal
+- name: mz_balancer_connection_duration_seconds_bucket
+  help: >-
+    Time from accepting a connection until it closes, for connections that reach
+    proxying.
+  labels:
+  - le
+  - source
+  source: src/balancerd/src/lib.rs
+  visibility: internal
+- name: mz_balancer_connection_duration_seconds_count
+  help: >-
+    Time from accepting a connection until it closes, for connections that reach
+    proxying.
+  labels:
+  - source
+  source: src/balancerd/src/lib.rs
+  visibility: internal
+- name: mz_balancer_connection_duration_seconds_sum
+  help: >-
+    Time from accepting a connection until it closes, for connections that reach
+    proxying.
+  labels:
+  - source
+  source: src/balancerd/src/lib.rs
+  visibility: internal
 - name: mz_balancer_connection_high_watermark
   help: Connections at which balancerd leaves load balancer rotation, 0 if disabled.
   source: src/balancerd/src/lib.rs
@@ -291,8 +316,36 @@ metrics:
   help: Count of connections refused because the connection limit was reached.
   source: src/balancerd/src/lib.rs
   visibility: internal
+- name: mz_balancer_connection_setup_duration_seconds_bucket
+  help: >-
+    Time from accepting a connection until proxying it to environmentd begins, for
+    connections that reach proxying.
+  labels:
+  - le
+  - source
+  source: src/balancerd/src/lib.rs
+  visibility: internal
+- name: mz_balancer_connection_setup_duration_seconds_count
+  help: >-
+    Time from accepting a connection until proxying it to environmentd begins, for
+    connections that reach proxying.
+  labels:
+  - source
+  source: src/balancerd/src/lib.rs
+  visibility: internal
+- name: mz_balancer_connection_setup_duration_seconds_sum
+  help: >-
+    Time from accepting a connection until proxying it to environmentd begins, for
+    connections that reach proxying.
+  labels:
+  - source
+  source: src/balancerd/src/lib.rs
+  visibility: internal
 - name: mz_balancer_connection_status
-  help: Count of completed network connections, by status
+  help: >-
+    Count of completed network connections, by status. `error` means balancerd or
+    its backend could not serve the connection. Connections the client ended or failed
+    count as `success`.
   labels:
   - source
   - status
@@ -351,6 +404,34 @@ metrics:
   labels:
   - has_sni
   - tenant
+  source: src/balancerd/src/lib.rs
+  visibility: internal
+- name: mz_balancer_tls_handshake_failures_total
+  help: >-
+    Count of client TLS handshakes that failed. Rises when clients reject the
+    certificate balancerd presents, as well as with scanners and misconfigured clients,
+    none of which count as an `error` connection status.
+  labels:
+  - source
+  source: src/balancerd/src/lib.rs
+  visibility: internal
+- name: mz_balancer_upstream_connect_duration_seconds_bucket
+  help: Time to open a TCP connection to environmentd, for connections that succeed.
+  labels:
+  - le
+  - source
+  source: src/balancerd/src/lib.rs
+  visibility: internal
+- name: mz_balancer_upstream_connect_duration_seconds_count
+  help: Time to open a TCP connection to environmentd, for connections that succeed.
+  labels:
+  - source
+  source: src/balancerd/src/lib.rs
+  visibility: internal
+- name: mz_balancer_upstream_connect_duration_seconds_sum
+  help: Time to open a TCP connection to environmentd, for connections that succeed.
+  labels:
+  - source
   source: src/balancerd/src/lib.rs
   visibility: internal
 - name: mz_bytes_read_total
@@ -629,54 +710,6 @@ metrics:
   - stage
   source: src/timely-util/src/columnar/chunk/metrics.rs
   visibility: internal
-- name: mz_column_pager_budget_configured_bytes
-  help: Most-recently-configured total budget for the column-pager tiered policy.
-  source: src/timely-util/src/column_pager/metrics.rs
-  visibility: internal
-- name: mz_column_pager_budget_remaining_bytes
-  help: >-
-    Bytes the column-pager tiered policy currently has available for resident
-    columns.
-  source: src/timely-util/src/column_pager/metrics.rs
-  visibility: internal
-- name: mz_column_pager_paged_bytes_in_total
-  help: >-
-    Total uncompressed bytes handed to the pager for pageout, before any codec is
-    applied.
-  source: src/timely-util/src/column_pager/metrics.rs
-  visibility: internal
-- name: mz_column_pager_paged_bytes_out_total
-  help: Total on-storage bytes after codec / padding.
-  source: src/timely-util/src/column_pager/metrics.rs
-  visibility: internal
-- name: mz_column_pager_pagein_bytes_total
-  help: Total uncompressed bytes delivered by page-in.
-  source: src/timely-util/src/column_pager/metrics.rs
-  visibility: internal
-- name: mz_column_pager_pageins_total
-  help: Successful page-ins from `ColumnPager::take`.
-  source: src/timely-util/src/column_pager/metrics.rs
-  visibility: internal
-- name: mz_column_pager_pageouts_total
-  help: Pager decisions that paged the chunk out.
-  source: src/timely-util/src/column_pager/metrics.rs
-  visibility: internal
-- name: mz_column_pager_resident_released_bytes_total
-  help: Total bytes returned to the budget by ticket drops.
-  source: src/timely-util/src/column_pager/metrics.rs
-  visibility: internal
-- name: mz_column_pager_resident_released_total
-  help: Resident-ticket drops returning budget.
-  source: src/timely-util/src/column_pager/metrics.rs
-  visibility: internal
-- name: mz_column_pager_skip_bytes_total
-  help: Total bytes kept resident by skip decisions.
-  source: src/timely-util/src/column_pager/metrics.rs
-  visibility: internal
-- name: mz_column_pager_skip_decisions_total
-  help: Pager decisions that kept the chunk resident.
-  source: src/timely-util/src/column_pager/metrics.rs
-  visibility: internal
 - name: mz_column_pool_admissions_budget_total
   help: >-
     Evicted chunks re-admitted to compressed-but-resident by an admitting read out
@@ -695,6 +728,16 @@ metrics:
     backed victim of the same size class.
   source: src/timely-util/src/pool_config/metrics.rs
   visibility: internal
+- name: mz_column_pool_backend
+  help: "The extent store the buffer pool runs on: 1 for the labeled backend, 0 for the others."
+  labels:
+  - backend
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_backend_fallback
+  help: "1 if the buffer pool was configured for the file store and installed on swap instead, else 0. Covers installation only: a store that later disables writes on an I/O error reports through mz_column_pool_extent_file_write_errors_total."
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
 - name: mz_column_pool_direct_extent_inserts_total
   help: Inserts written directly to an extent because resident admission was full.
   source: src/timely-util/src/pool_config/metrics.rs
@@ -710,7 +753,7 @@ metrics:
   source: src/timely-util/src/pool_config/metrics.rs
   visibility: internal
 - name: mz_column_pool_evictions_compress_total
-  help: Evictions that compressed a chunk into a new swap-backed extent.
+  help: Evictions that compressed a chunk into a new extent.
   source: src/timely-util/src/pool_config/metrics.rs
   visibility: internal
 - name: mz_column_pool_extent_arena_fallbacks_total
@@ -720,17 +763,87 @@ metrics:
   source: src/timely-util/src/pool_config/metrics.rs
   visibility: internal
 - name: mz_column_pool_extent_bytes_written_total
-  help: Compressed bytes written into swap-backed extents.
+  help: Compressed bytes written into extents.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_extent_demotions_elided_total
+  help: >-
+    Extents freed while resident in a reclaimable arena slot, so the free needed no
+    swap or file I/O.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_extent_file_allocated_bytes
+  help: "Bytes the file store holds on the filesystem: slots in use plus free slots whose blocks were not punched."
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_extent_file_bytes
+  help: Slot bytes of live extents demoted to the file store.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_extent_file_capacity_bytes
+  help: The file store's effective capacity in bytes.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_extent_file_full_total
+  help: >-
+    Demotion passes that left an extent in RAM because the file store was full or
+    had writes disabled.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_extent_file_holes_punched_bytes_total
+  help: Bytes of free file store slots returned to the filesystem.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_extent_file_read_bytes_total
+  help: Page-rounded bytes transferred by file store reads.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_extent_file_read_latency_bucket
+  help: Cumulative count of file store reads that took less than `le` seconds.
+  labels:
+  - le
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_extent_file_reads_total
+  help: Reads of extents demoted to the file store.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_extent_file_repeat_reads_total
+  help: File store reads of extents already read since their demotion.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_extent_file_write_bytes_compressed_total
+  help: Page-rounded bytes of file store demotion writes of compressed extents.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_extent_file_write_bytes_identity_total
+  help: Page-rounded bytes of file store demotion writes of uncompressed extents.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_extent_file_write_errors_total
+  help: File store I/O errors, after which demotion writes are disabled.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_extent_file_writes_inline_total
+  help: File store demotion writes run by inline enforcement rather than spill threads.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_extent_file_writes_total
+  help: >-
+    Demotion writes that reached the file store without error, including those
+    whose chunk was freed before the demotion committed.
   source: src/timely-util/src/pool_config/metrics.rs
   visibility: internal
 - name: mz_column_pool_extent_pageout_incomplete_total
   help: >-
     Pageout passes whose residency observation found pages still resident. Climbing
-    steadily means pages cannot reach the swap device.
+    steadily means pages cannot be moved out of RAM.
   source: src/timely-util/src/pool_config/metrics.rs
   visibility: internal
 - name: mz_column_pool_extent_pageouts_total
-  help: Extents pushed to the swap device by RSS-target enforcement.
+  help: >-
+    Extents pushed out of RAM by RSS-target enforcement, to the swap device or the
+    file store.
   source: src/timely-util/src/pool_config/metrics.rs
   visibility: internal
 - name: mz_column_pool_extent_resident_bytes
@@ -742,8 +855,8 @@ metrics:
 - name: mz_column_pool_extent_unreclaimable_bytes
   help: >-
     Allocation bytes of resident extents the RSS target cannot push out
-    (retry-capped and heap-fallback extents). Climbing steadily means pages cannot reach the
-    swap device.
+    (retry-capped and heap-fallback extents). Climbing steadily means pages cannot be moved out
+    of RAM.
   source: src/timely-util/src/pool_config/metrics.rs
   visibility: internal
 - name: mz_column_pool_frees_total
@@ -1143,6 +1256,14 @@ metrics:
   - respond_immediately
   source: src/adapter/src/metrics.rs
   visibility: internal
+- name: mz_frontend_transaction_completions_total
+  help: Read-only transaction completion attempts owned by the session.
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_frontend_transaction_waits_total
+  help: Session-owned transaction completions that need a fresh oracle check.
+  source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_group_commit_catalog_upper_seconds_bucket
   help: >-
     The time it takes to advance the catalog shard upper for a txns-shard write
@@ -1460,6 +1581,12 @@ metrics:
   labels:
   - immediately_handled
   - type
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_linearize_read_fast_path_total
+  help: >-
+    The number of ordinary strict serializable reads already linearized at
+    transaction end
   source: src/adapter/src/metrics.rs
   visibility: internal
 - name: mz_mcp_requests_total
@@ -2433,6 +2560,10 @@ metrics:
   help: count of LeasedBatchParts that were dropped without being politely returned
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
+- name: mz_persist_lease_expired_live_read
+  help: count of fetches that found their reader's lease had timed out
+  source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_lease_timeout_read
   help: count of readers whose lease timed out
   source: src/persist-client/src/internal/metrics.rs
@@ -3175,8 +3306,20 @@ metrics:
   help: count of fetch_recent_live_diffs that hit the slow path
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
+- name: mz_persist_state_finalized_rollup_assigned
+  help: >-
+    count of rollups assigned on finalized shards, normally two or three per shard
+    (steady growth means a rollup loop)
+  source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_state_force_applied_hostname
   help: count of when hostname diffs needed to be force applied
+  source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
+- name: mz_persist_state_hollow_run_missing_on_delete
+  help: >-
+    count of hollow run blobs found already missing while deleting the parts they
+    reference
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
 - name: mz_persist_state_rollup_at_seqno_migration
@@ -3420,6 +3563,14 @@ metrics:
   - source_id
   - table_name
   source: src/storage/src/metrics/source/postgres.rs
+  visibility: internal
+- name: mz_query_policy_queries_total
+  help: >-
+    Queries rejected by an enforced query policy or only warned by observe-only
+    policies. Each query is counted once.
+  labels:
+  - outcome
+  source: src/adapter/src/metrics.rs
   visibility: internal
 - name: mz_query_total
   help: The total number of queries issued of the given type since process start.
@@ -4481,6 +4632,15 @@ metrics:
     The batch size, of getting values into the upsert state for this source.
     Specific implementations of upsert state may have more detailed metrics about
     sub-batches.
+  labels:
+  - source_id
+  - worker_id
+  source: src/storage/src/metrics/upsert.rs
+  visibility: internal
+- name: mz_storage_upsert_restashed_total
+  help: >-
+    The number of updates the upsert v2 operator extracted from its stash before
+    the persist feedback frontier reached their time, and pushed back.
   labels:
   - source_id
   - worker_id

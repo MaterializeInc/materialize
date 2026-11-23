@@ -12,6 +12,7 @@ import { DataPoint } from "~/platform/clusters/ClusterOverview/types";
 import {
   assignReplicaColors,
   canSwap,
+  currentReplicaColor,
   datumAt,
   groupReplicasByName,
   hasOomBetween,
@@ -300,6 +301,29 @@ describe("assignReplicaColors", () => {
     expect(colors.get("u1")).toBe("purple");
     expect(colors.get("u2")).toBe("blue");
     expect(colors.get("u3")).toBe("purple");
+  });
+});
+
+describe("currentReplicaColor", () => {
+  it("gives current replicas the colors the charts give them beside past ones", () => {
+    const replicas = [
+      { id: "u2", name: "r2" },
+      { id: "u1", name: "r1" },
+    ];
+    const charts = assignReplicaColors(
+      [
+        { id: "u3", name: "r0", isCurrent: false },
+        ...replicas.map((replica) => ({ ...replica, isCurrent: true })),
+      ],
+      ["purple", "blue", "green"],
+    );
+
+    const colorOf = currentReplicaColor(replicas, ["purple", "blue", "green"]);
+
+    expect(replicas.map(({ id }) => colorOf(id))).toEqual(
+      replicas.map(({ id }) => charts.get(id)),
+    );
+    expect(colorOf("u9")).toBe("purple");
   });
 });
 

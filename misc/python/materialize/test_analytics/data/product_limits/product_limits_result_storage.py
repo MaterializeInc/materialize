@@ -35,7 +35,7 @@ class ProductLimitsResultStorage(BaseDataStorage):
         sql_statements = []
 
         for result_entry in results:
-            # TODO: remove NULL castings when database-issues#8100 is resolved
+            # TODO: remove NULL castings when SQL-856 is resolved
             sql_statements.append(f"""
                 INSERT INTO product_limits_result
                 (

@@ -23,6 +23,33 @@ most recent `create_date`.
 
 If two capture instances for a table share the same timestamp (unlikely given the millisecond resolution), Materialize selects the `capture_instance` with the lexicographically larger name.
 
+### Unique keys
+
+Materialize records at most one unique key for each table it ingests from SQL
+Server: the `PRIMARY KEY` or `UNIQUE` constraint that the capture instance uses
+to identify rows. The capture instance's index is listed in the `index_name`
+column of
+[`cdc.change_tables`](https://learn.microsoft.com/en-us/sql/relational-databases/system-tables/cdc-change-tables-transact-sql).
+
+- By default, the capture instance uses the table's primary key, so the
+  `PRIMARY KEY` constraint becomes the key.
+- If the capture instance was created with
+  [`@index_name`](https://learn.microsoft.com/en-us/sql/relational-databases/system-stored-procedures/sys-sp-cdc-enable-table-transact-sql#----index_name),
+  the constraint of that name becomes the key instead.
+- The table gets no key if the capture instance has no index, for example
+  because the table has no primary key, or if `@index_name` names an index
+  created with `CREATE UNIQUE INDEX`, which is not a constraint.
+
+Other `PRIMARY KEY` and `UNIQUE` constraints on the table are not recorded as
+keys, because SQL Server lets them be dropped at any time without notifying
+Materialize. A `UNIQUE` constraint over nullable columns is never recorded,
+because SQL Server does not accept it as a capture instance index.
+
+Materialize uses the recorded key when optimizing queries, for example to
+remove a redundant `DISTINCT`. See [Changing
+constraints](/ingest-data/sql-server/#changing-constraints) for when the
+constraint that the capture instance uses can be dropped upstream.
+
 ### Adding a table to an existing source
 
 {{% include-headless "/headless/alter-source-snapshot-blocking-behavior" %}}

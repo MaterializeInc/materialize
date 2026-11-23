@@ -15,8 +15,7 @@ use std::sync::Mutex;
 
 use mz_ore::metric;
 use mz_ore::metrics::{
-    DeleteOnDropCounter, DeleteOnDropGauge, GaugeVec, IntCounterVec, IntGaugeVec, MetricsRegistry,
-    UIntGaugeVec,
+    DeregisterOnDropCounter, DeregisterOnDropGauge, DeregisterOnDropVec, MetricsRegistry, raw,
 };
 use mz_repr::GlobalId;
 use prometheus::core::{AtomicF64, AtomicI64, AtomicU64};
@@ -24,22 +23,17 @@ use prometheus::core::{AtomicF64, AtomicI64, AtomicU64};
 /// Definitions for Postgres source metrics.
 #[derive(Clone, Debug)]
 pub(crate) struct SqlServerSourceMetricDefs {
-    pub(crate) ignored_messages: IntCounterVec,
-    pub(crate) insert_messages: IntCounterVec,
-    pub(crate) update_messages: IntCounterVec,
-    pub(crate) delete_messages: IntCounterVec,
-    pub(crate) snapshot_table_count: UIntGaugeVec,
-    pub(crate) snapshot_table_size_latency: GaugeVec,
-    pub(crate) snapshot_table_lock: IntGaugeVec,
+    pub(crate) ignored_messages: DeregisterOnDropVec<raw::IntCounterVec>,
+    pub(crate) insert_messages: DeregisterOnDropVec<raw::IntCounterVec>,
+    pub(crate) update_messages: DeregisterOnDropVec<raw::IntCounterVec>,
+    pub(crate) delete_messages: DeregisterOnDropVec<raw::IntCounterVec>,
+    pub(crate) snapshot_table_count: DeregisterOnDropVec<raw::UIntGaugeVec>,
+    pub(crate) snapshot_table_size_latency: DeregisterOnDropVec<raw::GaugeVec>,
+    pub(crate) snapshot_table_lock: DeregisterOnDropVec<raw::IntGaugeVec>,
 }
 
 impl SqlServerSourceMetricDefs {
     pub(crate) fn register_with(registry: &MetricsRegistry) -> Self {
-        // Every metric must have a worker specific id associated with it. These are later wrapped
-        // in a DeleteOnDrop helper. If the label was just `source_id` and one worker completed, it
-        // would call the DeleteOnDrop code that deregestiers the metric for `source_id`. Other
-        // workers may still be running, but the metrics registry will no longer record or report
-        // metrics for that `source_id`.
         Self {
             ignored_messages: registry.register(metric!(
                 name: "mz_sql_server_per_source_ignored_messages",
@@ -87,16 +81,14 @@ pub(crate) struct SqlServerSourceMetrics {
     worker_id: String,
     defs: SqlServerSourceMetricDefs,
     // Currently, this structure is not accessed across threads.
-    snapshot_table_size_latency:
-        Rc<Mutex<BTreeMap<String, DeleteOnDropGauge<AtomicF64, Vec<String>>>>>,
-    snapshot_table_lock_count:
-        Rc<Mutex<BTreeMap<String, DeleteOnDropGauge<AtomicI64, Vec<String>>>>>,
+    snapshot_table_size_latency: Rc<Mutex<BTreeMap<String, DeregisterOnDropGauge<AtomicF64>>>>,
+    snapshot_table_lock_count: Rc<Mutex<BTreeMap<String, DeregisterOnDropGauge<AtomicI64>>>>,
 
-    pub(crate) inserts: DeleteOnDropCounter<AtomicU64, Vec<String>>,
-    pub(crate) updates: DeleteOnDropCounter<AtomicU64, Vec<String>>,
-    pub(crate) deletes: DeleteOnDropCounter<AtomicU64, Vec<String>>,
-    pub(crate) ignored: DeleteOnDropCounter<AtomicU64, Vec<String>>,
-    pub(crate) snapshot_table_count: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub(crate) inserts: DeregisterOnDropCounter<AtomicU64>,
+    pub(crate) updates: DeregisterOnDropCounter<AtomicU64>,
+    pub(crate) deletes: DeregisterOnDropCounter<AtomicU64>,
+    pub(crate) ignored: DeregisterOnDropCounter<AtomicU64>,
+    pub(crate) snapshot_table_count: DeregisterOnDropGauge<AtomicU64>,
 }
 
 impl SqlServerSourceMetrics {
@@ -113,19 +105,19 @@ impl SqlServerSourceMetrics {
             defs: defs.clone(),
             inserts: defs
                 .insert_messages
-                .get_delete_on_drop_metric(source_id_labels.to_vec()),
+                .get_deregister_on_drop_metric(source_id_labels.to_vec()),
             updates: defs
                 .update_messages
-                .get_delete_on_drop_metric(source_id_labels.to_vec()),
+                .get_deregister_on_drop_metric(source_id_labels.to_vec()),
             deletes: defs
                 .delete_messages
-                .get_delete_on_drop_metric(source_id_labels.to_vec()),
+                .get_deregister_on_drop_metric(source_id_labels.to_vec()),
             ignored: defs
                 .ignored_messages
-                .get_delete_on_drop_metric(source_id_labels.to_vec()),
+                .get_deregister_on_drop_metric(source_id_labels.to_vec()),
             snapshot_table_count: defs
                 .snapshot_table_count
-                .get_delete_on_drop_metric(source_id_labels.to_vec()),
+                .get_deregister_on_drop_metric(source_id_labels.to_vec()),
             snapshot_table_size_latency: Default::default(),
             snapshot_table_lock_count: Default::default(),
         }
@@ -144,7 +136,7 @@ impl SqlServerSourceMetrics {
                 let metric = self
                     .defs
                     .snapshot_table_size_latency
-                    .get_delete_on_drop_metric(labels);
+                    .get_deregister_on_drop_metric(labels);
                 vacant_entry.insert(metric).set(latency);
             }
             std::collections::btree_map::Entry::Occupied(occupied_entry) => {
@@ -166,7 +158,7 @@ impl SqlServerSourceMetrics {
                 let metric = self
                     .defs
                     .snapshot_table_lock
-                    .get_delete_on_drop_metric(labels);
+                    .get_deregister_on_drop_metric(labels);
                 vacant_entry.insert(metric).add(delta);
             }
             std::collections::btree_map::Entry::Occupied(occupied_entry) => {

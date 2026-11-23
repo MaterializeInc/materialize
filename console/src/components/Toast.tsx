@@ -7,21 +7,27 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { Box, CloseButton, HStack, Text, useTheme } from "@chakra-ui/react";
-import { UseToastOptions as UseChakraToastOptions } from "@chakra-ui/toast";
+import {
+  Box,
+  CloseButton,
+  HStack,
+  Text,
+  useTheme,
+  UseToastOptions as UseChakraToastOptions,
+} from "@chakra-ui/react";
 import React from "react";
 
 import { CheckmarkIconWithCircle } from "~/svg/CheckmarkIcon";
 import WarningIcon from "~/svg/WarningIcon";
 import { MaterializeTheme } from "~/theme";
 export interface UseToastOptions {
-  status?: "success" | "error";
+  status?: UseChakraToastOptions["status"];
   duration?: UseChakraToastOptions["duration"];
   position?: UseChakraToastOptions["position"];
   render?: UseChakraToastOptions["render"];
   description?: UseChakraToastOptions["description"];
   icon?: UseChakraToastOptions["icon"];
-  isClosable: UseChakraToastOptions["isClosable"];
+  isClosable?: UseChakraToastOptions["isClosable"];
 }
 export interface ToastComponentProps extends UseToastOptions {
   onClose(): void;

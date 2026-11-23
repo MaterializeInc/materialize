@@ -13,7 +13,7 @@
 # Introduce an I/O error and expect transactions to fail
 #
 
-> SET failpoints = 'fileblob_set_sync=return';
+> SET unsafe_failpoints = 'fileblob_set_sync=return';
 
 > BEGIN
 
@@ -33,7 +33,7 @@ contains: fail point reached
 # Remove the I/O error and recover
 #
 
-> SET failpoints = 'fileblob_set_sync=off';
+> SET unsafe_failpoints = 'fileblob_set_sync=off';
 
 > BEGIN
 

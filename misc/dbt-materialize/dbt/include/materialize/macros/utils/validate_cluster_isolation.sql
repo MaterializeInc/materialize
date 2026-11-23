@@ -18,10 +18,10 @@
   ====================================
 
   These macros enforce cluster isolation rules when strict_mode is enabled.
-  They use the dbt manifest/graph for compile-time validation, meaning:
-  - No database connection required
-  - Validation happens during `dbt compile` or `dbt run`
-  - Conflicts are caught before any SQL is executed
+  They read only the dbt graph and `target.cluster`, not the database. The
+  source, sink, view, materialized_view and table materializations call their
+  validator before creating the model, so the checks run during `dbt run` and
+  `dbt build`, not `dbt compile`.
 
   Cluster Isolation Rules (strict_mode only):
   -------------------------------------------

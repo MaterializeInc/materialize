@@ -12,11 +12,13 @@ Test `orchestratord`
 """
 
 import argparse
+import base64
 import copy
 import datetime
 import json
 import os
 import random
+import re
 import shutil
 import signal
 import subprocess
@@ -55,7 +57,7 @@ from materialize.test_analytics.data.upgrade_downtime import (
     upgrade_downtime_result_storage,
 )
 from materialize.test_analytics.test_analytics_db import TestAnalyticsDb
-from materialize.util import PropagatingThread, all_subclasses
+from materialize.util import PropagatingThread, all_subclasses, redact_secrets
 from materialize.version_list import (
     get_all_self_managed_versions,
     get_self_managed_versions,
@@ -81,6 +83,10 @@ SERVICES = [
 
 KIND_CLUSTER_NAME = "kind"
 
+# Each version recreates kind. Limit each of the two CI shards to ten versions
+# to leave room for setup and cleanup within the one-hour job timeout.
+DOCUMENTATION_DEFAULTS_VERSION_COUNT = 20
+
 
 def run_mz_debug() -> None:
     # TODO: Hangs a lot in CI
@@ -103,6 +109,12 @@ def get_tag(tag: str | None = None) -> str:
     # environmentd/clusterd/balancerd and the orchestratord depends on them
     # being identical.
     return tag or ci_util.dev_docker_tag()
+
+
+# Whether the operator under test is this build rather than the image pinned in
+# the chart. Set by setup(). Modifications that need operator flags newer than
+# the pinned image check it.
+ORCHESTRATORD_OVERRIDE = True
 
 
 def get_version(tag: str | None = None) -> MzVersion:
@@ -308,7 +320,10 @@ def stop_and_remove_container(container_name: str) -> None:
         pass
 
 
-REGISTRY_PROXY_IMAGE = "registry:2"
+# renovate: datasource=docker depName=registry versioning=docker
+REGISTRY_PROXY_IMAGE = (
+    "registry:2@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373"
+)
 
 
 def pull_registry_proxy_image(max_attempts: int = 5) -> None:
@@ -408,7 +423,11 @@ def install_metrics_server() -> None:
 def recreate_kind_cluster() -> None:
     ensure_kind_version()
 
-    spawn.runv(["kind", "delete", "cluster", "--name", KIND_CLUSTER_NAME])
+    # Docker can report a missing exit event after a node has already exited.
+    retry(
+        lambda: spawn.runv(["kind", "delete", "cluster", "--name", KIND_CLUSTER_NAME]),
+        30,
+    )
 
     try:
         spawn.runv(["docker", "network", "create", "kind"])
@@ -446,6 +465,22 @@ def recreate_kind_cluster() -> None:
             MZ_ROOT / "test" / "orchestratord" / "cluster.yaml",
         ]
     )
+
+    # TODO: Remove when https://github.com/kubernetes-sigs/kind/issues/3436 is fixed.
+    for node in spawn.capture(
+        ["kind", "get", "nodes", "--name", KIND_CLUSTER_NAME]
+    ).split():
+        spawn.runv(
+            [
+                "docker",
+                "exec",
+                node,
+                "sh",
+                "-c",
+                "mkdir -p /run/userns-sysfs && "
+                "mount -t sysfs -o ro,nosuid,nodev,noexec sysfs /run/userns-sysfs",
+            ]
+        )
 
     retry(install_metrics_server, 20)
 
@@ -712,6 +747,48 @@ class LicenseKeyCheck(Modification):
             ), f"Expected {expected} in environmentd args, but only found {args}"
 
 
+def check_pod_disruption_budget(app: str, enabled: bool) -> None:
+    namespace = "materialize-environment"
+    pdbs = json.loads(
+        spawn.capture(
+            [
+                "kubectl",
+                "get",
+                "poddisruptionbudget",
+                "-l",
+                f"app.kubernetes.io/name={app}",
+                "-n",
+                namespace,
+                "-o",
+                "json",
+            ]
+        )
+    )["items"]
+    if not enabled:
+        assert not pdbs, f"Unexpected {app} PDBs: {pdbs}"
+        return
+    assert len(pdbs) == 1, f"Expected one {app} PDB, got {pdbs}"
+    pdb = pdbs[0]
+    name = pdb["metadata"]["name"]
+    assert pdb["spec"]["maxUnavailable"] == 1, pdb["spec"]
+    assert pdb["spec"]["unhealthyPodEvictionPolicy"] == "AlwaysAllow", pdb["spec"]
+    deployment = json.loads(
+        spawn.capture(
+            ["kubectl", "get", "deployment", name, "-n", namespace, "-o", "json"]
+        )
+    )
+    pod_labels = deployment["spec"]["template"]["metadata"]["labels"]
+    match_labels = pdb["spec"]["selector"]["matchLabels"]
+    assert (
+        match_labels and match_labels.items() <= pod_labels.items()
+    ), f"{app} PDB selector {match_labels} does not match pod labels {pod_labels}"
+    # With every pod healthy, one may be evicted whatever the replica count,
+    # so the PDB never blocks a drain.
+    status = pdb.get("status", {})
+    assert status.get("expectedPods", 0) >= 1, status
+    assert status.get("disruptionsAllowed") == 1, status
+
+
 class BalancerdEnabled(Modification):
     @classmethod
     def values(cls, version: MzVersion) -> list[Any]:
@@ -748,6 +825,7 @@ class BalancerdEnabled(Modification):
                 assert result, f"Unexpected result: {result}"
             else:
                 assert not result, f"Unexpected result: {result}"
+            check_pod_disruption_budget("balancerd", self.value)
 
         # Balancerd can take a while to start up
         retry(check, 240)
@@ -894,7 +972,8 @@ class ConsoleEnabled(Modification):
             return
 
         def check() -> None:
-            pass  # TODO: https://linear.app/materializeinc/issue/DB-105
+            check_pod_disruption_budget("console", self.value)
+            # TODO: https://linear.app/materializeinc/issue/DB-105
             # result = spawn.capture(
             #     [
             #         "kubectl",
@@ -1121,6 +1200,56 @@ class TelemetrySegmentClientSide(Modification):
             assert (
                 not expected in args
             ), f"Expected no {expected} in environmentd args, but found {args}"
+
+
+class UserNamespaces(Modification):
+    """Run the Materialize pods with `hostUsers: false`.
+
+    The chart leaves this off by default because nodes must allow user
+    namespaces. Exercising it here keeps the opt-in path covered. Kind nodes
+    need the sysfs mount set up in `setup()` for these pods to start.
+    """
+
+    @classmethod
+    def values(cls, version: MzVersion) -> list[Any]:
+        # The operator image pinned in the chart predates --enable-user-namespaces.
+        if ORCHESTRATORD_OVERRIDE and version >= MzVersion.parse_mz("v26.50.0-dev.0"):
+            return [True, False]
+        return [False]
+
+    @classmethod
+    def default(cls) -> Any:
+        return False
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        definition["operator"]["operator"]["args"]["enableUserNamespaces"] = self.value
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        expected = False if self.value else None
+
+        def check_pods(kind: str, data: dict[str, Any]) -> None:
+            assert data["items"], f"No {kind} pods found"
+            for pod in data["items"]:
+                actual = pod["spec"].get("hostUsers")
+                assert (
+                    actual == expected
+                ), f"Expected hostUsers={expected} on {kind} pod {pod['metadata']['name']}, got {actual}"
+
+        def check() -> None:
+            check_pods("orchestratord", get_orchestratord_data())
+            check_pods("environmentd", get_environmentd_data())
+            # environmentd only passes the flag on to clusterd from v26.50.
+            if MzVersion.parse_mz(mods[EnvironmentdImageRef]) >= MzVersion.parse_mz(
+                "v26.50.0-dev.0"
+            ):
+                check_pods("clusterd", get_clusterd_data())
+            if mods[BalancerdEnabled]:
+                check_pods("balancerd", get_balancerd_data())
+            if mods[ConsoleEnabled]:
+                check_pods("console", get_console_data())
+
+        # Pods from the previous generation can take a while to go away.
+        retry(check, 240)
 
 
 class ObservabilityEnabled(Modification):
@@ -1751,6 +1880,76 @@ class EnvironmentdResources(Modification):
             assert (
                 resources == expected
             ), f"Expected environmentd resources {expected}, but got {resources}"
+
+        retry(check_pods, 120)
+
+
+class EnvironmentdProbes(Modification):
+    @classmethod
+    def values(cls, version: MzVersion) -> list[Any]:
+        if version >= MzVersion.parse_mz("v26.48.0-dev.0"):
+            return [
+                None,
+                {
+                    "readiness": {"periodSeconds": 5},
+                    "liveness": {"failureThreshold": 60, "timeoutSeconds": 3},
+                    "startup": {"failureThreshold": 360},
+                },
+            ]
+        return [None]
+
+    @classmethod
+    def default(cls) -> Any:
+        return None
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        if self.value is not None:
+            spec = definition["materialize"]["spec"]
+            spec["environmentdReadinessProbe"] = self.value["readiness"]
+            spec["environmentdLivenessProbe"] = self.value["liveness"]
+            spec["environmentdStartupProbe"] = self.value["startup"]
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        if MzVersion.parse_mz(mods[EnvironmentdImageRef]) < MzVersion.parse_mz(
+            "v26.48.0-dev.0"
+        ):
+            return
+
+        # The CR's fields are overlaid onto the operator's built-in probe.
+        base = {"initialDelaySeconds": 1, "failureThreshold": 12}
+        overrides = self.value or {"readiness": {}, "liveness": {}}
+        expected = {
+            "readinessProbe": {**base, **overrides["readiness"]},
+            "livenessProbe": {**base, **overrides["liveness"]},
+        }
+        # There is no startup probe unless one is configured.
+        expected_startup = (
+            {**base, **self.value["startup"]} if self.value is not None else None
+        )
+
+        def check_pods() -> None:
+            container = get_environmentd_data()["items"][0]["spec"]["containers"][0]
+            for probe_name, expected_fields in expected.items():
+                probe = container[probe_name]
+                assert (
+                    "tcpSocket" in probe
+                ), f"Expected tcpSocket in {probe_name}: {probe}"
+                actual = {k: probe.get(k) for k in expected_fields}
+                assert (
+                    actual == expected_fields
+                ), f"Expected environmentd {probe_name} {expected_fields}, but got {probe}"
+            startup = container.get("startupProbe")
+            if expected_startup is None:
+                assert startup is None, f"Expected no startupProbe, but got {startup}"
+            else:
+                assert startup is not None, "Expected a startupProbe"
+                assert (
+                    "tcpSocket" in startup
+                ), f"Expected tcpSocket in startupProbe: {startup}"
+                actual = {k: startup.get(k) for k in expected_startup}
+                assert (
+                    actual == expected_startup
+                ), f"Expected environmentd startupProbe {expected_startup}, but got {startup}"
 
         retry(check_pods, 120)
 
@@ -2402,7 +2601,14 @@ def workflow_documentation_defaults(
         type=str,
         help="Custom version tag to use",
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=int(os.getenv("BUILDKITE_BUILD_NUMBER", "0")),
+        help="Version sampling seed, shared by all shards (default: build number or 0)",
+    )
     args = parser.parse_args()
+    print(f"--- Version selection seed: {args.seed}")
 
     c.up(Service("mz-debug", idle=True))
     c.invoke("cp", "mz-debug:/usr/local/bin/mz-debug", ".")
@@ -2412,20 +2618,31 @@ def workflow_documentation_defaults(
     # Following https://materialize.com/docs/installation/install-on-local-kind/
     # orchestratord test can't run against future versions, so ignore those
     # Pre-v26 versions don't have balancerd/console images on Docker Hub
-    versions = buildkite.shard_list(
-        list(
-            reversed(
-                [
-                    version
-                    for version in get_self_managed_versions()
-                    if version < current_version
-                    and version >= MzVersion.parse_mz("v26.0.0")
-                ]
-                + [current_version]
-            )
-        ),
-        lambda version: str(version),
+    versions = list(
+        reversed(
+            [
+                version
+                for version in get_self_managed_versions()
+                if version < current_version
+                and version >= MzVersion.parse_mz("v26.0.0")
+            ]
+            + [current_version]
+        )
     )
+    if len(versions) > DOCUMENTATION_DEFAULTS_VERSION_COUNT:
+        # Always cover the current build and newest and oldest eligible releases.
+        versions = [
+            versions[0],
+            versions[1],
+            *sorted(
+                random.Random(args.seed).sample(
+                    versions[2:-1], k=DOCUMENTATION_DEFAULTS_VERSION_COUNT - 3
+                ),
+                reverse=True,
+            ),
+            versions[-1],
+        ]
+    versions = buildkite.shard_list(versions, lambda version: str(version))
     for version in versions:
         print(f"--- Running with defaults against {version}")
         dir = "my-local-mz"
@@ -2523,11 +2740,8 @@ def workflow_documentation_defaults(
                 "environmentId"
             ] = "12345678-1234-1234-1234-123456789013"
 
-        with open(os.path.join(dir, "sample-materialize.yaml"), "w") as f:
-            yaml.dump_all(materialize_setup, f, default_flow_style=False)
-
-        spawn.runv(
-            ["kubectl", "apply", "-f", os.path.join(dir, "sample-materialize.yaml")]
+        kubectl_apply_retrying_webhook(
+            ["kubectl", "apply", "-f", "-"], materialize_setup
         )
 
         # This should finish quickly, see https://github.com/MaterializeInc/database-issues/issues/10099
@@ -3163,34 +3377,66 @@ WEBHOOK_FAILURE_MARKERS = (
 WEBHOOK_READY_TIMEOUT_SECS = 300
 
 
-def kubectl_apply_retrying_webhook(cmd: list[str], yaml_str: str) -> None:
-    """Run a `kubectl apply` that reads `yaml_str` from stdin, retrying while a
+def kubectl_apply_retrying_webhook(
+    cmd: list[str], resources: list[dict[str, Any]]
+) -> None:
+    """Run a `kubectl apply` that reads resources from stdin, retrying while a
     webhook is still coming up.
 
     Raises `subprocess.CalledProcessError` for any other failure, and for a
     webhook failure that outlives `WEBHOOK_READY_TIMEOUT_SECS`.
     """
+    manifest = yaml.dump_all(resources).encode()
+    secret_values = set()
+    for secret in (resource for resource in resources if resource["kind"] == "Secret"):
+        strings = secret.get("stringData", {}).values()
+        secret_values.update(secret.get("data", {}).values(), strings)
+        secret_values.update(
+            base64.b64encode(value.encode()).decode() for value in strings
+        )
+
+    # Client-side apply can nest the manifest inside a JSON string, in which
+    # kubectl also escapes `&`, `<` and `>`.
+    html_escapes = str.maketrans({c: f"\\u{ord(c):04x}" for c in "&<>"})
+    for _ in range(2):
+        secret_values.update(
+            {json.dumps(v)[1:-1].translate(html_escapes) for v in secret_values}
+        )
+    secret_pattern = "|".join(
+        re.escape(value)
+        for value in sorted(filter(None, secret_values), key=len, reverse=True)
+    )
+
+    def redact_output(text: str) -> str:
+        if secret_pattern:
+            text = re.sub(secret_pattern, "[REDACTED]", text)
+        return redact_secrets(text)
+
     deadline = time.monotonic() + WEBHOOK_READY_TIMEOUT_SECS
     attempt = 0
     while True:
         attempt += 1
-        result = subprocess.run(cmd, input=yaml_str.encode(), capture_output=True)
+        result = subprocess.run(cmd, input=manifest, capture_output=True)
         if result.returncode == 0:
             return
-        stderr_str = result.stderr.decode(errors="replace")
+        stderr = result.stderr.decode(errors="replace")
         if (
-            any(marker in stderr_str for marker in WEBHOOK_FAILURE_MARKERS)
+            any(marker in stderr for marker in WEBHOOK_FAILURE_MARKERS)
             and time.monotonic() < deadline
         ):
-            print(f"Webhook not yet ready (attempt {attempt}), retrying: {stderr_str}")
+            print(
+                f"Webhook not yet ready (attempt {attempt}), retrying: {redact_output(stderr)}"
+            )
             time.sleep(2)
             continue
-        print(f"Failed to apply: {result.stdout}\nSTDERR:{result.stderr}")
+        stdout = redact_output(result.stdout.decode(errors="replace"))
+        stderr = redact_output(stderr)
+        print(f"Failed to apply: {stdout}\nSTDERR:{stderr}")
         raise subprocess.CalledProcessError(
             result.returncode,
             result.args,
-            output=result.stdout,
-            stderr=result.stderr,
+            output=stdout.encode(),
+            stderr=stderr.encode(),
         )
 
 
@@ -3206,9 +3452,7 @@ def apply_server_side(
         cmd.append("--force-conflicts")
     if field_manager:
         cmd.append(f"--field-manager={field_manager}")
-    yaml_str = yaml.dump(obj)
-    print(f"Attempting to apply server-side:\n{yaml_str}")
-    kubectl_apply_retrying_webhook(cmd, yaml_str)
+    kubectl_apply_retrying_webhook(cmd, [obj])
 
 
 def workflow_server_side_apply(
@@ -3900,9 +4144,7 @@ def apply_materialize(definition: dict[str, Any]) -> None:
         defs.append(definition["system_params_configmap"])
     if "balancerd_configmap" in definition:
         defs.append(definition["balancerd_configmap"])
-    yaml_str = yaml.dump_all(defs)
-    print(f"Attempting to apply:\n{yaml_str}")
-    kubectl_apply_retrying_webhook(["kubectl", "apply", "-f", "-"], yaml_str)
+    kubectl_apply_retrying_webhook(["kubectl", "apply", "-f", "-"], defs)
 
 
 def wait_for_ready_to_promote() -> None:
@@ -4024,6 +4266,23 @@ def workflow_orchestratord_upgrade(
         # have to wait longer to ensure that the old ones are gone
         retry(check, 180)
 
+    def wait_for_bootstrap():
+        """Wait until environmentd answers SQL, which it does only after bootstrap.
+
+        A rollout counts as complete before that. Upgrading then could let the
+        read-only generation initialize shards the old one hasn't created yet, and
+        the old one would halt on their newer version tag (SQL-885).
+        """
+
+        def check():
+            with port_forward_environmentd() as port:
+                with psycopg.connect(
+                    f"host=localhost port={port} user=materialize", connect_timeout=30
+                ) as conn:
+                    conn.execute("SELECT 1")
+
+        retry(check, 240)
+
     parser.add_argument(
         "--recreate-cluster",
         action=argparse.BooleanOptionalAction,
@@ -4074,6 +4333,7 @@ def workflow_orchestratord_upgrade(
     check_environmentd_version(versions[-3])
     check_clusterd_version(versions[-3])
     check_balancerd_version(versions[-3])
+    wait_for_bootstrap()
 
     for version in versions[-2:]:
         print(f"running orchestratord {version}")
@@ -4129,6 +4389,7 @@ def workflow_orchestratord_upgrade(
     check_environmentd_version(versions[-3])
     check_clusterd_version(versions[-3])
     check_balancerd_version(versions[-3])
+    wait_for_bootstrap()
 
     print(f"running orchestratord {versions[-1]}")
     definition["operator"]["operator"]["image"]["tag"] = str(versions[-1])
@@ -4259,15 +4520,9 @@ def workflow_revert_rollout(c: Composition, parser: WorkflowArgumentParser) -> N
     definition["materialize"]["spec"]["rolloutStrategy"] = "ManuallyPromote"
     definition["materialize"]["spec"]["environmentdImageRef"] = upgrade_image
     definition["materialize"]["spec"]["requestRollout"] = str(uuid.uuid4())
-    spawn.runv(
+    kubectl_apply_retrying_webhook(
         ["kubectl", "apply", "-f", "-"],
-        stdin=yaml.dump_all(
-            [
-                definition["namespace"],
-                definition["secret"],
-                definition["materialize"],
-            ]
-        ).encode(),
+        [definition["namespace"], definition["secret"], definition["materialize"]],
     )
     for _ in range(900):
         time.sleep(1)
@@ -4413,15 +4668,9 @@ def workflow_rollout_timeout(c: Composition, parser: WorkflowArgumentParser) -> 
     definition["materialize"]["spec"]["environmentdImageRef"] = upgrade_image
     definition["materialize"]["spec"]["rolloutRequestTimeout"] = "1s"
     definition["materialize"]["spec"]["requestRollout"] = upgrade_request
-    spawn.runv(
+    kubectl_apply_retrying_webhook(
         ["kubectl", "apply", "-f", "-"],
-        stdin=yaml.dump_all(
-            [
-                definition["namespace"],
-                definition["secret"],
-                definition["materialize"],
-            ]
-        ).encode(),
+        [definition["namespace"], definition["secret"], definition["materialize"]],
     )
 
     # Wait for orchestratord to observe the timeout and cancel the rollout.
@@ -5064,6 +5313,8 @@ def setup(c: Composition, args) -> dict[str, Any]:
     with open(MZ_ROOT / "misc" / "helm-charts" / "testing" / "balancer.yaml") as f:
         definition["balancer"] = yaml.load(f, Loader=yaml.Loader)
 
+    global ORCHESTRATORD_OVERRIDE
+    ORCHESTRATORD_OVERRIDE = args.orchestratord_override
     get_version(args.tag)
     if args.orchestratord_override:
         definition["operator"]["operator"]["image"]["tag"] = get_tag(args.tag)
@@ -5086,6 +5337,10 @@ def setup(c: Composition, args) -> dict[str, Any]:
     definition["materialize"]["spec"]["environmentdImageRef"] = get_image(
         c.compose["services"]["environmentd"]["image"], args.tag
     )
+    # Too slow with 10 min default in upgrade tests.
+    definition["materialize"]["spec"]["environmentdExtraArgs"] = [
+        "--system-parameter-default=with_0dt_caught_up_check_stability_period=60s"
+    ]
     definition["balancer"]["spec"]["balancerdImageRef"] = get_image(
         c.compose["services"]["balancerd"]["image"], args.tag
     )
@@ -5260,6 +5515,28 @@ def helm_install_cert_manager():
 
 
 def init(definition: dict[str, Any]) -> None:
+    spawn.runv(
+        [
+            "kubectl",
+            "delete",
+            "namespace",
+            "materialize-environment",
+            "--ignore-not-found",
+            "--wait=false",
+        ],
+    )
+    spawn.runv(
+        [
+            "kubectl",
+            "delete",
+            "pods",
+            "--all",
+            "--namespace=materialize-environment",
+            "--ignore-not-found",
+            "--grace-period=0",
+            "--force",
+        ],
+    )
     # `--wait=true` blocks until the namespace is fully terminated. If the
     # timeout is hit and we proceed anyway, the next `kubectl apply` races the
     # terminating namespace and fails with "is being terminated", so let any
@@ -5411,6 +5688,21 @@ def is_ready_to_manually_promote():
     )
 
 
+def get_operator_logs() -> str:
+    return spawn.capture(
+        [
+            "kubectl",
+            "logs",
+            "-l",
+            "app.kubernetes.io/instance=operator",
+            "-n",
+            "materialize",
+            "--tail=-1",
+        ],
+        stderr=subprocess.DEVNULL,
+    )
+
+
 def post_run_check(definition: dict[str, Any], expect_fail: bool) -> None:
     # Read at the stored version explicitly to avoid going through the
     # conversion webhook, which may not be ready yet during initial deployment.
@@ -5482,17 +5774,7 @@ def post_run_check(definition: dict[str, Any], expect_fail: bool) -> None:
         except subprocess.CalledProcessError:
             if expect_fail:
                 try:
-                    logs = spawn.capture(
-                        [
-                            "kubectl",
-                            "logs",
-                            "-l",
-                            "app.kubernetes.io/instance=operator",
-                            "-n",
-                            "materialize",
-                        ],
-                        stderr=subprocess.DEVNULL,
-                    )
+                    logs = get_operator_logs()
                     if (
                         f"ERROR reconciling object{{object.ref=Materialize.v1alpha1.materialize.cloud/{definition['materialize']['metadata']['name']}.materialize-environment"
                         in logs
@@ -5624,17 +5906,7 @@ def post_run_check_balancer(definition: dict[str, Any], expect_fail: bool) -> No
         except subprocess.CalledProcessError:
             if expect_fail:
                 try:
-                    logs = spawn.capture(
-                        [
-                            "kubectl",
-                            "logs",
-                            "-l",
-                            "app.kubernetes.io/instance=operator",
-                            "-n",
-                            "materialize",
-                        ],
-                        stderr=subprocess.DEVNULL,
-                    )
+                    logs = get_operator_logs()
                     if (
                         f"ERROR k8s_controller::controller: Balancer reconciliation error. err=reconciler for object Balancer.v1alpha1.materialize.cloud/{definition['balancer']['metadata']['name']}.materialize-environment failed"
                         in logs
@@ -5669,7 +5941,8 @@ def post_run_check_balancer(definition: dict[str, Any], expect_fail: bool) -> No
 #      client_credentials grant.
 
 OIDC_HYDRA_NAMESPACE = "hydra"
-OIDC_HYDRA_IMAGE = "oryd/hydra:v2.2.0"
+# renovate: datasource=docker depName=oryd/hydra versioning=docker
+OIDC_HYDRA_IMAGE = "oryd/hydra:v2.2.0@sha256:2c93beb5e5f260cb5ed5ab579d8a1c133b0ec503c933244370522a2a53695ce7"
 OIDC_HYDRA_PUBLIC_PORT = 4444
 OIDC_HYDRA_ADMIN_PORT = 4445
 OIDC_HYDRA_ISSUER = f"http://hydra-public.{OIDC_HYDRA_NAMESPACE}.svc.cluster.local:{OIDC_HYDRA_PUBLIC_PORT}"
@@ -6141,15 +6414,9 @@ def workflow_clusterd_generation_scheduling(
     definition["materialize"]["spec"]["rolloutStrategy"] = "ManuallyPromote"
     definition["materialize"]["spec"]["requestRollout"] = new_request
     definition["materialize"]["spec"]["forceRollout"] = new_request
-    spawn.runv(
+    kubectl_apply_retrying_webhook(
         ["kubectl", "apply", "-f", "-"],
-        stdin=yaml.dump_all(
-            [
-                definition["namespace"],
-                definition["secret"],
-                definition["materialize"],
-            ]
-        ).encode(),
+        [definition["namespace"], definition["secret"], definition["materialize"]],
     )
 
     for _ in range(900):

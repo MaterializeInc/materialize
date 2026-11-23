@@ -37,7 +37,12 @@ import {
   STATUS_COLOR_SCHEMES,
 } from "./filters";
 import { pMaxFromHistory } from "./freshnessHistory";
-import { MaintainedObjectListItem, useObjectFreshnessHistory } from "./queries";
+import {
+  isSourceCollection,
+  MaintainedObjectListItem,
+  useObjectFreshnessHistory,
+} from "./queries";
+import { useJourneyLinkState } from "./useJourneyLinkState";
 
 const OUTDATED_MS = OUTDATED_THRESHOLD_SECONDS * 1_000;
 const WARNING_MS = OUTDATED_MS / 2;
@@ -58,13 +63,14 @@ export const ObjectDetailsCard = ({
   const { colors } = useTheme<MaterializeTheme>();
   const regionSlug = useRegionSlug();
   const { getClusterById } = useAllClusters();
+  const journeyLinkState = useJourneyLinkState(item.id);
 
   const cluster = item.cluster ? getClusterById(item.cluster.id) : undefined;
   const namespace = createNamespace(item.databaseName, item.schemaName);
   const replicas = cluster?.replicas ?? [];
 
   const { data: freshness } = useObjectFreshnessHistory({
-    objectId: item.id,
+    object: item,
     lookbackMs: freshnessLookbackMinutes * 60 * 1000,
   });
   const badgeLag = freshness
@@ -104,6 +110,18 @@ export const ObjectDetailsCard = ({
               <DetailItem label="Object name">{item.name}</DetailItem>
               <DetailItem label="Object type">{item.objectType}</DetailItem>
               <DetailItem label="Schema">{namespace ?? "-"}</DetailItem>
+              {item.parentSource && (
+                <DetailItem label="Source">
+                  <TextLink
+                    as={RouterLink}
+                    to={`../${item.parentSource.id}`}
+                    relative="path"
+                    state={journeyLinkState}
+                  >
+                    {item.parentSource.name}
+                  </TextLink>
+                </DetailItem>
+              )}
               {item.sourceType && (
                 <DetailItem label="Source type">{item.sourceType}</DetailItem>
               )}
@@ -146,7 +164,7 @@ export const ObjectDetailsCard = ({
 /** Mirrors the list's Status column: ingestion status for sources, replica
  *  hydration for everything else. */
 const StatusBadge = ({ item }: { item: MaintainedObjectListItem }) => {
-  if (item.objectType === "source") {
+  if (isSourceCollection(item)) {
     if (!item.sourceStatus) return null;
     return (
       <ConnectorStatusPill

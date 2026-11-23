@@ -68,14 +68,59 @@ function renderGraph(overrides: { threshold?: number; onChange?: () => void }) {
 }
 
 /**
- * The line paths, which are the only direct `path` children of the svg. The
- * axes and grid render theirs inside `g` wrappers.
+ * The line paths, the direct `path` children of the clipped group. The axes
+ * and grid render theirs inside their own `g` wrappers.
  */
 function linePaths(container: HTMLElement) {
-  return [...container.querySelectorAll("svg > path")];
+  return [...container.querySelectorAll("svg > g[clip-path] > path")];
 }
 
 describe("ThresholdLineGraph", () => {
+  it("clips the lines to the plot", async () => {
+    // A bin that starts before the range would otherwise draw over the y axis.
+    const { container } = await renderGraph({});
+
+    const clipped = container.querySelector("g[clip-path]");
+    expect(clipped?.querySelectorAll(":scope > path")).toHaveLength(
+      LINES.length,
+    );
+    const id = clipped?.getAttribute("clip-path")?.match(/#([^)]+)/)?.[1];
+    expect(container.querySelector(`clipPath[id="${id}"] rect`)).not.toBeNull();
+  });
+
+  it("leaves room above the highest reading", async () => {
+    // The data peaks at 5, a round number the axis would otherwise end on,
+    // drawing that line along the graph's top border.
+    const { container } = await renderGraph({});
+
+    const top = Math.max(
+      ...[...container.querySelectorAll(".visx-axis-left .visx-axis-tick")].map(
+        (tick) => parseFloat(tick.textContent ?? ""),
+      ),
+    );
+    expect(top).toBeGreaterThanOrEqual(5 * 1.1);
+  });
+
+  it("labels the time axis with a clock time and a date", async () => {
+    const { container } = await renderGraph({});
+
+    const ticks = [
+      ...container.querySelectorAll(".visx-axis-bottom .visx-axis-tick"),
+    ];
+    expect(ticks.length).toBeGreaterThan(0);
+    for (const tick of ticks) {
+      const lines = [...tick.querySelectorAll("text")].map(
+        (text) => text.textContent,
+      );
+      // 24-hour time with the zone, then the date, as the connector graphs
+      // label theirs.
+      expect(lines).toEqual([
+        expect.stringMatching(/^\d{2}:\d{2} \S+$/),
+        expect.stringMatching(/^[A-Z][a-z]{2}\. \d{2}, \d{4}$/),
+      ]);
+    }
+  });
+
   it("draws a line per series, emphasizing only the breaching ones", async () => {
     const { container } = await renderGraph({ threshold: 2 });
 
@@ -130,11 +175,12 @@ describe("ThresholdLineGraph", () => {
     expect(slider).toHaveAttribute("aria-valuemin", "0");
   });
 
-  it("tops the y axis at a round value covering the tallest plotted value", async () => {
+  it("tops the y axis at a round value above the tallest plotted value", async () => {
     await renderGraph({ threshold: 2 });
 
-    // The tallest series is a flat 5, and the slider's ceiling is the axis top.
-    expect(screen.getByRole("slider")).toHaveAttribute("aria-valuemax", "5");
+    // The tallest series is a flat 5, padded to 5.5 and rounded up to 6. The
+    // slider's ceiling is the axis top.
+    expect(screen.getByRole("slider")).toHaveAttribute("aria-valuemax", "6");
   });
 
   it("does not move the y axis when the threshold changes", async () => {

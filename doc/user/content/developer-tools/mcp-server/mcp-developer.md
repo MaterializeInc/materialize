@@ -12,8 +12,6 @@ aliases:
   - /integrations/mcp-server/mcp-developer/
 ---
 
-{{< public-preview />}}
-
 Materialize provides a built-in `materialize-developer` Model Context Protocol
 (MCP) server (`/api/mcp/developer`, port 6876) for troubleshooting and
 observability. The server is provided directly by Materialize; no sidecar
@@ -85,7 +83,9 @@ Self-Managed deployments using OAuth require SSO, which uses TLS. Your
 identity provider may also need additional configuration for MCP clients, such
 as a pre-registered OAuth client if your IdP does not support anonymous
 dynamic client registration. See [Connecting MCP
-clients](/self-managed-deployments/sso/oidc/#connecting-mcp-clients).
+clients](/self-managed-deployments/sso/oidc/#connecting-mcp-clients), or with
+the advanced SSO stack, [Connect MCP
+clients](/self-managed-deployments/sso/advanced/operations/#connect-mcp-clients).
 
 Get your MCP server URL from the Materialize Console:
 
@@ -586,6 +586,10 @@ curl -X POST http://localhost:6876/api/mcp/developer \
     "method": "tools/list"
   }'
 ```
+
+This example uses MCP protocol version 2025-11-25. For the headers and
+`params._meta` that a 2026-07-28 request adds, see [Protocol
+versions](/developer-tools/mcp-server/#protocol-versions).
 
 {{< /tab >}}
 {{< /tabs >}}

@@ -25,6 +25,7 @@ import argparse
 import copy
 import hashlib
 import os
+import re
 import sys
 import threading
 import traceback
@@ -38,7 +39,7 @@ from typing import Any
 import requests
 import yaml
 
-from materialize import mzbuild, spawn, ui
+from materialize import git, mzbuild, spawn, ui
 from materialize.buildkite_insights.buildkite_api import generic_api
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import Composition
@@ -94,6 +95,9 @@ def post_ci_trigger_status() -> None:
     """Post a GitHub commit status linking to the CI trigger page for PRs."""
     if not ui.env_is_truthy("BUILDKITE_PULL_REQUEST"):
         return
+    # The trigger page resolves PR numbers in this repository only.
+    if git.get_github_repo().lower() != git.DEFAULT_GITHUB_REPO.lower():
+        return
     pr_number = os.environ["BUILDKITE_PULL_REQUEST"]
     token = os.getenv("GITHUB_CI_ISSUE_REFERENCE_CHECKER_TOKEN") or os.getenv(
         "GITHUB_TOKEN"
@@ -105,7 +109,7 @@ def post_ci_trigger_status() -> None:
         return
     try:
         resp = requests.post(
-            f"https://api.github.com/repos/MaterializeInc/materialize/statuses/{commit}",
+            f"https://api.github.com/repos/{git.get_github_repo()}/statuses/{commit}",
             headers={
                 "Authorization": f"Bearer {token}",
                 "Accept": "application/vnd.github.v3+json",
@@ -137,7 +141,7 @@ def get_pull_request_labels() -> set[str]:
         if token:
             headers["Authorization"] = f"Bearer {token}"
         resp = requests.get(
-            f"https://api.github.com/repos/MaterializeInc/materialize/pulls/{pr}",
+            f"https://api.github.com/repos/{git.get_github_repo()}/pulls/{pr}",
             headers=headers,
             timeout=30,
         )
@@ -186,6 +190,30 @@ def annotate(style: str, context: str, markdown: str) -> None:
         )
     except Exception as e:
         print(f"Failed to post annotation: {e}")
+
+
+def initialize_cargo_bench_annotation(pipeline: Any) -> None:
+    """Open the shared results disclosure before Cargo bench shards start."""
+    if not any(
+        step.get("id") == "cargo-bench" and not step.get("skip")
+        for step in steps(pipeline)
+    ):
+        return
+    initialized_key = "cargo-bench-annotation-initialized"
+    if (
+        spawn.capture(
+            ["buildkite-agent", "meta-data", "get", initialized_key, "--default=false"]
+        ).strip()
+        == "true"
+    ):
+        return
+    # NOTE: Keep the outer details open so appends, including retries, stay
+    # nested. The HTML renderer closes it at the end of the annotation.
+    spawn.runv(
+        ["buildkite-agent", "annotate", "--context=cargo-bench", "--style=info"],
+        stdin=b"<details><summary>Cargo bench results</summary>\n\n",
+    )
+    spawn.runv(["buildkite-agent", "meta-data", "set", initialized_key, "true"])
 
 
 def main() -> int:
@@ -385,9 +413,13 @@ so it is executed.""",
                 lto,
                 keep_steps,
             )
+    add_annotate_errors_plugin(pipeline)
     truncate_skip_length(pipeline)
     handle_sanitizer_skip(pipeline, args.sanitizer)
-    prioritize_pipeline(pipeline, args.priority)
+    prioritize_pipeline(pipeline, args.priority, args.pipeline)
+    # Before `switch_jobs_to_aws`, so that steps on the default queue are
+    # switched too.
+    set_default_agents_queue(pipeline)
     switch_jobs_to_aws(pipeline, args.priority)
     # After `switch_jobs_to_aws`, so that the queue a step ends up on is the one
     # that gets sized up. The other order lets the aarch64 to x86_64 fallback
@@ -395,7 +427,6 @@ so it is executed.""",
     increase_agents_timeouts(pipeline, args.sanitizer, args.coverage)
     permit_rerunning_successful_steps(pipeline)
     set_retry_on_agent_lost(pipeline)
-    set_default_agents_queue(pipeline)
     unparallelize(pipeline)
     expand_parallel_concurrency_groups(pipeline)
     set_parallelism_name(pipeline)
@@ -419,6 +450,8 @@ so it is executed.""",
     cmd = ["buildkite-agent", "pipeline", "upload"]
     if args.dry_run:
         cmd.append("--dry-run")
+    else:
+        initialize_cargo_bench_annotation(pipeline)
     spawn.runv(cmd, stdin=yaml.dump(pipeline).encode())
 
     if fail_build_reason is not None and not args.dry_run:
@@ -448,25 +481,26 @@ class PipelineStep:
         return inputs
 
 
-def prioritize_pipeline(pipeline: Any, priority: int) -> None:
+def prioritize_pipeline(pipeline: Any, priority: int, pipeline_name: str) -> None:
     """Prioritize builds against main or release branches"""
 
     tag = os.environ["BUILDKITE_TAG"]
     branch = os.getenv("BUILDKITE_BRANCH")
-    build_author = os.getenv("BUILDKITE_BUILD_AUTHOR")
     # use the base priority of the entire pipeline
     priority += pipeline.get("priority", 0)
 
     # Release results are time sensitive
     if tag.startswith("v"):
         priority += 10
+        if pipeline_name == "nightly":
+            priority += 10
 
     # main branch is less time sensitive than results on PRs
     if branch == "main":
         priority -= 50
 
-    # Dependabot is less urgent than manual PRs
-    if build_author == "Dependabot":
+    # Dependency updates are less urgent than manual PRs.
+    if branch and branch.startswith("renovate/"):
         priority -= 40
 
     for step in steps(pipeline):
@@ -483,6 +517,15 @@ def prioritize_pipeline(pipeline: Any, priority: int) -> None:
             if agent == "hetzner-aarch64-16cpu-32gb":
                 agent_priority = 2
         step["priority"] = step.get("priority", 0) + priority + agent_priority
+
+
+def add_annotate_errors_plugin(pipeline: Any) -> None:
+    """Annotate failed commands, like the mzcompose and cloudtest plugins do."""
+    for step in steps(pipeline):
+        if "command" in step:
+            step.setdefault("plugins", []).append(
+                {"./ci/plugins/annotate-errors": None}
+            )
 
 
 def truncate_skip_length(pipeline: Any) -> None:
@@ -571,7 +614,9 @@ def increase_agents_timeouts(
             if step.get("id") == "build-aarch64":
                 step["name"] = "Build aarch64 with coverage"
             if step.get("id") == "cargo-test":
-                step["agents"]["queue"] = "hetzner-x86-64-dedi-32cpu-128gb"
+                # Keep a step that `switch_jobs_to_aws` moved on AWS.
+                if step["agents"]["queue"].startswith("hetzner-"):
+                    step["agents"]["queue"] = "hetzner-x86-64-dedi-32cpu-128gb"
                 step.pop("parallelism", None)
     else:
         for step in steps(pipeline):
@@ -589,13 +634,18 @@ def rewrite_step_dependency(step: dict[str, Any], old: str, new: str) -> None:
         step["depends_on"] = [new if dep == old else dep for dep in d]
 
 
+# Matches the purpose suffix of a dedicated queue, for example `-doctests` in
+# hetzner-x86-64-16cpu-32gb-doctests.
+HETZNER_DEDICATED_QUEUE_SUFFIX = re.compile(r"(?<=gb)-[a-z-]+$")
+
+
 def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
     """Switch jobs to AWS if Hetzner is currently overloaded"""
     # If Hetzner is entirely broken, you have to take these actions to switch everything back to AWS:
     # - CI_FORCE_SWITCH_TO_AWS env variable to 1
     # - Reconfigure the agent from hetzner-aarch64-4cpu-8gb to linux-aarch64-small in https://buildkite.com/materialize/test/settings/steps and other pipelines
-    # - Reconfigure the agent from hetzner-aarch64-4cpu-8gb to linux-aarch64-small in ci/mkpipeline.sh
 
+    force = ui.env_is_truthy("CI_FORCE_SWITCH_TO_AWS", "0")
     stuck: set[str] = set()
     # TODO(def-): Remove me when Hetzner fixes its aarch64 availability
     stuck.update(
@@ -607,7 +657,7 @@ def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
         ]
     )
 
-    if ui.env_is_truthy("CI_FORCE_SWITCH_TO_AWS", "0"):
+    if force:
         stuck = set(
             {
                 "hetzner-x86-64-16cpu-32gb",
@@ -702,8 +752,14 @@ def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
             continue
 
         agent = step["agents"].get("queue", None)
-        if not agent in stuck:
+        if not agent or not agent.startswith("hetzner-"):
             continue
+        # Dedicated queues like hetzner-x86-64-16cpu-32gb-doctests are separate
+        # agent pools, so they only count as stuck by their own name, but they
+        # map to AWS like the machine size they are named after.
+        if agent not in stuck and not force:
+            continue
+        agent = HETZNER_DEDICATED_QUEUE_SUFFIX.sub("", agent)
 
         if agent == "hetzner-aarch64-2cpu-4gb":
             if "hetzner-x86-64-2cpu-4gb" not in stuck:
@@ -748,11 +804,14 @@ def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
             "hetzner-x86-64-dedi-16cpu-64gb",
         ):
             step["agents"]["queue"] = "linux-x86_64-large"
-        elif agent in (
-            "hetzner-x86-64-dedi-32cpu-128gb",
-            "hetzner-x86-64-dedi-48cpu-192gb",
-        ):
+        elif agent == "hetzner-x86-64-dedi-32cpu-128gb":
             step["agents"]["queue"] = "builder-linux-x86_64"
+        elif agent == "hetzner-x86-64-dedi-48cpu-192gb":
+            step["agents"]["queue"] = "l-builder-linux-x86_64"
+        else:
+            print(
+                f"+++ WARNING: No AWS fallback for Hetzner queue {step['agents']['queue']}, keeping it"
+            )
 
 
 def permit_rerunning_successful_steps(pipeline: Any) -> None:
@@ -1334,7 +1393,7 @@ def _changed_files_from_main() -> set[str]:
             headers["Authorization"] = f"Bearer {token}"
 
         resp = requests.get(
-            f"https://api.github.com/repos/materializeinc/materialize/compare/main...{head}",
+            f"https://api.github.com/repos/{git.get_github_repo()}/compare/main...{head}",
             headers=headers,
         )
         resp.raise_for_status()

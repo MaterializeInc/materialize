@@ -7,6 +7,16 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+export interface UiPreview {
+  ldFlag: string;
+  label: string;
+  /**
+   * Offers the opt-in in self-managed too, where the flag comes from
+   * `flexibleDeploymentFlags`. See `useUiPreview`.
+   */
+  selfManagedOptIn?: boolean;
+}
+
 /**
  * UI previews users can opt into from the profile menu. Each entry pairs the
  * LaunchDarkly flag that offers the preview with the label shown on its
@@ -23,7 +33,8 @@ export const UI_PREVIEWS = {
   clusterDetailsRedesign: {
     ldFlag: "cluster-details-page-cns-173",
     label: "Cluster details redesign",
+    selfManagedOptIn: true,
   },
-} as const satisfies Record<string, { ldFlag: string; label: string }>;
+} as const satisfies Record<string, UiPreview>;
 
 export type UiPreviewKey = keyof typeof UI_PREVIEWS;

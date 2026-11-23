@@ -15,7 +15,7 @@ import { LoadingContainer } from "~/components/LoadingContainer";
 import { ShowCreateBlock } from "~/components/ShowCreateBlock";
 import { ObjectColumnsList } from "~/platform/object-explorer/ObjectColumns";
 
-import { MaintainedObjectListItem } from "./queries";
+import { isSourceCollection, MaintainedObjectListItem } from "./queries";
 import { SourceDiagnostics } from "./SourceDiagnostics";
 
 export interface ObjectMetadataProps {
@@ -23,7 +23,7 @@ export interface ObjectMetadataProps {
 }
 
 export const ObjectMetadata = ({ item }: ObjectMetadataProps) => {
-  const isSource = item.objectType === "source";
+  const isSource = isSourceCollection(item);
 
   return (
     <VStack align="start" spacing={6} width="100%">
@@ -51,6 +51,7 @@ export const ObjectMetadata = ({ item }: ObjectMetadataProps) => {
             schemaName={item.schemaName}
             name={item.name}
             objectType={item.objectType as ShowCreateObjectType}
+            isSourceTable={item.objectType === "subsource"}
           />
         </React.Suspense>
       </Box>

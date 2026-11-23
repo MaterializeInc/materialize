@@ -939,3 +939,25 @@ simple conn=mz_system,user=mz_system
 ALTER SYSTEM RESET enable_simplify_from_less_existence;
 ----
 COMPLETE 0
+
+# Regression test for HIR-to-MIR lowering taking time exponential in the
+# nesting depth of `If`s whose branches introduce columns, here through a
+# subquery. Each WHEN arm of this CASE is an `If` whose `else` contains the
+# subquery. Lowering used to lower both branches of every such `If` twice, so
+# the work doubled with every arm. The duplicate row 1 makes the subquery fail
+# if it is evaluated for rows that an earlier arm handles.
+
+statement ok
+CREATE TABLE t_case_subquery (x int4)
+
+statement ok
+INSERT INTO t_case_subquery VALUES (1), (1), (30), (31), (NULL)
+
+query I rowsort
+SELECT CASE WHEN x = 1 THEN 1 WHEN x = 2 THEN 2 WHEN x = 3 THEN 3 WHEN x = 4 THEN 4 WHEN x = 5 THEN 5 WHEN x = 6 THEN 6 WHEN x = 7 THEN 7 WHEN x = 8 THEN 8 WHEN x = 9 THEN 9 WHEN x = 10 THEN 10 WHEN x = 11 THEN 11 WHEN x = 12 THEN 12 WHEN x = 13 THEN 13 WHEN x = 14 THEN 14 WHEN x = 15 THEN 15 WHEN x = 16 THEN 16 WHEN x = 17 THEN 17 WHEN x = 18 THEN 18 WHEN x = 19 THEN 19 WHEN x = 20 THEN 20 WHEN x = 21 THEN 21 WHEN x = 22 THEN 22 WHEN x = 23 THEN 23 WHEN x = 24 THEN 24 WHEN x = 25 THEN 25 WHEN x = 26 THEN 26 WHEN x = 27 THEN 27 WHEN x = 28 THEN 28 WHEN x = 29 THEN 29 WHEN x = 30 THEN 30 ELSE (SELECT t2.x + 100 FROM t_case_subquery AS t2 WHERE t2.x = t_case_subquery.x) END FROM t_case_subquery
+----
+1
+1
+131
+30
+NULL

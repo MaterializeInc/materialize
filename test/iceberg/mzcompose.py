@@ -9,6 +9,7 @@
 
 
 import json
+import re
 import threading
 import time
 import urllib.error
@@ -37,7 +38,8 @@ SERVICES = [
     ServiceDefinition(
         "polaris-proxy",
         {
-            "image": "python:3.11-slim",
+            # renovate: datasource=docker depName=python versioning=docker
+            "image": "python:3.11-slim@sha256:07d4824036af339fa1b6ef769cc99d9c10a141769538b52b3b597c84f7a7b535",
             "command": ["python", "-u", "polaris_proxy.py"],
             "working_dir": "/workdir",
             "volumes": [".:/workdir"],
@@ -53,7 +55,7 @@ SERVICES = [
         depends_on=["minio"],
         sanity_restart=False,
         additional_system_parameter_defaults={
-            "log_filter": "mz_storage::sink::iceberg=debug",
+            "log_filter": "info,warn,mz_storage::sink::iceberg=debug,mz_storage_types=debug",
         },
     ),
     Testdrive(),
@@ -128,6 +130,7 @@ def workflow_smoke(c: Composition) -> None:
         "nested-records.td",
         "uuid-column.td",
         "key-validation.td",
+        "duckdb-value-format.td",
     )
 
 
@@ -172,6 +175,25 @@ def workflow_storage_provider(c: Composition) -> None:
     c.run_testdrive_files(
         "storage-provider.td",
     )
+
+
+def workflow_alter_catalog_aws_connection(c: Composition) -> None:
+    """ALTER CONNECTION on the AWS connection an S3 Tables catalog uses must
+    not panic the coordinator while an Iceberg sink depends on the catalog.
+    The change reaches the sink's inlined catalog connection, which the
+    coordinator applies after committing the ALTER. This needs no Iceberg
+    backend, the sink only has to exist."""
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+
+    c.run_testdrive_files(
+        "alter-catalog-aws-connection.td",
+    )
+
+    logs = c.invoke("logs", "materialized", capture=True)
+    assert (
+        "altering export connections after txn must succeed" not in logs.stdout
+    ), "coordinator panicked applying the altered catalog connection to the sink"
 
 
 def workflow_mode_append(c: Composition) -> None:
@@ -292,6 +314,11 @@ def workflow_alter_table_add_column(c: Composition) -> None:
     assert (
         "zip_eq" not in logs.stdout
     ), "storage worker panicked in ArrowBuilder::add_row"
+    # A sink that only wedges on the mismatch keeps buffering its input.
+    assert re.search(
+        r"suspending \S+ because of: .*schema does not match expected schema",
+        logs.stdout,
+    ), "sink dataflow was not suspended after the schema mismatch"
 
 
 def _polaris_get(table_url: str, access_token: str) -> dict:

@@ -59,9 +59,9 @@ export function parseTimePeriod(raw: string | null): number | null {
  * A predicate the menu offers, or null.
  *
  * NOTE: `Object.hasOwn` for the same reason as `parseTimePeriod`, and the
- * failure here is quieter. `?exceeded=toString` passed an `in` check and then
- * fell through `statFor` to p90, so the page judged by one statistic while the
- * menu named another.
+ * failure here is quieter. `?exceeded=toString` passes an `in` check, and
+ * `statFor` would then judge every row by an inherited method instead of a
+ * statistic.
  */
 export function parsePredicate(raw: string | null): Predicate | null {
   return raw !== null && Object.hasOwn(PREDICATE_LABELS, raw)
@@ -124,6 +124,25 @@ export function withScope(
     );
   }
   return next;
+}
+
+/**
+ * The search string carrying only the Time range, Object types, threshold and
+ * statistic in `params`, or none when they are all at their defaults.
+ */
+export function freshnessControlsSearch(params: URLSearchParams): string {
+  const next = new URLSearchParams();
+  for (const key of [
+    TIME_PERIOD_SEARCH_PARAM_KEY,
+    OBJECT_TYPE_SEARCH_PARAM,
+    THRESHOLD_SEARCH_PARAM,
+    PREDICATE_SEARCH_PARAM,
+  ]) {
+    const value = params.get(key);
+    if (value !== null) next.set(key, value);
+  }
+  const search = next.toString();
+  return search === "" ? "" : `?${search}`;
 }
 
 export interface FreshnessParams {

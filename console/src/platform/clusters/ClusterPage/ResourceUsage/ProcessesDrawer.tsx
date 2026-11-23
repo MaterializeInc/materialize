@@ -30,6 +30,7 @@ import { LinePath } from "@visx/shape";
 import { useTooltip, useTooltipInPortal } from "@visx/tooltip";
 import { max } from "d3";
 import React from "react";
+import { Link, To } from "react-router-dom";
 
 import { SizeAllocation } from "~/api/materialize/cluster/replicaProcessMetrics";
 import Alert from "~/components/Alert";
@@ -43,6 +44,7 @@ import SideDrawer from "~/components/SideDrawer";
 import { sortingFunctions } from "~/components/Table/tableColumnBuilders";
 import { UniversalTable } from "~/components/Table/UniversalTable";
 import { useUniversalTable } from "~/components/Table/useUniversalTable";
+import TextLink from "~/components/TextLink";
 import { MIN_BUCKET_SIZE_MS } from "~/platform/clusters/constants";
 import { MaterializeTheme } from "~/theme";
 import { formatPercentage } from "~/utils/format";
@@ -52,6 +54,7 @@ import {
   bucketProcessReadings,
   BusiestProcess,
   busiestProcess,
+  otherProcessesLabel,
   ProcessBucket,
   processIdsOf,
   ProcessMetric,
@@ -63,17 +66,18 @@ import {
   summarizeProcesses,
 } from "./processReadingsModel";
 import {
-  ChartHeader,
+  ChartFrame,
   ChartHeaderProps,
   HoverOverlay,
   Layout,
   LegendSwatch,
-  PercentAxis,
   PercentScale,
-  TimeAxis,
+  ResourcePercentAxis,
+  ResourceTimeAxis,
+  TimeGridLines,
   TimeScale,
 } from "./ResourceUsageCharts";
-import { CHART_MARGIN, percentScale } from "./resourceUsageStyles";
+import { percentChart, RESOURCE_CHART_MARGIN } from "./resourceUsageStyles";
 import { useReplicaProcessSamples } from "./useReplicaProcessSamples";
 
 // The per-process history is raw per-minute samples, so the drawer reads at
@@ -82,7 +86,6 @@ const MAX_WINDOW_MINUTES = 24 * 60;
 // The theme's chart palette has five strong colors. Past five processes, only
 // the ones that stand out get a color; the rest stay grey but named.
 const MAX_COLORED_PROCESSES = 5;
-const PLOT_HEIGHT_PX = 150;
 // The most processes the tooltip lists before summarizing the rest.
 const TOOLTIP_PROCESS_LIMIT = 6;
 
@@ -100,6 +103,10 @@ export interface ProcessesDrawerProps {
   /** Replicas whose size runs more than one process. */
   replicas: ProcessReplica[];
   timePeriodMinutes: number;
+  /** The Workers tab on a replica. */
+  workersLink?: (replicaName: string) => To;
+  /** Where focus goes when the drawer closes. */
+  finalFocusRef?: React.RefObject<HTMLElement>;
 }
 
 /**
@@ -113,10 +120,13 @@ export const ProcessesDrawer = ({
   onClose,
   replicas,
   timePeriodMinutes,
+  workersLink,
+  finalFocusRef,
 }: ProcessesDrawerProps) => (
   <SideDrawer
     isOpen={isOpen}
     onClose={onClose}
+    finalFocusRef={finalFocusRef}
     title="Processes"
     size="xl"
     width="min(1120px, 94vw)"
@@ -134,6 +144,7 @@ export const ProcessesDrawer = ({
               replica={replica}
               windowMinutes={Math.min(timePeriodMinutes, MAX_WINDOW_MINUTES)}
               isWindowCapped={timePeriodMinutes > MAX_WINDOW_MINUTES}
+              workersLink={workersLink?.(replica.name)}
             />
           </TabPanel>
         ))}
@@ -147,37 +158,15 @@ const formatReading = (percent: number | null) =>
 
 /**
  * How each statistic is written. `menu` names it where a reader chooses
- * between them; `sentence` reads as prose in the findings.
+ * between them; `reading` introduces a process's value in the findings.
  */
 const STATISTIC_LABELS: Record<
   ProcessStatistic,
-  { menu: string; sentence: string }
+  { menu: string; reading: string }
 > = {
-  current: { menu: "right now", sentence: "right now" },
-  peak: { menu: "at any moment (peak)", sentence: "at any moment" },
-  average: { menu: "on average", sentence: "on average" },
-};
-
-const finding = (
-  label: string,
-  noun: string,
-  statistic: ProcessStatistic,
-  busiest: BusiestProcess | undefined,
-) => {
-  if (!busiest) return undefined;
-  const when = STATISTIC_LABELS[statistic].sentence;
-  const others =
-    busiest.otherCount === 1
-      ? "the other process"
-      : `the other ${busiest.otherCount} processes`;
-  if (!standsOut(busiest)) {
-    return `${label} is spread evenly ${when}: process ${busiest.processId} read ${formatReading(busiest.value)}, against ${formatReading(busiest.othersMean)} for ${others}.`;
-  }
-  const ratio =
-    busiest.othersMean > 0
-      ? `, ${(busiest.value / busiest.othersMean).toFixed(1)}× ${others} (${formatReading(busiest.othersMean)})`
-      : "";
-  return `Process ${busiest.processId} used the most ${noun} ${when}: ${formatReading(busiest.value)}${ratio}.`;
+  current: { menu: "right now", reading: "is at" },
+  peak: { menu: "at any moment (peak)", reading: "peaked at" },
+  average: { menu: "on average", reading: "averaged" },
 };
 
 const windowLabel = (minutes: number) => {
@@ -186,15 +175,140 @@ const windowLabel = (minutes: number) => {
   return `${minutes / 60} hours`;
 };
 
+// A process standing out at a lower reading than this is noted, not flagged.
+const BUSY_PERCENT = 50;
+
+const evidence = (
+  label: string,
+  statistic: ProcessStatistic,
+  busiest: BusiestProcess,
+) => {
+  const others = otherProcessesLabel(busiest.otherCount);
+  const reading = `process ${busiest.processId} ${STATISTIC_LABELS[statistic].reading} ${formatReading(busiest.value)}`;
+  if (!standsOut(busiest) || busiest.othersMean <= 0) {
+    return `${label}: ${reading}, against ${formatReading(busiest.othersMean)} for ${others}.`;
+  }
+  return `${label}: ${reading}, ${(busiest.value / busiest.othersMean).toFixed(1)}× ${others} (${formatReading(busiest.othersMean)}).`;
+};
+
+const headline = (
+  cpu: BusiestProcess | undefined,
+  memory: BusiestProcess | undefined,
+) => {
+  const cpuId = standsOut(cpu) ? cpu?.processId : undefined;
+  const memoryId = standsOut(memory) ? memory?.processId : undefined;
+  // Only a metric with readings from two processes can be called even.
+  const isEven = (busiest: BusiestProcess | undefined) =>
+    busiest !== undefined && !standsOut(busiest);
+  if (cpuId !== undefined && cpuId === memoryId) {
+    return `Process ${cpuId} used the most CPU and memory.`;
+  }
+  if (cpuId !== undefined && memoryId !== undefined) {
+    return `Process ${cpuId} used the most CPU, and process ${memoryId} the most memory.`;
+  }
+  if (cpuId !== undefined) {
+    return `Process ${cpuId} used the most CPU.${isEven(memory) ? " Memory is spread evenly." : ""}`;
+  }
+  if (memoryId !== undefined) {
+    return `Process ${memoryId} used the most memory.${isEven(cpu) ? " CPU is spread evenly." : ""}`;
+  }
+  if (isEven(cpu) && isEven(memory)) {
+    return "CPU and memory are spread evenly across the processes.";
+  }
+  return isEven(cpu)
+    ? "CPU is spread evenly across the processes."
+    : "Memory is spread evenly across the processes.";
+};
+
+/** What the window's process readings say, with the numbers behind it. */
+const ProcessFindings = ({
+  replica,
+  busiestCpu,
+  busiestMemory,
+  statistic,
+  windowMinutes,
+  isWindowCapped,
+  unreadNowIds,
+  memoryLimit,
+  workersLink,
+}: {
+  replica: ProcessReplica;
+  busiestCpu: BusiestProcess | undefined;
+  busiestMemory: BusiestProcess | undefined;
+  statistic: ProcessStatistic;
+  windowMinutes: number;
+  /** The card shows more than the drawer reads. */
+  isWindowCapped: boolean;
+  /** Processes with no reading in the newest round. */
+  unreadNowIds: string[];
+  /** What memory reads as a share of. */
+  memoryLimit: string;
+  workersLink: To | undefined;
+}) => {
+  const { colors } = useTheme<MaterializeTheme>();
+  const isBusy = (busiest: BusiestProcess | undefined) =>
+    standsOut(busiest) && (busiest?.value ?? 0) >= BUSY_PERCENT;
+  const note = (
+    <Text textStyle="text-small" color={colors.foreground.secondary}>
+      {replica.size} runs each replica as {replica.allocation.processes}{" "}
+      processes. CPU reads as a share of one process&apos;s CPU allocation and
+      memory as a share of its {memoryLimit}, from the last{" "}
+      {windowLabel(windowMinutes)}
+      {isWindowCapped ? ", the most this drawer reads" : ""}.
+    </Text>
+  );
+  const unread = statistic === "current" && unreadNowIds.length > 0 && (
+    <Text>
+      No reading right now from{" "}
+      {unreadNowIds.map((id) => `process ${id}`).join(", ")}.
+    </Text>
+  );
+  if (!busiestCpu && !busiestMemory) {
+    return (
+      <VStack spacing={1} alignItems="start">
+        {unread}
+        {note}
+      </VStack>
+    );
+  }
+  return (
+    <Alert
+      variant={isBusy(busiestCpu) || isBusy(busiestMemory) ? "warning" : "info"}
+      label={headline(busiestCpu, busiestMemory)}
+      message={
+        <VStack spacing={2} alignItems="stretch">
+          <VStack spacing={0.5} alignItems="stretch">
+            {busiestCpu && (
+              <Text>{evidence("CPU", statistic, busiestCpu)}</Text>
+            )}
+            {busiestMemory && (
+              <Text>{evidence("Memory", statistic, busiestMemory)}</Text>
+            )}
+            {unread}
+          </VStack>
+          {note}
+          {workersLink && (
+            <TextLink as={Link} to={workersLink} alignSelf="flex-start">
+              Which workers did the work
+            </TextLink>
+          )}
+        </VStack>
+      }
+    />
+  );
+};
+
 const ProcessesPanel = ({
   replica,
   windowMinutes,
   isWindowCapped,
+  workersLink,
 }: {
   replica: ProcessReplica;
   windowMinutes: number;
   /** The card shows more than the drawer reads. */
   isWindowCapped: boolean;
+  workersLink: To | undefined;
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
   const [statistic, setStatistic] = React.useState<ProcessStatistic>("peak");
@@ -292,7 +406,7 @@ const ProcessesPanel = ({
   const memoryLimit = view.hasHeapLimit ? "heap limit" : "memory allocation";
   return (
     <VStack spacing={6} alignItems="stretch">
-      <VStack spacing={1} alignItems="start">
+      <VStack spacing={3} alignItems="stretch">
         <HStack spacing={2} alignItems="center" flexWrap="wrap">
           <Text textStyle="text-ui-reg" color={colors.foreground.secondary}>
             Compare processes
@@ -320,35 +434,21 @@ const ProcessesPanel = ({
             </Text>
           )}
         </HStack>
-        {[
-          finding("CPU", "CPU", statistic, view.busiestCpu),
-          finding("Memory", "memory", statistic, view.busiestMemory),
-        ].map(
-          (text) =>
-            text && (
-              <Text key={text} textStyle="text-base">
-                {text}
-              </Text>
-            ),
-        )}
-        {statistic === "current" && view.unreadNowIds.length > 0 && (
-          <Text textStyle="text-base" color={colors.foreground.secondary}>
-            No reading right now from{" "}
-            {view.unreadNowIds.map((id) => `process ${id}`).join(", ")}.
-          </Text>
-        )}
-        <Text textStyle="text-small" color={colors.foreground.secondary}>
-          {replica.size} runs each replica as {replica.allocation.processes}{" "}
-          processes. CPU reads as a share of one process&apos;s CPU allocation
-          and memory as a share of its {memoryLimit}, from the last{" "}
-          {windowLabel(windowMinutes)}
-          {isWindowCapped ? ", the most this drawer reads" : ""}.
-        </Text>
+        <ProcessFindings
+          replica={replica}
+          busiestCpu={view.busiestCpu}
+          busiestMemory={view.busiestMemory}
+          statistic={statistic}
+          windowMinutes={windowMinutes}
+          isWindowCapped={isWindowCapped}
+          unreadNowIds={view.unreadNowIds}
+          memoryLimit={memoryLimit}
+          workersLink={workersLink}
+        />
       </VStack>
       <Box ref={parentRef} width="100%" minWidth={0}>
         {width > 0 && (
           <ProcessLineCharts
-            replicaName={replica.name}
             width={width}
             startMs={view.startMs}
             endMs={view.endMs}
@@ -376,7 +476,6 @@ const ProcessesPanel = ({
 };
 
 const ProcessLineCharts = ({
-  replicaName,
   width,
   startMs,
   endMs,
@@ -386,7 +485,6 @@ const ProcessLineCharts = ({
   highlightedId,
   memoryLimit,
 }: {
-  replicaName: string;
   width: number;
   startMs: number;
   endMs: number;
@@ -410,7 +508,7 @@ const ProcessLineCharts = ({
         range: buildXYGraphLayoutProps({
           width,
           height: 0,
-          margin: CHART_MARGIN,
+          margin: RESOURCE_CHART_MARGIN,
         }).xScaleRange,
       }),
     [startMs, endMs, width],
@@ -451,7 +549,7 @@ const ProcessLineCharts = ({
       return color
         ? [
             {
-              label: `${replicaName} · process ${id}`,
+              label: id,
               color,
               variant: "line" as const,
             },
@@ -461,7 +559,7 @@ const ProcessLineCharts = ({
     ...(processIds.some((id) => !colorById.has(id))
       ? [
           {
-            label: "Other processes",
+            label: "other",
             color: colors.foreground.tertiary,
             variant: "line" as const,
           },
@@ -471,23 +569,24 @@ const ProcessLineCharts = ({
 
   return (
     <Box ref={containerRef} position="relative" width="100%">
-      <VStack spacing={5} alignItems="stretch">
+      <TimeGridLines width={width} xScale={xScale} />
+      <VStack spacing={0} alignItems="stretch" position="relative">
         <ProcessLineChart
           {...chartProps}
           metric="cpu"
           title="CPU by Process"
           description="% of each process's CPU allocation"
           legend={legend}
+          legendLabel="Processes"
         />
-        <VStack spacing={0} alignItems="stretch">
-          <ProcessLineChart
-            {...chartProps}
-            metric="memory"
-            title="Memory by Process"
-            description={`% of each process's ${memoryLimit}`}
-          />
-          <TimeAxis width={width} xScale={xScale} />
-        </VStack>
+        <ResourceTimeAxis width={width} xScale={xScale} />
+        <ProcessLineChart
+          {...chartProps}
+          metric="memory"
+          title="Memory by Process"
+          description={`% of each process's ${memoryLimit}`}
+        />
+        <ResourceTimeAxis width={width} xScale={xScale} />
       </VStack>
       {hoveredBucket &&
         tooltipData &&
@@ -598,7 +697,7 @@ const ProcessLines = React.memo(
 
     return (
       <>
-        <PercentAxis layout={layout} yScale={yScale} ticks={ticks} />
+        <ResourcePercentAxis layout={layout} yScale={yScale} ticks={ticks} />
         {order.map((processLine) =>
           draw(processLine, {
             color:
@@ -645,6 +744,7 @@ const ProcessLineChart = ({
   title,
   description,
   legend,
+  legendLabel,
   hoverTimeMs,
   onHover,
   onLeave,
@@ -659,6 +759,7 @@ const ProcessLineChart = ({
   title: string;
   description: string;
   legend?: ChartHeaderProps["legend"];
+  legendLabel?: string;
   hoverTimeMs: number | undefined;
   onHover: (
     hover: { timeMs: number; metric: ProcessMetric },
@@ -666,15 +767,6 @@ const ProcessLineChart = ({
   ) => void;
   onLeave: () => void;
 }) => {
-  const layout = React.useMemo(
-    () =>
-      buildXYGraphLayoutProps({
-        width,
-        height: CHART_MARGIN.top + PLOT_HEIGHT_PX + CHART_MARGIN.bottom,
-        margin: CHART_MARGIN,
-      }),
-    [width],
-  );
   const lines = React.useMemo(
     () =>
       processIds.map((processId) => ({
@@ -690,15 +782,19 @@ const ProcessLineChart = ({
     () => max(lines, ({ points }) => max(points, ({ value }) => value)) ?? 0,
     [lines],
   );
-  const { yScale, ticks } = React.useMemo(
-    () => percentScale(peak, layout),
-    [peak, layout],
+  const { layout, yScale, ticks } = React.useMemo(
+    () => percentChart(peak, width),
+    [peak, width],
   );
 
   return (
-    <VStack spacing={2} alignItems="stretch" width="100%">
-      <ChartHeader title={title} description={description} legend={legend} />
-      <svg {...layout.svgProps} role="img" aria-label={title}>
+    <ChartFrame
+      title={title}
+      description={description}
+      legend={legend}
+      legendLabel={legendLabel}
+    >
+      <svg {...layout.svgProps} display="block" role="img" aria-label={title}>
         <ProcessLines
           layout={layout}
           xScale={xScale}
@@ -721,7 +817,7 @@ const ProcessLineChart = ({
           onPointerLeave={onLeave}
         />
       </svg>
-    </VStack>
+    </ChartFrame>
   );
 };
 

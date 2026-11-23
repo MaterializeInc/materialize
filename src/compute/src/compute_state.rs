@@ -389,11 +389,13 @@ impl ComputeState {
         use mz_compute_types::dyncfgs::*;
 
         let config = &self.worker_config;
+        // The one scratch path every scratch consumer below is fed from.
+        let scratch = self.context.scratch_directory.clone();
 
         self.linear_join_spec = LinearJoinSpec::from_config(config);
 
         if ENABLE_LGALLOC.get(config) {
-            if let Some(path) = &self.context.scratch_directory {
+            if let Some(path) = &scratch {
                 let clear_bytes = LGALLOC_SLOW_CLEAR_BYTES.get(config);
                 let eager_return = ENABLE_LGALLOC_EAGER_RECLAMATION.get(config);
                 let file_growth_dampener = LGALLOC_FILE_GROWTH_DAMPENER.get(config);
@@ -429,19 +431,6 @@ impl ComputeState {
             lgalloc::lgalloc_set_config(lgalloc::LgAlloc::new().disable());
         }
 
-        // Pager backend selection follows scratch-directory availability:
-        // a scratch dir means the file backend; no scratch dir means swap.
-        // `set_scratch_dir` and `set_backend` are both idempotent, so calling
-        // on every `apply_worker_config` tick is safe. The pager module is
-        // only compiled on Unix targets (`mz_ore::pager` is `cfg(unix)`).
-        #[cfg(unix)]
-        if let Some(path) = &self.context.scratch_directory {
-            mz_ore::pager::set_scratch_dir(path.clone());
-            mz_ore::pager::set_backend(mz_ore::pager::Backend::File);
-        } else {
-            mz_ore::pager::set_backend(mz_ore::pager::Backend::Swap);
-        }
-
         crate::memory_limiter::apply_limiter_config(config);
 
         mz_ore::region::ENABLE_LGALLOC_REGION.store(
@@ -454,55 +443,6 @@ impl ComputeState {
         // and `InstanceConfig::arrangement_dictionary_compression`) and held fixed, so that
         // flipping the flag does not retroactively change arrangements on existing replicas.
 
-        // Apply column-pager configuration. The arrange batchers spill
-        // through the buffer pool below, so the consumers of this budget are
-        // the MV sink's correction buffer and storage's paged upsert stash
-        // flavor, which share one policy and one underlying `mz_ore::pager`.
-        // Routes through `apply_tiered_config`, which reuses a process-wide
-        // `TieredPolicy` singleton — operator-driven tunes mutate the
-        // existing atomics rather than installing a fresh policy with a
-        // fresh budget atomic that would orphan in-flight resident tickets.
-        //
-        // Backend selection mirrors the lower-level `mz_ore::pager`
-        // already configured above: file when a scratch directory is
-        // available, swap otherwise.
-        {
-            use mz_ore::pager::Backend;
-            use mz_timely_util::column_pager::{Codec, apply_tiered_config};
-
-            let enabled = ENABLE_COLUMN_PAGED_BATCHER_SPILL.get(config);
-            let codec = COLUMN_PAGED_BATCHER_LZ4.get(config).then_some(Codec::Lz4);
-            let swap_pageout = COLUMN_PAGED_BATCHER_SWAP_PAGEOUT.get(config);
-
-            // Budget derivation: fraction × announced memory limit, with a
-            // 128 MiB floor so the no-pressure case doesn't page per chunk.
-            // Falls back to a 4 GiB assumption if no limit was announced
-            // (e.g. dev environments).
-            const MIB: usize = 1024 * 1024;
-            const DEFAULT_MEM_LIMIT: usize = 4 * 1024 * MIB;
-            let mem_limit = crate::memory_limiter::get_memory_limit().unwrap_or(DEFAULT_MEM_LIMIT);
-            let fraction = COLUMN_PAGED_BATCHER_BUDGET_FRACTION.get(config).max(0.0);
-            let total = usize::cast_lossy(f64::cast_lossy(mem_limit) * fraction).max(128 * MIB);
-
-            let backend = if self.context.scratch_directory.is_some() {
-                Backend::File
-            } else {
-                Backend::Swap
-            };
-
-            debug!(
-                enabled,
-                ?backend,
-                ?codec,
-                swap_pageout,
-                fraction,
-                mem_limit,
-                budget_bytes = total,
-                "column-paged batcher: applying tiered config",
-            );
-            apply_tiered_config(enabled, total, backend, codec, swap_pageout);
-        }
-
         // Install and retune the process-wide buffer pool that backs chunk
         // spilling. Installation is the gate. The pool is constructed, and its
         // MAP_NORESERVE address space reserved and spill threads spawned, only
@@ -511,27 +451,37 @@ impl ComputeState {
         // reruns on every UpdateConfiguration, so flipping a gate on installs
         // the pool on the next tick. The pool is a process singleton with no
         // teardown: once installed it stays active for the life of the process.
-        // Turning every gate back off makes this block do nothing, so the pool
-        // keeps its last-applied budget rather than being uninstalled. Later
-        // ticks with a gate on retune the one instance in place.
+        // Later ticks retune the installed instance in place even with every
+        // gate off. Consumers that rendered under a gate keep spilling into the
+        // pool after it turns off, so a skipped retune would leave them on the
+        // old budget and RSS target, with no error.
         //
         // Storage's stash shares the singleton and gates only participation,
-        // so its spill gate installs the pool too. The worker config set is
-        // the full dyncfg aggregate, which is what makes the storage flag
-        // readable here.
+        // so its spill gate installs the pool too, on replicas where the
+        // upsert-v2 stash can render (see `swap_available`). The worker config
+        // set is the full dyncfg aggregate, which is what makes the storage
+        // flags readable here.
         {
-            use mz_timely_util::pool_config::{PoolPagerConfig, apply_pool_config};
+            use mz_storage_types::dyncfgs::{ENABLE_UPSERT_PAGED_SPILL, ENABLE_UPSERT_V2};
+            use mz_timely_util::pool_config::{
+                ExtentBackend, PoolPagerConfig, apply_pool_config, global_pool_peek,
+                spill_threads_for_workers,
+            };
 
             let compute_spill = ENABLE_COLUMN_PAGED_BATCHER_SPILL.get(config);
-            let storage_spill = mz_storage_types::dyncfgs::ENABLE_UPSERT_PAGED_SPILL.get(config);
+            let storage_spill = ENABLE_UPSERT_PAGED_SPILL.get(config)
+                && ENABLE_UPSERT_V2.get(config)
+                && self.context.swap_available;
             let sink_spill = ENABLE_CORRECTION_V2_SPILL.get(config);
             // Storage's config application sets the storage chunk gate.
             mz_timely_util::columnar::chunk::set_compute_spill_enabled(compute_spill);
             mz_timely_util::columnar::chunk::set_sink_spill_enabled(sink_spill);
-            if !(compute_spill || storage_spill || sink_spill) {
+            if !(compute_spill || storage_spill || sink_spill) && global_pool_peek().is_none() {
                 debug!("chunk spill: gates off, leaving the buffer pool uninstalled");
             } else {
-                let spill_threads = COLUMN_PAGED_BATCHER_SPILL_WORKER_COUNT.get(config);
+                let spill_fraction = COLUMN_PAGED_BATCHER_SPILL_WORKER_FRACTION.get(config);
+                let spill_threads =
+                    spill_threads_for_workers(self.workers_per_process, spill_fraction);
                 let eager_backing = COLUMN_PAGED_BATCHER_EAGER_BACKING.get(config);
 
                 // Budget derivation: fraction of physical RAM, with a 128 MiB
@@ -553,12 +503,32 @@ impl ComputeState {
                 // write then pages out immediately, the pre-tier behavior.
                 let rss_target = of_ram(COLUMN_PAGED_BATCHER_POOL_RSS_TARGET_FRACTION.get(config));
 
-                let applied = apply_pool_config(PoolPagerConfig {
-                    budget_bytes: total,
-                    spill_threads,
-                    eager_backing,
-                    rss_target_bytes: rss_target,
-                });
+                // The file store lives in its own subdirectory so its files
+                // cannot collide with other scratch users. It sizes itself to
+                // the volume's free space, so it assumes no other writer fills
+                // the volume. lgalloc uses the same directory, but is not
+                // enabled alongside the store.
+                let backend = match &scratch {
+                    Some(scratch) if ENABLE_COLUMN_PAGED_BATCHER_FILE_EXTENTS.get(config) => {
+                        ExtentBackend::File {
+                            dir: scratch.join("pool"),
+                            capacity_bytes: None,
+                        }
+                    }
+                    _ => ExtentBackend::Swap,
+                };
+                let applied = apply_pool_config(
+                    PoolPagerConfig {
+                        budget_bytes: total,
+                        spill_threads,
+                        eager_backing,
+                        rss_target_bytes: rss_target,
+                        file_release_interval: COLUMN_PAGED_BATCHER_FILE_RELEASE_INTERVAL
+                            .get(config),
+                        file_release_bytes: COLUMN_PAGED_BATCHER_FILE_RELEASE_BYTES.get(config),
+                    },
+                    backend,
+                );
                 if applied {
                     info!(
                         compute_spill,
@@ -566,6 +536,7 @@ impl ComputeState {
                         fraction,
                         ram,
                         budget_bytes = total,
+                        spill_fraction,
                         spill_threads,
                         eager_backing,
                         rss_target_bytes = rss_target,
@@ -582,6 +553,9 @@ impl ComputeState {
             let compress_min_depth =
                 u8::try_from(COLUMN_CHUNK_COMPRESS_MIN_DEPTH.get(config)).unwrap_or(u8::MAX);
             mz_timely_util::columnar::chunk::set_compress_min_depth(compress_min_depth);
+            let sink_compress_min_depth =
+                u8::try_from(CORRECTION_V2_COMPRESS_MIN_DEPTH.get(config)).unwrap_or(u8::MAX);
+            mz_timely_util::columnar::chunk::set_sink_compress_min_depth(sink_compress_min_depth);
         }
 
         // Remember the maintenance interval locally to avoid reading it from the config set on

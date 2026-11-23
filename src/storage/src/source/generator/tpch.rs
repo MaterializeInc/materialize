@@ -21,7 +21,9 @@ use mz_repr::adt::date::Date;
 use mz_repr::adt::numeric::{self, DecimalLike, Numeric};
 use mz_repr::{Datum, Diff, Row};
 use mz_storage_types::sources::MzOffset;
-use mz_storage_types::sources::load_generator::{Event, Generator, LoadGeneratorOutput, TpchView};
+use mz_storage_types::sources::load_generator::{
+    Event, Generator, GeneratorUpdate, LoadGeneratorOutput, TpchView,
+};
 use rand_8::distributions::{Alphanumeric, DistString};
 use rand_8::rngs::StdRng;
 use rand_8::seq::SliceRandom;
@@ -44,6 +46,42 @@ impl Generator for Tpch {
         seed: Option<u64>,
         _resume_offset: MzOffset,
     ) -> Box<dyn Iterator<Item = (LoadGeneratorOutput, Event<Option<MzOffset>, (Row, Diff)>)>> {
+        self.updates(seed, 0, 1)
+    }
+
+    fn by_seed_for_worker(
+        &self,
+        _: NowFn,
+        seed: Option<u64>,
+        _resume_offset: MzOffset,
+        worker_index: usize,
+        worker_count: usize,
+    ) -> Box<dyn Iterator<Item = GeneratorUpdate>> {
+        self.updates(seed, worker_index, worker_count)
+    }
+}
+
+impl Tpch {
+    /// Produces the snapshot messages for rows whose key maps to `worker_index`,
+    /// and the snapshot progress event. Worker 0 also produces all updates after
+    /// the snapshot.
+    fn updates(
+        &self,
+        seed: Option<u64>,
+        worker_index: usize,
+        worker_count: usize,
+    ) -> Box<dyn Iterator<Item = GeneratorUpdate>> {
+        // Only one worker ticks, because ticking needs the seed of every active
+        // order, which is 16 bytes per order and would otherwise be held by
+        // every worker. Ticking changes one order per offset, so it needs no
+        // parallelism.
+        let ticks = !self.tick.is_zero() && worker_index == 0;
+        let owns = move |key: usize| key % worker_count == worker_index;
+
+        // Every worker replays all draws from `rng`, including those for rows
+        // it does not own. A row consumes a data-dependent number of draws, so
+        // skipping one would change every row after it. Orders draw only their
+        // seed from `rng`, which lets non-owners skip `order_row`.
         let mut rng = StdRng::seed_from_u64(seed.unwrap_or_default());
         let mut ctx = Context {
             tpch: self.clone(),
@@ -77,12 +115,15 @@ impl Generator for Tpch {
 
         let mut offset = 0;
         let mut row = Row::default();
-        Box::new(iter::from_fn(move || {
+        // A row this worker does not own leaves `pending` empty. The closure
+        // then returns `Some(None)`, which `flatten` skips.
+        let updates = iter::from_fn(move || {
             if let Some((output, event)) = pending.pop_front() {
-                return Some((LoadGeneratorOutput::Tpch(output), event));
+                return Some(Some((LoadGeneratorOutput::Tpch(output), event)));
             }
             if let Some((output, key)) = rows.next() {
                 let key_usize = usize::try_from(key).expect("key known to be non-negative");
+                let owned = owns(key_usize);
                 let row = match output {
                     TpchView::Supplier => {
                         let nation = rng.gen_range(0..count_nation);
@@ -96,7 +137,7 @@ impl Generator for Tpch {
                             // TODO: add customer complaints and recommends, see 4.2.3.
                             Datum::String(text_string(&mut rng, &ctx.text_string_source, 25, 100)),
                         ]);
-                        row.clone()
+                        Some(row.clone())
                     }
                     TpchView::Part => {
                         let name: String = PARTNAMES
@@ -125,6 +166,9 @@ impl Generator for Tpch {
                                     198,
                                 )),
                             ]);
+                            if !owned {
+                                continue;
+                            }
                             pending.push_back((
                                 TpchView::Partsupp,
                                 Event::Message(MzOffset::from(offset), (row.clone(), Diff::ONE)),
@@ -141,7 +185,7 @@ impl Generator for Tpch {
                             Datum::Numeric(partkey_retailprice(key)),
                             Datum::String(text_string(&mut rng, &ctx.text_string_source, 49, 198)),
                         ]);
-                        row.clone()
+                        Some(row.clone())
                     }
                     TpchView::Customer => {
                         let nation = rng.gen_range(0..count_nation);
@@ -155,10 +199,16 @@ impl Generator for Tpch {
                             Datum::String(SEGMENTS.choose(&mut rng).unwrap()),
                             Datum::String(text_string(&mut rng, &ctx.text_string_source, 29, 116)),
                         ]);
-                        row.clone()
+                        Some(row.clone())
                     }
-                    TpchView::Orders => {
+                    TpchView::Orders => 'order: {
                         let seed = rng.r#gen();
+                        if ticks {
+                            active_orders.push((key, seed));
+                        }
+                        if !owned {
+                            break 'order None;
+                        }
                         let (order, lineitems) = ctx.order_row(seed, key);
                         for row in lineitems {
                             pending.push_back((
@@ -166,10 +216,7 @@ impl Generator for Tpch {
                                 Event::Message(MzOffset::from(offset), (row, Diff::ONE)),
                             ));
                         }
-                        if !ctx.tpch.tick.is_zero() {
-                            active_orders.push((key, seed));
-                        }
-                        order
+                        Some(order)
                     }
                     TpchView::Nation => {
                         let (name, region) = NATIONS[key_usize];
@@ -179,7 +226,7 @@ impl Generator for Tpch {
                             Datum::Int64(region),
                             Datum::String(text_string(&mut rng, &ctx.text_string_source, 31, 114)),
                         ]);
-                        row.clone()
+                        Some(row.clone())
                     }
                     TpchView::Region => {
                         row.packer().extend([
@@ -187,21 +234,23 @@ impl Generator for Tpch {
                             Datum::String(REGIONS[key_usize]),
                             Datum::String(text_string(&mut rng, &ctx.text_string_source, 31, 115)),
                         ]);
-                        row.clone()
+                        Some(row.clone())
                     }
                     _ => unreachable!("{output:?}"),
                 };
 
-                pending.push_back((
-                    output,
-                    Event::Message(MzOffset::from(offset), (row, Diff::ONE)),
-                ));
+                if let Some(row) = row.filter(|_| owned) {
+                    pending.push_back((
+                        output,
+                        Event::Message(MzOffset::from(offset), (row, Diff::ONE)),
+                    ));
+                }
                 if rows.peek().is_none() {
                     offset += 1;
                     pending.push_back((output, Event::Progress(Some(MzOffset::from(offset)))));
                 }
             } else {
-                if ctx.tpch.tick.is_zero() {
+                if !ticks {
                     return None;
                 }
                 let idx = rng.gen_range(0..active_orders.len());
@@ -239,10 +288,13 @@ impl Generator for Tpch {
                 ));
                 active_orders.push((key, new_seed));
             }
-            pending
-                .pop_front()
-                .map(|(output, event)| (LoadGeneratorOutput::Tpch(output), event))
-        }))
+            Some(
+                pending
+                    .pop_front()
+                    .map(|(output, event)| (LoadGeneratorOutput::Tpch(output), event)),
+            )
+        });
+        Box::new(updates.flatten())
     }
 }
 
@@ -600,3 +652,6 @@ const NATIONS: &[(&str, i64)] = &[
     ("UNITED KINGDOM", 3),
     ("UNITED STATES", 1),
 ];
+
+#[cfg(test)]
+mod tests;

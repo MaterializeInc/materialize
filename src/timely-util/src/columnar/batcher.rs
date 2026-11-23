@@ -25,7 +25,7 @@ use columnar::bytes::indexed;
 use columnar::{BorrowedOf, Clear, Columnar, Index, Len};
 use columnation::Columnation;
 use differential_dataflow::difference::Semigroup;
-use differential_dataflow::trace::implementations::merge_batcher::Merger;
+use differential_dataflow::trace::implementations::merge_batcher::{Extractor, Merger};
 use timely::Container;
 use timely::PartialOrder;
 use timely::container::{ContainerBuilder, PushInto};
@@ -288,8 +288,7 @@ impl<D, T, R> Default for ColumnMerger<D, T, R> {
 }
 
 /// A chunk the merge and extract bodies below write to: the merger's
-/// [`ColumnBody`], and the column pager's [`Column`] until that pager is
-/// retired.
+/// [`ColumnBody`].
 pub trait MergeChunk<C: Columnar>: Default {
     /// The typed containers, for writing to.
     fn typed(&mut self) -> &mut C::Container;
@@ -311,29 +310,6 @@ impl<C: Columnar> MergeChunk<C> for ColumnBody<C> {
     }
 }
 
-impl<C: Columnar> MergeChunk<C> for Column<C> {
-    fn typed(&mut self) -> &mut C::Container {
-        // The pager merges into recycled typed chunks, so this is a move. A
-        // serialized chunk is copied, as `ColumnBody::typed_mut` does.
-        if !matches!(self, Column::Typed(_)) {
-            let view = self.borrow();
-            let mut fresh = C::Container::default();
-            fresh.extend_from_self(view, 0..view.len());
-            *self = Column::Typed(fresh);
-        }
-        let Column::Typed(typed) = self else {
-            unreachable!("a serialized chunk was materialized above");
-        };
-        typed
-    }
-    fn view(&self) -> BorrowedOf<'_, C> {
-        self.borrow()
-    }
-    fn is_empty(&self) -> bool {
-        self.is_empty()
-    }
-}
-
 /// Per-chunk merge and extract for sorted [`ColumnBody`] chunks.
 ///
 /// These are the building blocks that [`Merger for ColumnMerger`] orchestrates
@@ -342,36 +318,6 @@ impl<C: Columnar> MergeChunk<C> for Column<C> {
 /// The output side of each is written to, so a serialized output body is
 /// materialized first (see [`ColumnBody::typed_mut`]).
 impl<D, T, R> ColumnBody<(D, T, R)>
-where
-    D: Columnar,
-    for<'a> columnar::Ref<'a, D>: Copy + Ord,
-    T: Columnar + Default + Clone + PartialOrder,
-    for<'a> columnar::Ref<'a, T>: Copy + Ord,
-    R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
-{
-    /// Merge items from sorted inputs into `self`, advancing positions. See
-    /// [`merge_from`].
-    #[must_use]
-    pub fn merge_from(&mut self, others: &mut [Self], positions: &mut [usize]) -> bool {
-        merge_from(self, others, positions)
-    }
-
-    /// Partition records starting at `*position` into `keep` and `ship`. See
-    /// [`extract`].
-    pub fn extract(
-        &mut self,
-        position: &mut usize,
-        upper: AntichainRef<T>,
-        frontier: &mut Antichain<T>,
-        keep: &mut Self,
-        ship: &mut Self,
-    ) {
-        extract(self, position, upper, frontier, keep, ship)
-    }
-}
-
-/// The same merge and extract for the column pager's [`Column`] chunks.
-impl<D, T, R> Column<(D, T, R)>
 where
     D: Columnar,
     for<'a> columnar::Ref<'a, D>: Copy + Ord,
@@ -502,8 +448,7 @@ where
             // That bounds uniform rows to just under the ship size. For
             // mixed widths it is a cadence hint: a stretch of wide rows
             // can overshoot. `ColumnChunk::settle` enforces the bound for
-            // chunks that reach the pool. The column pager's merge-batcher
-            // output has no size classes and ships as cut.
+            // chunks that reach the pool.
             let average_bytes = input_bytes / (upper_l + upper_r).max(1);
             let check_records =
                 (crate::columnar::SHIP_WORDS * 8 / 10 / average_bytes.max(1)).clamp(1, 1024);
@@ -672,7 +617,6 @@ where
     for<'a> columnar::Ref<'a, T>: Copy + Ord,
     R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
 {
-    type Time = T;
     type Chunk = ColumnBody<(D, T, R)>;
 
     fn merge(
@@ -788,6 +732,31 @@ where
         }
     }
 
+    fn len(chunk: &Self::Chunk) -> usize {
+        chunk.len()
+    }
+
+    fn allocation(chunk: &Self::Chunk) -> (usize, usize, usize) {
+        // Serialized footprint stands in for both `size` and `capacity`: the
+        // chunk owns one logical allocation worth of leaf storage, and we
+        // ship/recycle the whole thing rather than tracking per-leaf
+        // capacities. Treating `size == capacity` matches how the framework
+        // accounts already-shipped chunks (no slack to absorb).
+        let bytes = chunk.length_in_bytes();
+        (bytes, bytes, 1)
+    }
+}
+
+impl<D, T, R> Extractor for ColumnMerger<D, T, R>
+where
+    D: Columnar,
+    for<'a> columnar::Ref<'a, D>: Copy + Ord,
+    T: Columnar + Default + Clone + Ord + PartialOrder,
+    for<'a> columnar::Ref<'a, T>: Copy + Ord,
+    R: Columnar + Default + Semigroup + for<'a> Semigroup<columnar::Ref<'a, R>>,
+{
+    type Time = T;
+
     fn extract(
         &mut self,
         merged: Vec<Self::Chunk>,
@@ -822,20 +791,6 @@ where
         if !ready.is_empty() {
             ship.push(ready);
         }
-    }
-
-    fn len(chunk: &Self::Chunk) -> usize {
-        chunk.len()
-    }
-
-    fn allocation(chunk: &Self::Chunk) -> (usize, usize, usize) {
-        // Serialized footprint stands in for both `size` and `capacity`: the
-        // chunk owns one logical allocation worth of leaf storage, and we
-        // ship/recycle the whole thing rather than tracking per-leaf
-        // capacities. Treating `size == capacity` matches how the framework
-        // accounts already-shipped chunks (no slack to absorb).
-        let bytes = chunk.length_in_bytes();
-        (bytes, bytes, 1)
     }
 }
 

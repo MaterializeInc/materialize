@@ -347,12 +347,12 @@ Hydration resolves itself, so no action is needed unless it keeps recurring. If
 it does, find what is triggering it:
 
 - **Replica restarts**, including [OOM crash
-  loops](/transform-data/freshness-troubleshooting/#check-for-oom-crash-loops),
+  loops](/transform-data/freshness/troubleshoot-freshness/#check-for-oom-crash-loops),
   which rehydrate the whole cluster on every restart.
 
 - **DDL or deploy activity**. Creating, altering, or dropping an object hydrates
   it on whichever cluster it lives on. See [Check for DDL or deploy
-  activity](/transform-data/freshness-troubleshooting/#check-for-ddl-or-deploy-activity).
+  activity](/transform-data/freshness/troubleshoot-freshness/#check-for-ddl-or-deploy-activity).
 
 - **Cluster resizes**, which hydrate the new replicas before dropping the old
   ones.
@@ -472,14 +472,14 @@ cluster up or reduce the volume upstream.
 If the sources live on a different cluster from the objects that spiked, check
 that cluster too: downstream compute inherits its inputs' change rate. See
 [Check source
-ingestion](/transform-data/freshness-troubleshooting/#check-source-ingestion).
+ingestion](/transform-data/freshness/troubleshoot-freshness/#check-source-ingestion).
 
 ### Prevention
 
 - Size clusters against the peak change rate rather than the average, and
   revisit the sizing when upstream workloads change.
 
-- [Monitor freshness](/transform-data/monitor-freshness/) so that a rising
+- [Monitor freshness](/transform-data/freshness/monitor-freshness/) so that a rising
   change rate surfaces as lag before it surfaces as saturation.
 
 ## Memory pressure causing increased spill to disk
@@ -608,5 +608,5 @@ clusters.
 
 - Follow the [operational guidelines](/clusters/operational-guidelines/) for
   how to lay out clusters. See [Check cluster
-  health](/transform-data/freshness-troubleshooting/#check-cluster-health) for
+  health](/transform-data/freshness/troubleshoot-freshness/#check-cluster-health) for
   the corresponding freshness symptoms.

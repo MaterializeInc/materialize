@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 import { queryBuilder } from "~/api/materialize/db";
+import { getIdByName } from "~/test/sql/getIdByName";
 import {
   executeSqlHttp,
   getMaterializeClient,
@@ -15,10 +16,12 @@ import {
 import { testdrive } from "~/test/sql/mzcompose";
 import { waitFor } from "~/test/sql/waitFor";
 
-import { buildWorkflowGraphQuery } from "./workflowGraph";
+import { buildWorkflowGraphQuery, WorkflowGraphEdge } from "./workflowGraph";
+import { buildWorkflowGraphEdgesQuery } from "./workflowGraphEdges";
+import { traverseWorkflowGraph } from "./workflowGraphTraversal";
 
 describe("createPostgresSourceStatement", () => {
-  it("returns an array of graph edges", async () => {
+  beforeAll(async () => {
     await testdrive(
       `
         $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -61,7 +64,9 @@ describe("createPostgresSourceStatement", () => {
           ENVELOPE DEBEZIUM
       `,
     );
+  });
 
+  it("returns an array of graph edges", async () => {
     const client = await getMaterializeClient();
     const {
       rows: [source],
@@ -97,5 +102,34 @@ describe("createPostgresSourceStatement", () => {
         { parentId: matView.id, childId: sink.id },
       ]);
     });
+  });
+
+  it("walks the same graph in the browser as the SQL query", async () => {
+    const edgesQuery = buildWorkflowGraphEdgesQuery().compile(queryBuilder);
+    const sortEdges = (edges: WorkflowGraphEdge[]) =>
+      [...edges].sort(
+        (a, b) =>
+          (a.parentId ?? "").localeCompare(b.parentId ?? "") ||
+          (a.childId ?? "").localeCompare(b.childId ?? ""),
+      );
+    for (const name of ["pg_source", "t", "t_mv", "t_ind", "t_sink"]) {
+      const objectId = await getIdByName({
+        name,
+        schemaName: "public",
+        databaseName: "materialize",
+      });
+      const graphQuery = buildWorkflowGraphQuery({ objectId }).compile(
+        queryBuilder,
+      );
+      await waitFor(async () => {
+        const [edges, graph] = await Promise.all([
+          executeSqlHttp(edgesQuery),
+          executeSqlHttp(graphQuery),
+        ]);
+        expect(sortEdges(traverseWorkflowGraph(edges.rows, objectId))).toEqual(
+          sortEdges(graph.rows),
+        );
+      });
+    }
   });
 });

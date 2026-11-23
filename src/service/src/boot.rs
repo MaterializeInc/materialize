@@ -28,7 +28,7 @@ macro_rules! emit_boot_diagnostics {
 
         let build_info = $build_info;
         let os = os_info::get();
-        let mut system = System::new();
+        let mut system = System::new().expect("sysinfo supports Linux and macOS");
         system.refresh_memory();
         system.refresh_cpu_specifics(CpuRefreshKind::nothing().with_frequency());
         let cpus = system.cpus();
@@ -40,7 +40,7 @@ macro_rules! emit_boot_diagnostics {
             build.version = build_info.version,
             build.sha = build_info.sha,
             cpus.logical = cpus.len(),
-            cpus.physical = %System::physical_core_count().display_or("<unknown>"),
+            cpus.physical = %System::physical_core_count().ok().display_or("<unknown>"),
             cpu0.brand = cpus[0].brand(),
             cpu0.frequency = cpus[0].frequency(),
             memory.total = system.total_memory(),

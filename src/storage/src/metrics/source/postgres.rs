@@ -11,7 +11,7 @@
 
 use mz_ore::metric;
 use mz_ore::metrics::{
-    DeleteOnDropCounter, DeleteOnDropGauge, GaugeVec, IntCounterVec, MetricsRegistry, UIntGaugeVec,
+    DeregisterOnDropCounter, DeregisterOnDropGauge, DeregisterOnDropVec, MetricsRegistry, raw,
 };
 use mz_repr::GlobalId;
 use prometheus::core::{AtomicF64, AtomicU64};
@@ -21,15 +21,15 @@ use std::sync::Mutex;
 /// Definitions for Postgres source metrics.
 #[derive(Clone, Debug)]
 pub(crate) struct PgSourceMetricDefs {
-    pub(crate) total_messages: IntCounterVec,
-    pub(crate) transactions: IntCounterVec,
-    pub(crate) ignored_messages: IntCounterVec,
-    pub(crate) insert_messages: IntCounterVec,
-    pub(crate) update_messages: IntCounterVec,
-    pub(crate) delete_messages: IntCounterVec,
-    pub(crate) tables_in_publication: UIntGaugeVec,
-    pub(crate) wal_lsn: UIntGaugeVec,
-    pub(crate) table_count_latency: GaugeVec,
+    pub(crate) total_messages: DeregisterOnDropVec<raw::IntCounterVec>,
+    pub(crate) transactions: DeregisterOnDropVec<raw::IntCounterVec>,
+    pub(crate) ignored_messages: DeregisterOnDropVec<raw::IntCounterVec>,
+    pub(crate) insert_messages: DeregisterOnDropVec<raw::IntCounterVec>,
+    pub(crate) update_messages: DeregisterOnDropVec<raw::IntCounterVec>,
+    pub(crate) delete_messages: DeregisterOnDropVec<raw::IntCounterVec>,
+    pub(crate) tables_in_publication: DeregisterOnDropVec<raw::UIntGaugeVec>,
+    pub(crate) wal_lsn: DeregisterOnDropVec<raw::UIntGaugeVec>,
+    pub(crate) table_count_latency: DeregisterOnDropVec<raw::GaugeVec>,
 }
 
 impl PgSourceMetricDefs {
@@ -90,7 +90,7 @@ pub(crate) struct PgSnapshotMetrics {
     // This has to be shared between tokio tasks and the replication operator, as the collection
     // of these metrics happens once in those tasks, which do not live long enough to keep them
     // alive.
-    gauges: Arc<Mutex<Vec<DeleteOnDropGauge<AtomicF64, Vec<String>>>>>,
+    gauges: Arc<Mutex<Vec<DeregisterOnDropGauge<AtomicF64>>>>,
     defs: PgSourceMetricDefs,
 }
 
@@ -99,7 +99,7 @@ impl PgSnapshotMetrics {
         let latency_gauge = self
             .defs
             .table_count_latency
-            .get_delete_on_drop_metric(vec![self.source_id.to_string(), table_name]);
+            .get_deregister_on_drop_metric(vec![self.source_id.to_string(), table_name]);
         latency_gauge.set(latency);
         self.gauges.lock().expect("poisoned").push(latency_gauge)
     }
@@ -107,14 +107,14 @@ impl PgSnapshotMetrics {
 
 /// Metrics for Postgres sources.
 pub(crate) struct PgSourceMetrics {
-    pub(crate) inserts: DeleteOnDropCounter<AtomicU64, Vec<String>>,
-    pub(crate) updates: DeleteOnDropCounter<AtomicU64, Vec<String>>,
-    pub(crate) deletes: DeleteOnDropCounter<AtomicU64, Vec<String>>,
-    pub(crate) ignored: DeleteOnDropCounter<AtomicU64, Vec<String>>,
-    pub(crate) total: DeleteOnDropCounter<AtomicU64, Vec<String>>,
-    pub(crate) transactions: DeleteOnDropCounter<AtomicU64, Vec<String>>,
-    pub(crate) tables: DeleteOnDropGauge<AtomicU64, Vec<String>>,
-    pub(crate) lsn: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub(crate) inserts: DeregisterOnDropCounter<AtomicU64>,
+    pub(crate) updates: DeregisterOnDropCounter<AtomicU64>,
+    pub(crate) deletes: DeregisterOnDropCounter<AtomicU64>,
+    pub(crate) ignored: DeregisterOnDropCounter<AtomicU64>,
+    pub(crate) total: DeregisterOnDropCounter<AtomicU64>,
+    pub(crate) transactions: DeregisterOnDropCounter<AtomicU64>,
+    pub(crate) tables: DeregisterOnDropGauge<AtomicU64>,
+    pub(crate) lsn: DeregisterOnDropGauge<AtomicU64>,
 
     pub(crate) snapshot_metrics: PgSnapshotMetrics,
 }
@@ -126,24 +126,26 @@ impl PgSourceMetrics {
         Self {
             inserts: defs
                 .insert_messages
-                .get_delete_on_drop_metric(labels.to_vec()),
+                .get_deregister_on_drop_metric(labels.to_vec()),
             updates: defs
                 .update_messages
-                .get_delete_on_drop_metric(labels.to_vec()),
+                .get_deregister_on_drop_metric(labels.to_vec()),
             deletes: defs
                 .delete_messages
-                .get_delete_on_drop_metric(labels.to_vec()),
+                .get_deregister_on_drop_metric(labels.to_vec()),
             ignored: defs
                 .ignored_messages
-                .get_delete_on_drop_metric(labels.to_vec()),
+                .get_deregister_on_drop_metric(labels.to_vec()),
             total: defs
                 .total_messages
-                .get_delete_on_drop_metric(labels.to_vec()),
-            transactions: defs.transactions.get_delete_on_drop_metric(labels.to_vec()),
+                .get_deregister_on_drop_metric(labels.to_vec()),
+            transactions: defs
+                .transactions
+                .get_deregister_on_drop_metric(labels.to_vec()),
             tables: defs
                 .tables_in_publication
-                .get_delete_on_drop_metric(labels.to_vec()),
-            lsn: defs.wal_lsn.get_delete_on_drop_metric(labels.to_vec()),
+                .get_deregister_on_drop_metric(labels.to_vec()),
+            lsn: defs.wal_lsn.get_deregister_on_drop_metric(labels.to_vec()),
             snapshot_metrics: PgSnapshotMetrics {
                 source_id,
                 gauges: Default::default(),

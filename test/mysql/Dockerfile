@@ -9,7 +9,7 @@
 
 MZFROM test-certs AS certs
 
-FROM mysql:9.7.0 AS seed
+FROM mysql:26.10.0@sha256:3819b2b23835c4a73c8b022fafc33c8095c0f81c929a8b7a84613d2fba6c52f5 AS seed
 
 ENV MYSQL_ROOT_HOST=%
 
@@ -20,7 +20,7 @@ RUN chmod +x /usr/local/bin/seed-mysql-datadir.sh \
     && chown -R mysql:mysql /var/lib/mysql-seed /var/lib/mysql-files \
     && gosu mysql /usr/local/bin/seed-mysql-datadir.sh
 
-FROM mysql:9.7.0
+FROM mysql:26.10.0@sha256:3819b2b23835c4a73c8b022fafc33c8095c0f81c929a8b7a84613d2fba6c52f5
 
 COPY --from=seed /var/lib/mysql-seed /var/lib/mysql-seed
 COPY mysql-entrypoint.sh /usr/local/bin/mysql-entrypoint.sh

@@ -66,7 +66,7 @@ pub const BLOB_HTTP_POOL: Config<&'static str> = Config::new(
     "persist_blob_http_pool",
     BlobHttpPool::default().as_str(),
     "Which S3 blob endpoints spread requests over a growing pool of HTTP clients: 'gcs' \
-    (only GCS endpoints), 'on' (every endpoint), or 'off'. Unrecognized values mean 'off'.",
+    (only GCS endpoints), 'on' (every endpoint), or 'off'. Unrecognized values mean 'gcs'.",
     ParameterScope::Environment,
 );
 
@@ -100,7 +100,7 @@ impl BlobHttpPool {
 
     /// The value [`BLOB_HTTP_POOL`] defaults to.
     pub const fn default() -> Self {
-        Self::Off
+        Self::Gcs
     }
 
     const fn as_str(self) -> &'static str {
@@ -1269,15 +1269,6 @@ impl MinElapsed {
             trace!("{msg} took {x:?}");
         }
     }
-}
-
-// Make sure the "vendored" feature of the openssl_sys crate makes it into the
-// transitive dep graph of persist, so that we don't attempt to link against the
-// system OpenSSL library. Fake a usage of the crate here so that a good
-// samaritan doesn't remove our unused dep.
-#[allow(dead_code)]
-fn openssl_sys_hack() {
-    openssl_sys::init();
 }
 
 #[cfg(test)]

@@ -287,6 +287,43 @@ SELECT * FROM mv
 COMPLETE 0
 
 
+# Renaming the replacement target changes FOR, not a same-named input.
+statement ok
+CREATE SCHEMA upstream
+
+statement ok
+CREATE SCHEMA downstream
+
+statement ok
+CREATE TABLE upstream.orders (id int)
+
+statement ok
+CREATE MATERIALIZED VIEW downstream.orders AS SELECT id FROM upstream.orders
+
+statement ok
+CREATE REPLACEMENT MATERIALIZED VIEW downstream.repl FOR downstream.orders
+AS SELECT id + 1 AS id FROM upstream.orders
+
+statement ok
+ALTER MATERIALIZED VIEW downstream.orders RENAME TO new_orders
+
+query T
+SELECT create_sql LIKE '%materialize.downstream.new_orders%'
+   AND create_sql LIKE '%materialize.upstream.orders%'
+FROM (SHOW CREATE MATERIALIZED VIEW downstream.repl)
+----
+true
+
+statement ok
+ALTER MATERIALIZED VIEW downstream.new_orders APPLY REPLACEMENT downstream.repl
+
+query T
+SELECT create_sql LIKE '%materialize.upstream.orders%'
+FROM (SHOW CREATE MATERIALIZED VIEW downstream.new_orders)
+----
+true
+
+
 # Regression test: authorization to CREATE a replacement against another role's
 # materialized view.
 #

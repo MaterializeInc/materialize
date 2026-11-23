@@ -26,7 +26,6 @@ use std::fmt;
 use chrono::NaiveDateTime;
 use fmt::{Debug, Display};
 
-use crate::types::ScalarKind;
 use crate::util::TsUnit;
 use crate::{ParseSchemaError, SchemaResolutionError};
 
@@ -71,19 +70,6 @@ pub enum DecodeError {
         expected: usize,
         actual: usize,
     },
-    UnexpectedRecord,
-    UnexpectedUnion,
-    UnexpectedArray,
-    UnexpectedMap,
-    UnexpectedEnum,
-    UnexpectedScalar,
-    UnexpectedDecimal,
-    UnexpectedBytes,
-    UnexpectedString,
-    UnexpectedJson,
-    UnexpectedUuid,
-    UnexpectedFixed,
-    UnexpectedScalarKind(ScalarKind),
     WrongHeaderMagic([u8; 4]),
     MissingAvroDotSchema,
     I32OutOfRange(i64),
@@ -142,21 +128,6 @@ impl DecodeError {
                 "Enum symbol {} at index {} in writer schema not found in reader",
                 symbol, index
             ),
-            DecodeError::UnexpectedRecord => write!(f, "Unexpected record"),
-            DecodeError::UnexpectedUnion => write!(f, "Unexpected union"),
-            DecodeError::UnexpectedArray => write!(f, "Unexpected array"),
-            DecodeError::UnexpectedMap => write!(f, "Unexpected map"),
-            DecodeError::UnexpectedEnum => write!(f, "Unexpected enum"),
-            DecodeError::UnexpectedScalar => write!(f, "Unexpected scalar"),
-            DecodeError::UnexpectedDecimal => write!(f, "Unexpected decimal"),
-            DecodeError::UnexpectedBytes => write!(f, "Unexpected bytes"),
-            DecodeError::UnexpectedString => write!(f, "Unexpected string"),
-            DecodeError::UnexpectedJson => write!(f, "Unexpected json"),
-            DecodeError::UnexpectedUuid => write!(f, "Unexpected UUID"),
-            DecodeError::UnexpectedFixed => write!(f, "Unexpected fixed"),
-            DecodeError::UnexpectedScalarKind(kind) => {
-                write!(f, "Scalar of unexpected kind: {:?}", kind)
-            }
             DecodeError::WrongHeaderMagic(magic) => write!(f, "Wrong header magic: {:x?}", magic),
             DecodeError::MissingAvroDotSchema => write!(
                 f,

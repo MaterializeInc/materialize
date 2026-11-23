@@ -29,6 +29,10 @@ struct ObjectsHash {
 const OBJECTS_HASHES: &str = "objects_hashes.json";
 
 fn main() -> anyhow::Result<()> {
+    println!("cargo:rerun-if-changed={OBJECTS_HASHES}");
+    // Track the directory to detect newly added object versions as well.
+    println!("cargo:rerun-if-changed=src");
+
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
     // Read in the persisted hashes from disk.

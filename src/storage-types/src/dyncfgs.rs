@@ -426,51 +426,22 @@ pub const STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING: Config<Option<usize>> = C
     ParameterScope::Replica,
 );
 
-/// Allow the upsert-v2 stash to spill out of RSS. Off by default; while off,
-/// the stash keeps everything resident.
+/// Allow the upsert-v2 stash to spill out of RSS. While off, the stash keeps
+/// everything resident.
 ///
-/// The spill mechanism depends on the stash flavor
-/// ([`ENABLE_UPSERT_CHUNKED_STASH`]):
-///
-/// * Chunked: sets the storage chunk spill gate
-///   (`mz_timely_util::columnar::chunk::StorageSpill`), which only upsert's
-///   chunks read, independently of compute's
-///   `enable_column_paged_batcher_spill`. Spilled chunks draw on the one
-///   shared pool budget, and the gate is consulted at every chunk commit, so
-///   flips apply to running dataflows.
-/// * Paged: gates the storage-owned column pager the stash and feedback
-///   arrangement route their chains through, independently of compute's
-///   `enable_column_paged_batcher_spill`. Captured at operator
-///   construction, so flips apply to dataflows created after the change.
+/// Sets the storage chunk spill gate
+/// (`mz_timely_util::columnar::chunk::StorageSpill`), which only upsert's
+/// chunks read, independently of compute's `enable_column_paged_batcher_spill`.
+/// Spilled chunks draw on the one shared pool budget, and the gate is
+/// consulted at every chunk commit, so flips apply to running dataflows.
 ///
 /// Enabling it also installs the process buffer pool (via compute's config
 /// handler, which reads this flag from the aggregate dyncfg set), so
 /// storage-only spilling needs no compute-side gate.
 pub const ENABLE_UPSERT_PAGED_SPILL: Config<bool> = Config::new(
     "enable_upsert_paged_spill",
-    false,
-    "Allow the upsert-v2 stash to spill out of RSS, through the buffer pool (chunked stash \
-     flavor) or the column pager (paged stash flavor).",
-    ParameterScope::Replica,
-);
-
-/// Use the chunked stash flavor for the upsert-v2 operator: differential's
-/// chunk merge batcher for the source stash and a spine of chunk batches for
-/// the feedback arrangement, with a bulk-probe drain. When `false` (the
-/// default), the paged flavor is used: the paged columnar merge batcher and a
-/// `ValRowSpine`, with a cursor-based drain. See
-/// `mz_storage::upsert_continual_feedback_v2::UpsertStashFlavor` for the
-/// comparison.
-///
-/// Read at operator construction time; flips take effect on dataflows created
-/// after the change. Only meaningful when [`ENABLE_UPSERT_V2`] is `true`.
-/// Spilling in either flavor is gated by [`ENABLE_UPSERT_PAGED_SPILL`].
-pub const ENABLE_UPSERT_CHUNKED_STASH: Config<bool> = Config::new(
-    "enable_upsert_chunked_stash",
-    false,
-    "Use the chunk batcher and chunk spine for the upsert-v2 stash and feedback arrangement, \
-     instead of the paged columnar merge batcher and ValRowSpine. Only meaningful when \
-     enable_upsert_v2 is true.",
+    true,
+    "Allow the upsert-v2 stash to spill out of RSS, through the buffer pool.",
     ParameterScope::Replica,
 );
 
@@ -503,7 +474,7 @@ pub const STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT: Config<bool> = Config::new(
 /// Whether to use the v2 upsert operator.
 pub const ENABLE_UPSERT_V2: Config<bool> = Config::new(
     "enable_upsert_v2",
-    false,
+    true,
     "Whether to use the v2 upsert operator.",
     ParameterScope::Environment,
 );
@@ -550,24 +521,25 @@ pub const SINK_ENSURE_TOPIC_CONFIG: Config<&'static str> = Config::new(
 /// it was opened for, so this wants to be at least one `timestamp_interval`. An update that outruns
 /// it writes a batch of its own instead, which costs a batch rather than correctness.
 ///
-/// Only applies to an export of a Postgres source (for now) that is snapshotting in this dataflow
+/// Only applies to an export of a Postgres or MySQL source that is snapshotting in this dataflow
 /// incarnation, and only until the frontier moves off the time its snapshot occupies. Zero disables
 /// committing ahead, leaving descriptions derived from the frontier alone and every timestamp
 /// writing its own batch.
 ///
-/// A nonzero value also switches the Postgres snapshot operator to emitting its rewind requests
-/// as soon as the snapshot bound is known instead of after the copy completes, so the replication
-/// stream is read while the snapshot runs, and lets each export's frontier advance once it has no
-/// snapshot data left to emit. Replication data received for an export that is still snapshotting
-/// is staged in the dataflow until its snapshot completes, which is the many-timestamp shape the
-/// lookahead groups. The two are one setting because reading the stream concurrently without the
-/// grouping keeps one batch builder per timestamp resident until each reaches the blob target size.
+/// A nonzero value also switches the Postgres and MySQL snapshot operators to emitting their rewind
+/// requests as soon as the snapshot bound is known instead of after the copy completes, so the
+/// replication stream is read while the snapshot runs, and lets each export's frontier advance
+/// once it has no snapshot data left to emit. Replication data received for an export that
+/// is still snapshotting is staged in the dataflow until its snapshot completes, which is the
+/// many-timestamp shape the lookahead groups. The two are one setting because reading the stream
+/// concurrently without the grouping keeps one batch builder per timestamp resident until each
+/// reaches the blob target size.
 pub const STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD: Config<Duration> = Config::new(
     "storage_persist_sink_description_lookahead",
     Duration::ZERO,
     "Determines how far past the remap upper the source persist sink will commit to a ceiling \
-    in order to group data into one batch and one description, and whether the Postgres \
-    replication stream is read while a snapshot runs. Zero disables both, leaving every \
+    in order to group data into one batch and one description, and whether the Postgres and \
+    MySQL replication streams are read while a snapshot runs. Zero disables both, leaving every \
     timestamp writing its own batch. Other values below the tick interval are clamped to the \
     tick interval.",
     ParameterScope::Environment,
@@ -640,7 +612,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_UPSERT_V2)
         .add(&SUSPENDABLE_SOURCES)
         .add(&ENABLE_UPSERT_PAGED_SPILL)
-        .add(&ENABLE_UPSERT_CHUNKED_STASH)
         .add(&WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RETENTION_INTERVAL)
         .add(&WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL)
         .add(&crate::sources::sql_server::CDC_CLEANUP_CHANGE_TABLE)

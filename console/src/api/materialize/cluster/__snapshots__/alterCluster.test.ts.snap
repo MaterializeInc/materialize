@@ -12,9 +12,8 @@ exports[`queries > alterClusterSettingsStatement produces the expected query 1`]
 {
   "parameters": [],
   "sql": "ALTER CLUSTER "prod_sources" SET (
-    SIZE = '2xlarge',
-    REPLICATION FACTOR = 2
-  )
-",
+  SIZE = '2xlarge',
+  REPLICATION FACTOR = 2
+)",
 }
 `;

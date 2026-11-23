@@ -18,13 +18,6 @@ if [[ "$BUILDKITE_PULL_REQUEST" = false ]]; then
     exit 0
 fi
 
-# Hugo 0.152.2 has a data race between pages that include the same headless
-# page, which aborts a build with "concurrent map iteration and map write"
-# (QAR-260). Rendering pages on one worker avoids it.
-# TODO: Remove this once ci/builder/Dockerfile installs Hugo 0.153.0 or later,
-# which fixed the race.
-export HUGO_NUMWORKERMULTIPLIER=1
-
 cd doc/user
 
 # Build main docs to public/
@@ -45,7 +38,7 @@ hugo deploy --config config.toml,config.deployment.toml --force
 curl -fsSL \
     -H "Authorization: Bearer $GITHUB_TOKEN" \
     -H "Accept: application/vnd.github.v3+json" \
-    "https://api.github.com/repos/MaterializeInc/materialize/statuses/$BUILDKITE_COMMIT" \
+    "https://api.github.com/repos/$(github_repo)/statuses/$BUILDKITE_COMMIT" \
     --data "{\
         \"state\": \"success\",\
         \"description\": \"Deploy preview ready.\",\

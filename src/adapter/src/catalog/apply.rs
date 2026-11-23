@@ -25,14 +25,14 @@ use mz_catalog::builtin::{
     BUILTIN_LOG_LOOKUP, BUILTIN_LOOKUP, Builtin, BuiltinLog, BuiltinTable, BuiltinView,
 };
 use mz_catalog::durable::objects::{
-    ClusterKey, DatabaseKey, DurableType, ItemKey, NetworkPolicyKey, RoleAuthKey, RoleKey,
-    SchemaKey,
+    ClusterKey, DatabaseKey, DurableType, ItemKey, NetworkPolicyKey, QueryPolicyKey, RoleAuthKey,
+    RoleKey, SchemaKey,
 };
 use mz_catalog::durable::{CatalogError, SystemObjectMapping};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, Cluster, ClusterReplica, Database, Func, Index, Log, NetworkPolicy,
-    Role, RoleAuth, Schema, Source, StateDiff, StateUpdate, StateUpdateKind, Table,
+    QueryPolicy, Role, RoleAuth, Schema, Source, StateDiff, StateUpdate, StateUpdateKind, Table,
     TableDataSource, Type, UpdateFrom,
 };
 use mz_compute_types::config::ComputeReplicaConfig;
@@ -89,6 +89,7 @@ struct InProgressRetractions {
     schemas: BTreeMap<SchemaKey, Schema>,
     clusters: BTreeMap<ClusterKey, Cluster>,
     network_policies: BTreeMap<NetworkPolicyKey, NetworkPolicy>,
+    query_policies: BTreeMap<QueryPolicyKey, QueryPolicy>,
     items: BTreeMap<ItemKey, CatalogEntry>,
     introspection_source_indexes: BTreeMap<CatalogItemId, CatalogEntry>,
     system_object_mappings: BTreeMap<CatalogItemId, CatalogEntry>,
@@ -346,6 +347,24 @@ impl CatalogState {
             }
             StateUpdateKind::NetworkPolicy(network_policy) => {
                 self.apply_network_policy_update(network_policy, diff, retractions);
+            }
+            StateUpdateKind::ClusterReplicaSize(size) => {
+                self.apply_cluster_replica_size_update(size, diff);
+            }
+            StateUpdateKind::QueryPolicy(policy) => {
+                apply_inverted_lookup(
+                    &mut self.query_policies_by_name,
+                    &policy.name,
+                    policy.id,
+                    diff,
+                );
+                apply_with_update(
+                    &mut self.query_policies_by_id,
+                    policy,
+                    |policy| policy.id,
+                    diff,
+                    &mut retractions.query_policies,
+                );
             }
             StateUpdateKind::IntrospectionSourceIndex(introspection_source_index) => {
                 self.apply_introspection_source_index_update(
@@ -640,6 +659,23 @@ impl CatalogState {
             diff,
             &mut retractions.network_policies,
         );
+    }
+
+    #[instrument(level = "debug")]
+    fn apply_cluster_replica_size_update(
+        &mut self,
+        size: mz_catalog::durable::ClusterReplicaSize,
+        diff: StateDiff,
+    ) {
+        let sizes = &mut self.cluster_replica_sizes.0;
+        match diff {
+            StateDiff::Addition => {
+                sizes.insert(size.name, size.allocation);
+            }
+            StateDiff::Retraction => {
+                sizes.remove(&size.name);
+            }
+        }
     }
 
     #[instrument(level = "debug")]
@@ -1470,6 +1506,9 @@ impl CatalogState {
             // mz_cluster_replicas is a MaterializedView backed by
             // mz_internal.mz_catalog_raw.
             StateUpdateKind::ClusterReplica(_) => Vec::new(),
+            StateUpdateKind::ClusterReplicaSize(size) => {
+                Self::pack_replica_size_update(&size.name, &size.allocation, diff)
+            }
             StateUpdateKind::SystemObjectMapping(system_object_mapping) => {
                 // Runtime-alterable system objects have real entries in the
                 // items collection and so get handled through the normal
@@ -1490,6 +1529,7 @@ impl CatalogState {
             StateUpdateKind::Database(_)
             | StateUpdateKind::Schema(_)
             | StateUpdateKind::NetworkPolicy(_)
+            | StateUpdateKind::QueryPolicy(_)
             | StateUpdateKind::StorageCollectionMetadata(_)
             | StateUpdateKind::UnfinalizedShard(_) => Vec::new(),
         }
@@ -2225,7 +2265,9 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             | StateUpdateKind::DefaultPrivilege(_)
             | StateUpdateKind::SystemPrivilege(_)
             | StateUpdateKind::SystemConfiguration(_)
-            | StateUpdateKind::NetworkPolicy(_) => push_update(
+            | StateUpdateKind::QueryPolicy(_)
+            | StateUpdateKind::NetworkPolicy(_)
+            | StateUpdateKind::ClusterReplicaSize(_) => push_update(
                 update,
                 diff,
                 &mut pre_cluster_retractions,
@@ -2483,6 +2525,8 @@ impl ApplyState {
             | ReplicaSystemConfiguration(_)
             | Cluster(_)
             | NetworkPolicy(_)
+            | ClusterReplicaSize(_)
+            | QueryPolicy(_)
             | ClusterReplica(_)
             | SourceReferences(_)
             | Comment(_)

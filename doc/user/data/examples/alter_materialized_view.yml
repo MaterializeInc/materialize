@@ -132,3 +132,16 @@
     original materialized view. If the rate of advancement suggests that catch
     up will take an extended period of time, it is recommended to drop the
     replacement view.
+
+- name: "troubleshooting-sealed-view"
+  content: |
+    **Issue:** The command fails with `materialized view <view> is sealed and
+    thus cannot be replaced`.
+
+    **Cause:** The materialized view is sealed, so its contents are final for
+    all future times and no replacement can change them. A view becomes sealed
+    once it can't receive any more updates, for example after some source
+    errors that can't be recovered from.
+
+    **Action:** Create a new materialized view with the new definition
+    instead.

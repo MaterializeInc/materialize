@@ -557,7 +557,7 @@ pub fn fold_to_multiset(mut rel: MirRelationExpr) -> Option<BTreeMap<Row, Diff>>
 }
 
 /// True if `rel` has an erroring operand under a non-strict `AND`/`OR`/
-/// `error_if_null`, the shape of the open bug CLU-137.
+/// `error_if_null`.
 ///
 /// Those three swallow an operand's error once another operand fixes the result:
 /// `Or::eval` returns `true` the moment it sees a true operand and drops any
@@ -570,10 +570,6 @@ pub fn fold_to_multiset(mut rel: MirRelationExpr) -> Option<BTreeMap<Row, Diff>>
 /// literal is typed non-nullable, into a *different* row: that is how the count
 /// of a nullable aggregate becomes the count of a non-nullable one.
 ///
-/// CLU-137 tracks the fix (see the closed PR #37299 for a full one). Until it
-/// lands, the equivalence oracles skip these plans rather than rediscover it on
-/// every run.
-///
 /// Deliberately conservative. It asks whether an operand *could* error rather
 /// than whether it already holds a literal error, because `reduce` folds a
 /// column-free fallible operand (`9223372036854775807 + 1`, `1 / 0`) to a
@@ -583,10 +579,6 @@ pub fn fold_to_multiset(mut rel: MirRelationExpr) -> Option<BTreeMap<Row, Diff>>
 pub fn hits_non_strict_error_fold(rel: &MirRelationExpr) -> bool {
     let mut hit = false;
     rel.visit_scalars(&mut |scalar| {
-        // One definition of the shape, in `mz_expr` next to the fold it describes,
-        // so the several oracles that skip CLU-137 cannot drift apart on which
-        // functions count as non-strict. They already had: this predicate covered
-        // `ErrorIfNull` while `mir_scalar_reduce`'s copy did not.
         hit |= scalar.could_hit_nonstrict_error_fold();
     });
     hit

@@ -32,13 +32,13 @@
 //! across chunk boundaries).
 //!
 //! The body impl serves the chunk batchers, whose chains are bodies. The
-//! column impl serves the column pager's batcher, whose chains are still
-//! edge containers.
+//! column impl serves builders whose chains are edge containers.
 
 use columnar::{BorrowedOf, Columnar, Index, Len};
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::trace::implementations::{BatchContainer, BuilderInput};
+use differential_dataflow::trace::implementations::BatchContainer;
+use differential_dataflow::trace::implementations::ord_neu::BuilderInput;
 use timely::progress::Timestamp;
 
 use crate::columnar::Column;

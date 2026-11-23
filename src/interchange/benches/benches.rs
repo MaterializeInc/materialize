@@ -9,8 +9,8 @@
 //
 // Benchmarks for decoding input format
 
-use criterion::{criterion_group, criterion_main};
 use mz_alloc_default as _;
+use mz_bench_util::{criterion_group, criterion_main};
 
 pub mod avro;
 pub mod protobuf;

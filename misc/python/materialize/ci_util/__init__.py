@@ -95,8 +95,8 @@ def get_mz_version(workspace: cargo.Workspace | None = None) -> VersionInfo:
     return VersionInfo.parse(workspace.crates["mz-environmentd"].version_string)
 
 
-def dev_docker_tag() -> str:
-    """The Docker tag under which this commit's images are published.
+def dev_docker_tag(commit: str | None = None) -> str:
+    """The Docker tag under which `commit`'s (default `HEAD`) images are published.
 
     Both the publishing side (`ci/test/dev_tag.py`) and anything that pulls
     those images have to derive the tag the same way, or the pull looks for an
@@ -106,4 +106,5 @@ def dev_docker_tag() -> str:
     # a valid character in Docker tags, so we use `--` instead.
     sanitizer = Sanitizer[os.getenv("CI_SANITIZER", "none")]
     suffix = "pr" if sanitizer == Sanitizer.none else f"pr-{sanitizer}"
-    return f"v{get_mz_version()}--{suffix}.g{git.rev_parse('HEAD')}"
+    tag = f"v{get_mz_version()}--{suffix}.g{commit or git.rev_parse('HEAD')}"
+    return tag if ui.env_is_truthy("CI_LTO") else f"{tag}.optimized"

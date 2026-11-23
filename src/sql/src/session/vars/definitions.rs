@@ -198,6 +198,47 @@ impl VarDefinition {
     pub fn default_value(&self) -> &'_ dyn Value {
         self.value.value()
     }
+
+    /// Returns every property of this definition.
+    pub fn parts(&self) -> VarDefinitionParts<'_> {
+        // Destructured without `..`, so a new field fails to compile here
+        // until it is either exposed or deliberately skipped.
+        let VarDefinition {
+            name,
+            description,
+            user_visible,
+            value: _,
+            constraint,
+            require_feature_flag,
+            scope,
+            // Exposed as `VarDefinition::parse`.
+            parse: _,
+            type_name,
+        } = self;
+        VarDefinitionParts {
+            name,
+            description,
+            user_visible: *user_visible,
+            default_value: self.default_value(),
+            constraint: constraint.as_ref(),
+            require_feature_flag: *require_feature_flag,
+            scope: *scope,
+            type_name: type_name(),
+        }
+    }
+}
+
+/// The properties of a [`VarDefinition`], see [`VarDefinition::parts`].
+#[derive(Debug)]
+pub struct VarDefinitionParts<'a> {
+    pub name: &'static UncasedStr,
+    pub description: &'static str,
+    pub user_visible: bool,
+    pub default_value: &'a dyn Value,
+    pub constraint: Option<&'a ValueConstraint>,
+    pub require_feature_flag: Option<&'static FeatureFlag>,
+    pub scope: ParameterScope,
+    pub type_name: Cow<'static, str>,
 }
 
 impl Var for VarDefinition {
@@ -345,8 +386,11 @@ pub static EXTRA_FLOAT_DIGITS: VarDefinition = VarDefinition::new(
     true,
 );
 
-pub static FAILPOINTS: VarDefinition = VarDefinition::new(
-    "failpoints",
+// The `unsafe_` prefix limits this variable to unsafe mode: a failpoint applies
+// to the whole process, so any session could, for example, crash environmentd
+// with a `panic` action.
+pub static UNSAFE_FAILPOINTS: VarDefinition = VarDefinition::new(
+    "unsafe_failpoints",
     value!(Failpoints; Failpoints),
     "Allows failpoints to be dynamically activated.",
     true,
@@ -572,6 +616,13 @@ pub static MAX_NETWORK_POLICIES: VarDefinition = VarDefinition::new(
     "max_network_policies",
     value!(u32; 25),
     "The maximum number of network policies in the region.",
+    true,
+);
+
+pub static MAX_QUERY_POLICIES: VarDefinition = VarDefinition::new(
+    "max_query_policies",
+    value!(u32; 25),
+    "The maximum number of query policies in the region.",
     true,
 );
 
@@ -1290,6 +1341,13 @@ pub static EMIT_PLAN_INSIGHTS_NOTICE: VarDefinition = VarDefinition::new(
     "emit_plan_insights_notice",
     value!(bool; false),
     "Boolean flag indicating whether to send a NOTICE with JSON-formatted plan insights before executing a SELECT statement (Materialize).",
+    true,
+);
+
+pub static EMIT_EXECUTION_TIME_NOTICE: VarDefinition = VarDefinition::new(
+    "emit_execution_time_notice",
+    value!(bool; false),
+    "Boolean flag indicating whether to send a NOTICE with the server-side execution time of statements (Materialize).",
     true,
 );
 
@@ -2066,6 +2124,14 @@ feature_flags!(
         default: false,
         enable_for_item_parsing: true,
     },
+    // NOTE: `false` is the safe setting, unlike most `enable_*` flags. Turning it on lets
+    // `DROP INDEX` orphan the dataflows of indexes that other dataflows still read from.
+    {
+        name: enable_drop_in_use_index,
+        desc: "dropping an index while other dataflows read from it, leaving them running on an orphaned arrangement",
+        default: false,
+        enable_for_item_parsing: false,
+    },
     {
         name: enable_managed_cluster_availability_zones,
         desc: "MANAGED, AVAILABILITY ZONES syntax",
@@ -2125,6 +2191,12 @@ feature_flags!(
     {
         name: enable_time_at_time_zone,
         desc: "use of AT TIME ZONE or timezone() with time type",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_postgres_source_failover,
+        desc: "the FAILOVER option for PostgreSQL sources",
         default: false,
         enable_for_item_parsing: true,
     },
@@ -2279,6 +2351,18 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_query_policies,
+        desc: "Enable creating and managing query policies and their attachments.",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_query_policy_enforcement,
+        desc: "Enable checking attached query policies during query admission.",
+        default: false,
+        enable_for_item_parsing: false,
+    },
+    {
         name: enable_create_table_from_source,
         desc: "Whether to allow CREATE TABLE .. FROM SOURCE syntax.",
         default: true,
@@ -2341,6 +2425,12 @@ feature_flags!(
         desc: "When the new WITH ORDINALITY implementation can't be used with a table func, whether to fall back to the legacy implementation or error out.",
         default: false,
         enable_for_item_parsing: true,
+    },
+    {
+        name: enable_frontend_transaction_completion, // changes take effect for new sessions
+        desc: "Complete session-owned read-only transactions without a coordinator round trip.",
+        default: true,
+        enable_for_item_parsing: false,
     },
     {
         name: enable_replacement_materialized_views,

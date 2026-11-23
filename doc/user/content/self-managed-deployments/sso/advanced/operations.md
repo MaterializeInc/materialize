@@ -35,9 +35,14 @@ spec:
     - "https://my-app.example.com/auth/callback"
   secretName: my-internal-app-credentials
   tokenEndpointAuthMethod: "client_secret_basic"
-  # Keep skipConsent: false. The consent handler injects the identity's email
-  # and groups claims; skipping it issues tokens Materialize rejects.
-  skipConsent: false
+  # Marks the client as operator-managed. Without it, the client is treated
+  # like one that registered itself: its audience is limited and it can't
+  # use the client_credentials grant.
+  metadata:
+    materialize_managed: true
+  # Trusted internal apps can skip the consent screen. The user's email and
+  # groups are added to every token either way.
+  skipConsent: true
 ```
 
 Hydra Maester watches for these resources and registers the client with
@@ -52,6 +57,37 @@ kubectl get secret my-internal-app-credentials -n ory \
 kubectl get secret my-internal-app-credentials -n ory \
   -o jsonpath='{.data.CLIENT_SECRET}' | base64 -d
 ```
+
+## Connect MCP clients
+
+MCP clients such as Claude Code can sign in to Materialize's MCP
+endpoint through the Ory stack. They register themselves with Hydra
+through Dynamic Client Registration ([RFC
+7591](https://datatracker.ietf.org/doc/html/rfc7591)), which is off by
+default. To turn it on, set in tfvars:
+
+```hcl
+ory_enable_dynamic_client_registration = true
+```
+
+and bump `force_rollout` so Materialize picks up the new audience. This:
+
+- turns on registration in Hydra and advertises its endpoint in Hydra's
+  discovery document;
+- gives self-registered clients `https://<materialize_console_fqdn>/api/mcp`
+  as their token audience, and no other;
+- adds that URL to Materialize's `oidc_audience`.
+
+Then connect the client to `https://<materialize_console_fqdn>/api/mcp/developer`
+(or `/api/mcp/agent`). On first use it registers, opens the browser for
+sign-in and a consent screen, and stores its token.
+
+{{< note >}}
+Anyone who can reach Hydra's public endpoint can register a client.
+Registered clients still need a user to sign in, and they can only get
+the MCP audience. If Hydra is reachable from the internet, put a rate
+limit in front of it.
+{{</ note >}}
 
 ## Rotate the license key
 
@@ -104,6 +140,10 @@ curl -X PATCH http://localhost:4434/admin/identities/<id> \
   -H "Content-Type: application/json-patch+json" \
   -d '[{"op": "replace", "path": "/state", "value": "inactive"}]'
 ```
+
+An inactive identity can't sign in, and its refresh tokens stop working
+at the next refresh, because the selfservice UI checks the identity on
+every token issuance.
 
 See the [Kratos admin API
 reference](https://www.ory.sh/docs/kratos/reference/api) for the full
@@ -163,8 +203,13 @@ polis_helm_values = {
 ```
 
 and re-apply. The UI is then available at
-`https://<your-polis-hostname>/admin/auth/login`. You'll need to
-configure a NextAuth provider for login (see
+`https://<your-polis-hostname>/admin/auth/login`. Out of the box, no one
+can sign in: Polis offers email magic-link login only when `NEXTAUTH_ACL`
+is set, and the module leaves it empty. To sign in, either
+[use SAML](#unlock-the-polis-admin-ui-without-smtp) or configure SMTP and
+set `nextAuthAcl` to the admin addresses or patterns, for example
+`polis = { hosted = true, nextAuthAcl = "alice@example.com,*@ops.example.com" }`
+(see
 [Polis hosted-mode docs](https://www.ory.sh/docs/polis/deploy/env-variables)).
 
 ### Unlock the Polis admin UI without SMTP
@@ -181,8 +226,17 @@ gate the admin UI login on a SAML IdP you already have. Registering
 your customer's IdP there lets operators sign into the admin UI via
 their own SSO with no mail server involved.
 
-Reuse the same Okta (or other) SAML app you configured for user login,
-then register a second connection under the reserved tenant:
+{{< warning >}}
+Everyone the admin SAML app lets sign in becomes a Polis admin, able to
+change SAML connections and SCIM directories. `NEXTAUTH_ACL` doesn't
+apply to SAML admin login, so the IdP's app assignment is the only
+control. Don't reuse the end-user SAML app here: that would make every
+Materialize user a Polis admin.
+{{< /warning >}}
+
+Create a **separate** SAML app on the IdP side for admin access, assign
+only your Polis operators to it, and register it as a connection under
+the reserved tenant:
 
 ```bash
 curl -sS -H "Authorization: Api-Key $POLIS_API_KEY" \
@@ -190,7 +244,7 @@ curl -sS -H "Authorization: Api-Key $POLIS_API_KEY" \
   --data-urlencode "tenant=_jackson_boxyhq" \
   --data-urlencode "product=_jackson_admin_portal" \
   --data-urlencode "name=admin-bootstrap" \
-  --data-urlencode "encodedRawMetadata=$(base64 < okta-metadata.xml | tr -d '\n')" \
+  --data-urlencode "encodedRawMetadata=$(base64 < okta-admin-metadata.xml | tr -d '\n')" \
   --data-urlencode "defaultRedirectUrl=https://<your-polis-hostname>/admin/sso-connection" \
   --data-urlencode 'redirectUrl=["https://<your-polis-hostname>/api/auth/callback/boxyhq-saml"]'
 ```
@@ -199,33 +253,80 @@ Then browse to `https://<your-polis-hostname>/admin/auth/login` and
 click "**Sign in with SAML**". The flow bounces through your IdP and
 lands you at the Polis admin dashboard.
 
-For a production deployment, register a **separate** SAML app on the
-IdP side for admin access (rather than reusing the end-user app), so
-you can control admin membership independently.
+## Control who can sign in
 
-## Disable registration in Kratos
+Users can't create a Kratos account with an email and password: the
+module turns off password login and registration and leaves SSO as the
+only way in. Kratos creates an identity the first time someone signs in
+through a configured identity provider. That first sign-in goes through
+Kratos's registration flow, so registration has to stay enabled.
 
-By default Kratos allows users to register new identities through the
-selfservice UI. For production deployments where users come exclusively
-from your IdP, disable registration via Helm values in tfvars:
+{{< warning >}}
+Don't set `selfservice.flows.registration.enabled = false` in
+`kratos_helm_values`. Kratos would then reject the first sign-in of every
+new user, from OIDC or SAML, while users who already signed in keep
+working.
+{{< /warning >}}
 
-```hcl
-kratos_helm_values = {
-  kratos = {
-    config = {
-      selfservice = {
-        flows = {
-          registration = {
-            enabled = false
-          }
-        }
-      }
-    }
-  }
-}
-```
+Each provider only signs in emails in its `allowed_email_domains` (see
+[Sign-in checks](/self-managed-deployments/sso/advanced/identity-providers/#sign-in-checks)).
+Within those domains, anyone your identity provider lets sign in to the
+Materialize app gets an account. Control that in the IdP:
 
-Apply. The "Sign up" link disappears from the login screen.
+- **Okta**: Okta enforces app assignment. Assign the app to the users or
+  groups who should have access, not to **Everyone**.
+- **Microsoft Entra ID**: on the enterprise application, set
+  **Assignment required?** to **Yes**. It defaults to **No**, which lets
+  every user in the tenant sign in.
+- **Public OIDC providers** such as Google: anyone with an account can
+  sign in unless the provider restricts it, for example to a Google
+  Workspace domain.
+
+To remove a user's access, unassign them in the IdP and
+[lock their Kratos identity](#manage-kratos-identities). Their
+Materialize role isn't dropped automatically.
+
+## Upgrade from kratos-selfservice-ui-node
+
+Before v19.0.0 of the Terraform modules, the stack ran Ory's
+`kratos-selfservice-ui-node` as its selfservice UI. From v19.0.0 it runs
+[`materialize/ory-selfservice`](https://github.com/MaterializeInc/ory-selfservice),
+which also enforces stricter sign-in rules. To upgrade an existing
+deployment:
+
+1. Before applying, set the new inputs:
+   - `allowed_email_domains` on every entry in
+     `upstream_identity_providers` and `saml_providers`.
+   - `require_email_verified = false` on OIDC providers that don't send
+     `email_verified`, such as Microsoft Entra ID.
+   - `ory_kratos_cookie_domain`. It used to be derived from the Kratos
+     hostname. Use the narrowest domain that covers the Kratos and
+     selfservice UI hostnames.
+2. Run `terraform apply`. On AWS, the Hydra and Polis database passwords
+   rotate, and the pods restart with the new credentials.
+3. Have everyone sign in again through the IdP. Tokens now take the
+   user's email and groups from data the IdP writes at sign-in, so until
+   a user signs in again, their tokens can't be refreshed. End every
+   session so the next sign-in goes to the IdP:
+
+   ```bash
+   kubectl -n ory port-forward svc/kratos-admin 4434 &
+   kubectl -n ory port-forward svc/hydra-admin 4445 &
+   # Past 500 identities, repeat with the page_token from the Link header.
+   for id in $(curl -s 'localhost:4434/admin/identities?page_size=500' | jq -r '.[].id'); do
+     curl -s -X PATCH "localhost:4434/admin/identities/$id" -H 'content-type: application/json' \
+       -d '[{"op":"remove","path":"/traits/groups"}]' >/dev/null
+     curl -s -X DELETE "localhost:4434/admin/identities/$id/sessions"
+     curl -s -X DELETE "localhost:4445/admin/oauth2/auth/sessions/login?subject=$id"
+   done
+   ```
+
+   The `PATCH` removes the old `groups` trait, which the identity schema
+   no longer allows. It fails harmlessly for identities without one.
+
+Identities, OAuth2 clients, and Materialize roles carry over unchanged.
+The full list of changes is in the module's
+[UPGRADING.md](https://github.com/MaterializeInc/materialize-terraform-self-managed/blob/main/kubernetes/modules/ory-selfservice-ui/UPGRADING.md).
 
 ## Back up the Ory PostgreSQL database
 

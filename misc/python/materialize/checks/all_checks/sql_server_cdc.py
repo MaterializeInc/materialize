@@ -293,6 +293,11 @@ class SqlServerCdcNoWait(SqlServerCdcBase, Check):
 
 @externally_idempotent(False)
 class SqlServerCdcMzNow(Check):
+    # validate() dates its rows ahead: a row lagging over WINDOW_SECS never enters the view.
+    WINDOW_SECS = 60
+    LEAD_SECS = 3600
+    SLACK_SECS = WINDOW_SECS + 120
+
     def _can_run(self, e: Executor) -> bool:
         return (
             self.base_version > MzVersion.parse_mz("v0.154.0-dev")
@@ -328,10 +333,10 @@ class SqlServerCdcMzNow(Check):
                   FROM SQL SERVER CONNECTION sql_server_mz_now_conn;
                 > CREATE TABLE sql_server_mz_now_table FROM SOURCE sql_server_mz_now_source (REFERENCE sql_server_mz_now_table);
 
-                # Return all rows fresher than 60 seconds
+                # Return all rows fresher than WINDOW_SECS
                 > CREATE MATERIALIZED VIEW sql_server_mz_now_view AS
                   SELECT * FROM sql_server_mz_now_table
-                  WHERE mz_now() <= ROUND(EXTRACT(epoch FROM f1 + INTERVAL '60' SECOND) * 1000)
+                  WHERE mz_now() <= ROUND(EXTRACT(epoch FROM f1 + INTERVAL '{self.WINDOW_SECS}' SECOND) * 1000)
                 """))
 
     def manipulate(self) -> list[Testdrive]:
@@ -379,22 +384,21 @@ class SqlServerCdcMzNow(Check):
 
                 $ sql-server-execute name=sql-server
                 USE test;
-                INSERT INTO sql_server_mz_now_table VALUES (SYSDATETIME(), 'A4');
-                INSERT INTO sql_server_mz_now_table VALUES (SYSDATETIME(), 'B4');
-                INSERT INTO sql_server_mz_now_table VALUES (SYSDATETIME(), 'C4');
-                INSERT INTO sql_server_mz_now_table VALUES (SYSDATETIME(), 'D4');
-                INSERT INTO sql_server_mz_now_table VALUES (SYSDATETIME(), 'E4');
+                INSERT INTO sql_server_mz_now_table VALUES (DATEADD(SECOND, {self.LEAD_SECS}, SYSDATETIME()), 'A4');
+                INSERT INTO sql_server_mz_now_table VALUES (DATEADD(SECOND, {self.LEAD_SECS}, SYSDATETIME()), 'B4');
+                INSERT INTO sql_server_mz_now_table VALUES (DATEADD(SECOND, {self.LEAD_SECS}, SYSDATETIME()), 'C4');
+                INSERT INTO sql_server_mz_now_table VALUES (DATEADD(SECOND, {self.LEAD_SECS}, SYSDATETIME()), 'D4');
+                INSERT INTO sql_server_mz_now_table VALUES (DATEADD(SECOND, {self.LEAD_SECS}, SYSDATETIME()), 'E4');
                 DELETE FROM sql_server_mz_now_table WHERE f2 = 'B3';
-                UPDATE sql_server_mz_now_table SET f1 = SYSDATETIME() WHERE f2 = 'E1'
+                UPDATE sql_server_mz_now_table SET f1 = DATEADD(SECOND, {self.LEAD_SECS}, SYSDATETIME()) WHERE f2 = 'E1'
 
-                # Expect some rows newer than 180 seconds in view
-                > SELECT COUNT(*) >= 6 FROM sql_server_mz_now_view
-                  WHERE f1 > NOW() - INTERVAL '180' SECOND;
-                true
+                # Expect the rows dated ahead (A4 to E4, E1) in view
+                > SELECT COUNT(*) FROM sql_server_mz_now_view WHERE f1 > NOW();
+                6
 
-                # Expect no rows older than 180 seconds in view
+                # Expect no rows older than SLACK_SECS in view
                 > SELECT COUNT(*) FROM sql_server_mz_now_view
-                  WHERE f1 < NOW() - INTERVAL '180' SECOND;
+                  WHERE f1 < NOW() - INTERVAL '{self.SLACK_SECS}' SECOND;
                 0
 
                 # Rollback the last INSERTs so that validate() can be called multiple times

@@ -10,6 +10,8 @@ from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
+from materialize.checks.executors import Executor
+from materialize.mz_version import MzVersion
 
 
 class CreateTable(Check):
@@ -81,3 +83,39 @@ class CreateTable(Check):
 
                 > DELETE FROM create_table3 WHERE f1 = 999;
            """))
+
+
+class CreateTableUnsupportedCollation(Check):
+    """Tables created while column COLLATE was accepted and ignored must still
+    plan after an upgrade to a version that rejects unsupported collations."""
+
+    def _can_run(self, e: Executor) -> bool:
+        # Newer versions reject the CREATE TABLE in initialize().
+        return self.base_version < MzVersion.parse_mz("v26.50.0-dev")
+
+    def initialize(self) -> Testdrive:
+        return Testdrive(dedent("""
+                > CREATE TABLE create_table_collate (s TEXT COLLATE nonexistent_collation, n INTEGER COLLATE "unicode", d TEXT COLLATE pg_catalog.default);
+                > INSERT INTO create_table_collate VALUES ('a', 1, 'x');
+                """))
+
+    def manipulate(self) -> list[Testdrive]:
+        return [
+            Testdrive(dedent(s))
+            for s in [
+                """
+                > INSERT INTO create_table_collate VALUES ('b', 2, 'y');
+                """,
+                """
+                > INSERT INTO create_table_collate VALUES ('c', 3, 'z');
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        return Testdrive(dedent("""
+                > SELECT * FROM create_table_collate;
+                a 1 x
+                b 2 y
+                c 3 z
+                """))

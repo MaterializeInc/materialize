@@ -24,7 +24,7 @@ import {
   SessionVariables,
   SqlRequest,
 } from "./types";
-import { Connectable } from "./WebsocketConnectionManager";
+import { backoffDelayMs, Connectable } from "./WebsocketConnectionManager";
 
 export enum SUBSCRIBE_ERROR_CODE {
   CONNECTION_CLOSED = "MZC001",
@@ -43,6 +43,11 @@ export interface SubscribeState<T> {
   snapshotComplete: boolean;
   /** True while a re-subscribe holds the previous snapshot as `data`. */
   resubscribing?: boolean;
+  /**
+   * The statement ended, as a SUBSCRIBE does at its `UP TO`. Set only with
+   * `closeSocketOnComplete`, which then closes the socket.
+   */
+  isComplete?: boolean;
   error: SubscribeError | undefined;
 }
 
@@ -68,6 +73,14 @@ export interface SubscribeManagerOptions<
 }
 
 export type SelectFunction<T extends object, R> = (row: SubscribeRow<T>) => R;
+
+/**
+ * How long to wait before resending a statement that has failed
+ * `failureCount` times in a row without a snapshot. The first resend is
+ * immediate, so a subscribe whose target replica restarted resumes at once.
+ */
+const resendDelayMs = (failureCount: number) =>
+  failureCount <= 1 ? 0 : backoffDelayMs(failureCount - 2);
 
 /**
  * Stateful object that executes Materialize SUBSCRIBE over a websocket. Results from the
@@ -98,7 +111,11 @@ export class SubscribeManager<T extends object, R> implements Connectable {
   private querySent: boolean = false;
   /** True when the socket signalled ready before any request was set. */
   private readyAwaitingRequest: boolean = false;
+  /** Runs that ended in an error since the last snapshot or connection. */
+  private failureCount = 0;
+  private resendHandle: NodeJS.Timeout | undefined;
   private currentTimestamp: number | undefined;
+  private connectionId: number | undefined;
   /** Holds completed timestamp messages, waiting for the flush interval */
   private closedTimestampBuffer: SubscribeRow<T>[] = [];
   /** Holds messages from the socket until the timestamp is closed */
@@ -167,6 +184,7 @@ export class SubscribeManager<T extends object, R> implements Connectable {
 
   disconnect = () => {
     clearInterval(this.flushIntervalHandle);
+    clearTimeout(this.resendHandle);
     this.socket.disconnect();
   };
 
@@ -216,6 +234,7 @@ export class SubscribeManager<T extends object, R> implements Connectable {
 
   /** Clears connection state and internal buffers without touching the exposed snapshot. */
   private resetForNewConnection = () => {
+    clearTimeout(this.resendHandle);
     this.columns = [];
     this.querySent = false;
     this.readyAwaitingRequest = false;
@@ -234,6 +253,8 @@ export class SubscribeManager<T extends object, R> implements Connectable {
     // than flashing the loading state on every reconnect. `resubscribing`
     // marks the held data. Any following setState clears it.
     this.resetForNewConnection();
+    this.connectionId = undefined;
+    this.failureCount = 0;
     if (this.snapshotState.snapshotComplete || this.snapshotState.error) {
       this.snapshotState = {
         ...this.snapshotState,
@@ -261,6 +282,21 @@ export class SubscribeManager<T extends object, R> implements Connectable {
     return this.snapshotState;
   };
 
+  /**
+   * The subscribe's upper: `getSnapshot().data` holds every update before it.
+   * Undefined until the snapshot completes. It applies the updates waiting for
+   * the flush interval, so read the snapshot after calling it.
+   */
+  getUpper = () => {
+    this.flushSocketBuffer();
+    return this.currentState.snapshotComplete
+      ? this.currentTimestamp
+      : undefined;
+  };
+
+  /** The session's `pg_backend_pid()`, once the connection reports it. */
+  getConnectionId = () => this.connectionId;
+
   private setState(update: Partial<SubscribeState<SubscribeRow<T>>>) {
     this.currentState = {
       ...this.currentState,
@@ -282,14 +318,32 @@ export class SubscribeManager<T extends object, R> implements Connectable {
   private onReadyForQuery = () => {
     if (this.querySent && this.closeSocketOnComplete) {
       this.socket.disconnect();
+      this.setState({ isComplete: true });
       return;
     }
-    if (this.sqlRequest) {
+    if (!this.sqlRequest) {
+      this.readyAwaitingRequest = true;
+      return;
+    }
+    if (!this.querySent) {
       this.socket.send(this.sqlRequest);
       this.querySent = true;
-    } else {
-      this.readyAwaitingRequest = true;
+      return;
     }
+    // The server ended the subscribe already sent, as when its target replica
+    // restarts, and the resend streams a new snapshot. Listeners keep the held
+    // state, error included, until the new run updates it, so a statement that
+    // fails every time doesn't flicker.
+    if (this.currentState.error) this.failureCount += 1;
+    this.resetForNewConnection();
+    // The server readies the session after every error, so without a delay a
+    // statement that always fails, such as one the user may not run, is resent
+    // as fast as the round trip.
+    this.resendHandle = setTimeout(() => {
+      if (!this.sqlRequest || !this.isConnected()) return;
+      this.socket.send(this.sqlRequest);
+      this.querySent = true;
+    }, resendDelayMs(this.failureCount));
   };
 
   private onClose = (event: CloseEvent) => {
@@ -312,6 +366,9 @@ export class SubscribeManager<T extends object, R> implements Connectable {
           message: message.payload.message ?? "Unknown error",
         },
       });
+    }
+    if (message.type === "BackendKeyData") {
+      this.connectionId = message.payload.conn_id;
     }
     if (message.type === "Rows") {
       this.columns = message.payload.columns.map(mapColumnToColumnMetadata);
@@ -338,19 +395,21 @@ export class SubscribeManager<T extends object, R> implements Connectable {
 
     // Once we've received a second progress message, we know we've received
     // the initial snapshot.
-    if (
+    const completesSnapshot =
       meta.mzProgressed &&
       this.currentTimestamp &&
-      !this.currentState.snapshotComplete
-    ) {
+      !this.currentState.snapshotComplete;
+    // Track the new currently open timestamp. It moves before the snapshot is
+    // announced, since that notifies listeners that may call `getUpper`.
+    this.currentTimestamp = meta.mzTimestamp;
+    if (completesSnapshot) {
+      this.failureCount = 0;
       // Eagerly flush the buffer to make the snapshot available.
       this.flushSocketBuffer();
       this.setState({
         snapshotComplete: true,
       });
     }
-    // Track the new currently open timestamp.
-    this.currentTimestamp = meta.mzTimestamp;
     const row = mapRowToObject<T>(payload, this.columns, [
       "mz_timestamp",
       "mz_state",
@@ -366,10 +425,10 @@ export class SubscribeManager<T extends object, R> implements Connectable {
 
   private flushSocketBuffer = () => {
     if (this.closedTimestampBuffer.length === 0) return;
-
-    const clearBuffer = () => {
-      this.closedTimestampBuffer = [];
-    };
+    // NOTE: taken before `setState`. Its listeners may call `getUpper`, which
+    // flushes again, and a buffer still set then recurses without end.
+    const closed = this.closedTimestampBuffer;
+    this.closedTimestampBuffer = [];
 
     const newState = {
       ...this.currentState,
@@ -384,16 +443,13 @@ export class SubscribeManager<T extends object, R> implements Connectable {
       );
 
       // We want to filter out progress messages which have mzState === null
-      const filteredChanges = this.closedTimestampBuffer.filter(
+      const filteredChanges = closed.filter(
         (change) => change.mzState !== null,
       );
 
-      // If there are no real changes, we can clear the buffer and return early to avoid
-      // unnecessary notifications to listeners.
-      if (filteredChanges.length === 0) {
-        clearBuffer();
-        return;
-      }
+      // If there are no real changes, return early to avoid unnecessary
+      // notifications to listeners.
+      if (filteredChanges.length === 0) return;
 
       for (const change of filteredChanges) {
         switch (change.mzState) {
@@ -425,14 +481,10 @@ export class SubscribeManager<T extends object, R> implements Connectable {
       // Convert the upsert map back into an array once upsert operation is complete.
       newState.data = Array.from(upsertMap.values());
     } else {
-      newState.data = [
-        ...newState.data,
-        ...this.closedTimestampBuffer.values(),
-      ];
+      newState.data = [...newState.data, ...closed];
     }
 
     this.setState(newState);
-    clearBuffer();
   };
 }
 

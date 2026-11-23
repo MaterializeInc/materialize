@@ -21,8 +21,8 @@ use mz_sql_parser::ast::{Raw, Statement};
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
 use crate::catalog::Catalog;
+use crate::coord::Coordinator;
 use crate::coord::appends::{BuiltinTableAppendCompletion, BuiltinTableAppendNotify};
-use crate::coord::{Coordinator, Message};
 use crate::session::{Session, StateRevision, TransactionStatus};
 use crate::util::describe;
 use crate::{AdapterError, ExecuteContext, ExecuteResponse, metrics};
@@ -78,6 +78,7 @@ impl Coordinator {
             .map(|ty| Some(ty.clone()))
             .collect::<Vec<_>>();
         let desc = describe(catalog, stmt.clone(), &param_types, session)?;
+        session.retain_description(stmt.clone(), param_types, desc.clone());
         let params = params
             .datums
             .into_iter()
@@ -104,12 +105,14 @@ impl Coordinator {
     #[mz_ore::instrument(level = "debug")]
     pub(crate) fn describe(
         catalog: &Catalog,
-        session: &Session,
+        session: &mut Session,
         stmt: Option<Statement<Raw>>,
         param_types: Vec<Option<SqlScalarType>>,
     ) -> Result<StatementDesc, AdapterError> {
         if let Some(stmt) = stmt {
-            describe(catalog, stmt, &param_types, session)
+            let desc = describe(catalog, stmt.clone(), &param_types, session)?;
+            session.retain_description(stmt, param_types, desc.clone());
+            Ok(desc)
         } else {
             Ok(StatementDesc::new(None))
         }
@@ -127,13 +130,19 @@ impl Coordinator {
             Some(ps) => ps,
             None => return Err(AdapterError::UnknownPreparedStatement(name.to_string())),
         };
-        if let Some(new_revision) = Self::verify_statement_revision(
-            catalog,
-            session,
-            ps.stmt(),
-            ps.desc(),
-            ps.state_revision,
-        )? {
+        let current_state_revision = StateRevision {
+            catalog_revision: catalog.transient_revision(),
+            session_state_revision: session.state_revision(),
+        };
+        if ps.state_revision == current_state_revision {
+            return Ok(());
+        }
+        let stmt = ps.stmt().cloned();
+        let desc = ps.desc().clone();
+        let revision = ps.state_revision;
+        if let Some(new_revision) =
+            Self::verify_statement_revision(catalog, session, stmt.as_ref(), &desc, revision)?
+        {
             let ps = session
                 .get_prepared_statement_mut_unverified(name)
                 .expect("known to exist");
@@ -153,13 +162,19 @@ impl Coordinator {
             Some(portal) => portal,
             None => return Err(AdapterError::UnknownCursor(name.to_string())),
         };
-        if let Some(new_revision) = Self::verify_statement_revision(
-            catalog,
-            session,
-            portal.stmt.as_deref(),
-            &portal.desc,
-            portal.state_revision,
-        )? {
+        let current_state_revision = StateRevision {
+            catalog_revision: catalog.transient_revision(),
+            session_state_revision: session.state_revision(),
+        };
+        if portal.state_revision == current_state_revision {
+            return Ok(());
+        }
+        let stmt = portal.stmt.as_deref().cloned();
+        let desc = portal.desc.clone();
+        let revision = portal.state_revision;
+        if let Some(new_revision) =
+            Self::verify_statement_revision(catalog, session, stmt.as_ref(), &desc, revision)?
+        {
             let portal = session
                 .get_portal_unverified_mut(name)
                 .expect("known to exist");
@@ -174,7 +189,7 @@ impl Coordinator {
     /// revisions match. Return an error if the plan has changed.
     fn verify_statement_revision(
         catalog: &Catalog,
-        session: &Session,
+        session: &mut Session,
         stmt: Option<&Statement<Raw>>,
         desc: &StatementDesc,
         old_state_revision: StateRevision,
@@ -188,7 +203,7 @@ impl Coordinator {
                 catalog,
                 session,
                 stmt.cloned(),
-                desc.param_types.iter().map(|ty| Some(ty.clone())).collect(),
+                desc.param_types.iter().cloned().map(Some).collect(),
             )?;
             if &current_desc != desc {
                 Err(AdapterError::ChangedPlan(
@@ -214,9 +229,10 @@ impl Coordinator {
         // This function is *usually* called when transactions end, but it can fail to be called in
         // some cases (for example if the session's role id was dropped, then we return early and
         // don't go through the normal sequence_end_transaction path). The `Command::Commit` handler
-        // and `AdapterClient::end_transaction` protect against this by each executing their parts
-        // of this function. Thus, if this function changes, ensure that the changes are propogated
-        // to either of those components.
+        // and `SessionClient::end_transaction` protect against this by each executing their parts
+        // of this function. Keep session cleanup in sync with those paths and frontend transaction
+        // completion. New coordinator resources also require transferring completion ownership
+        // through `Session::require_coordinator_completion`.
         let retire_notify = self.clear_connection(session.conn_id()).await;
         (session.clear_transaction(), retire_notify)
     }
@@ -243,17 +259,14 @@ impl Coordinator {
             drop(txn_reads);
         }
 
-        if let Some(_guard) = self
+        if let Some(guard) = self
             .active_conns
             .get_mut(conn_id)
             .expect("must exist for active session")
             .deferred_lock
             .take()
         {
-            // If there are waiting deferred statements, process one.
-            if !self.serialized_ddl.is_empty() {
-                let _ = self.internal_cmd_tx.send(Message::DeferredStatementReady);
-            }
+            self.release_ddl_lock(guard);
         }
 
         retire_notify

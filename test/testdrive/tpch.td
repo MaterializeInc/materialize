@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 $ set-arg-default single-replica-cluster=quickstart
+$ set-arg-default multi-worker-replica-size=scale=1,workers=4
 
 # Test the cardinality of TPCH tables. For tables that have a random
 # cardinality, don't depend on exact count that could change if the rng
@@ -1530,4 +1531,85 @@ true
       cntrycode;
 7 values hashing to 3782c67124c71b5bcb3460934dec46de
 
+# A cluster with several workers splits the snapshot across them, and must
+# produce exactly the data of the single worker above.
+> CREATE CLUSTER tpch_multi SIZE '${arg.multi-worker-replica-size}'
+
+> BEGIN
+> CREATE SOURCE gen_multi
+  IN CLUSTER tpch_multi
+  FROM LOAD GENERATOR TPCH (SCALE FACTOR .01, UP TO 100)
+
+> CREATE TABLE customer_multi FROM SOURCE gen_multi (REFERENCE customer);
+> CREATE TABLE lineitem_multi FROM SOURCE gen_multi (REFERENCE lineitem);
+> CREATE TABLE nation_multi FROM SOURCE gen_multi (REFERENCE nation);
+> CREATE TABLE orders_multi FROM SOURCE gen_multi (REFERENCE orders);
+> CREATE TABLE part_multi FROM SOURCE gen_multi (REFERENCE part);
+> CREATE TABLE partsupp_multi FROM SOURCE gen_multi (REFERENCE partsupp);
+> CREATE TABLE region_multi FROM SOURCE gen_multi (REFERENCE region);
+> CREATE TABLE supplier_multi FROM SOURCE gen_multi (REFERENCE supplier);
+> COMMIT
+
+> SELECT
+    (SELECT count(*) FROM (SELECT * FROM customer EXCEPT ALL SELECT * FROM customer_multi)),
+    (SELECT count(*) FROM (SELECT * FROM customer_multi EXCEPT ALL SELECT * FROM customer)),
+    (SELECT count(*) FROM (SELECT * FROM lineitem EXCEPT ALL SELECT * FROM lineitem_multi)),
+    (SELECT count(*) FROM (SELECT * FROM lineitem_multi EXCEPT ALL SELECT * FROM lineitem)),
+    (SELECT count(*) FROM (SELECT * FROM nation EXCEPT ALL SELECT * FROM nation_multi)),
+    (SELECT count(*) FROM (SELECT * FROM nation_multi EXCEPT ALL SELECT * FROM nation)),
+    (SELECT count(*) FROM (SELECT * FROM orders EXCEPT ALL SELECT * FROM orders_multi)),
+    (SELECT count(*) FROM (SELECT * FROM orders_multi EXCEPT ALL SELECT * FROM orders)),
+    (SELECT count(*) FROM (SELECT * FROM part EXCEPT ALL SELECT * FROM part_multi)),
+    (SELECT count(*) FROM (SELECT * FROM part_multi EXCEPT ALL SELECT * FROM part)),
+    (SELECT count(*) FROM (SELECT * FROM partsupp EXCEPT ALL SELECT * FROM partsupp_multi)),
+    (SELECT count(*) FROM (SELECT * FROM partsupp_multi EXCEPT ALL SELECT * FROM partsupp)),
+    (SELECT count(*) FROM (SELECT * FROM region EXCEPT ALL SELECT * FROM region_multi)),
+    (SELECT count(*) FROM (SELECT * FROM region_multi EXCEPT ALL SELECT * FROM region)),
+    (SELECT count(*) FROM (SELECT * FROM supplier EXCEPT ALL SELECT * FROM supplier_multi)),
+    (SELECT count(*) FROM (SELECT * FROM supplier_multi EXCEPT ALL SELECT * FROM supplier))
+0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+
+> DROP SOURCE gen_multi CASCADE
+
 > DROP SOURCE gen CASCADE
+
+# Ticking sources on several workers report running again after their replica
+# restarts past the snapshot. Only one worker ticks and only one reports
+# health, so use several sources to cover the case where they differ.
+> CREATE SOURCE tick1 IN CLUSTER tpch_multi FROM LOAD GENERATOR TPCH (SCALE FACTOR .001, TICK INTERVAL '0.05s')
+> CREATE TABLE tick1_orders FROM SOURCE tick1 (REFERENCE orders);
+> CREATE SOURCE tick2 IN CLUSTER tpch_multi FROM LOAD GENERATOR TPCH (SCALE FACTOR .001, TICK INTERVAL '0.05s')
+> CREATE TABLE tick2_orders FROM SOURCE tick2 (REFERENCE orders);
+> CREATE SOURCE tick3 IN CLUSTER tpch_multi FROM LOAD GENERATOR TPCH (SCALE FACTOR .001, TICK INTERVAL '0.05s')
+> CREATE TABLE tick3_orders FROM SOURCE tick3 (REFERENCE orders);
+> CREATE SOURCE tick4 IN CLUSTER tpch_multi FROM LOAD GENERATOR TPCH (SCALE FACTOR .001, TICK INTERVAL '0.05s')
+> CREATE TABLE tick4_orders FROM SOURCE tick4 (REFERENCE orders);
+> CREATE SOURCE tick5 IN CLUSTER tpch_multi FROM LOAD GENERATOR TPCH (SCALE FACTOR .001, TICK INTERVAL '0.05s')
+> CREATE TABLE tick5_orders FROM SOURCE tick5 (REFERENCE orders);
+> CREATE SOURCE tick6 IN CLUSTER tpch_multi FROM LOAD GENERATOR TPCH (SCALE FACTOR .001, TICK INTERVAL '0.05s')
+> CREATE TABLE tick6_orders FROM SOURCE tick6 (REFERENCE orders);
+
+> SELECT count(*) FROM mz_internal.mz_source_statuses WHERE name LIKE 'tick_' AND status = 'running'
+6
+
+# Restarting at offset 1 would replay only the snapshot.
+> SELECT min("offset") > 10 FROM (
+    SELECT "offset" FROM tick1 UNION ALL SELECT "offset" FROM tick2 UNION ALL
+    SELECT "offset" FROM tick3 UNION ALL SELECT "offset" FROM tick4 UNION ALL
+    SELECT "offset" FROM tick5 UNION ALL SELECT "offset" FROM tick6)
+true
+
+> ALTER CLUSTER tpch_multi SET (REPLICATION FACTOR 0)
+
+> SELECT count(*) FROM mz_internal.mz_source_statuses WHERE name LIKE 'tick_' AND status = 'paused'
+6
+
+> ALTER CLUSTER tpch_multi SET (REPLICATION FACTOR 1)
+
+> SELECT count(*) FROM mz_internal.mz_source_statuses WHERE name LIKE 'tick_' AND status = 'running'
+6
+
+> SELECT count(*) FROM tick1_orders
+1500
+
+> DROP CLUSTER tpch_multi CASCADE

@@ -332,14 +332,13 @@ class Action:
             "division by zero",
             "out of range",
             "is only defined for finite arguments",
-            "Window function performance issue",  # TODO: Remove when SQL-640 is fixed
+            "Window function performance issue",  # TODO: Remove when SQL-858 is fixed
             "unknown cluster 'dont_exist'",  # Set intentionally to find panics
             # A persistent object (sink, non-temp view) referencing a temporary
             # one is correctly rejected. We still let the workload attempt it,
             # a path that wrongly accepts it instead panics the coordinator on
             # catalog apply, which surfaces as an unexpected failure.
             "non-temporary items cannot depend on temporary item",
-            "is not of expected type SqlColumnType",  # TODO: Remove when SQL-566 is fixed
             # generate_select_query occasionally emits a WITH MUTUALLY
             # RECURSIVE body with ERROR AT RECURSION LIMIT, which errors on
             # purpose when the iteration outruns the limit. Only our generated
@@ -370,7 +369,6 @@ class Action:
                     "was removed",  # dependency was removed, started with moving optimization off main thread, see database-issues#7285
                     "real-time source dropped before ingesting the upstream system's visible frontier",  # Expected, see https://buildkite.com/materialize/nightly/builds/9399#0191be17-1f4c-4321-9b51-edc4b08b71c5
                     "object state changed while transaction was in progress",  # Old error msg, can remove this ignore later
-                    "another session modified the catalog while this DDL transaction was open",
                     "was dropped while executing a statement",
                     "' was dropped",  # ConcurrentDependencyDrop (collection, schema, etc.)
                     "was concurrently modified",  # ConcurrentDependencyMutation (SQL-272)
@@ -1744,6 +1742,12 @@ class CreateIndexAction(Action):
 
 
 class DropIndexAction(Action):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        return [
+            # A materialized view or a newer index may read from it.
+            "still depended upon by",
+        ] + super().errors_to_ignore(exe)
+
     def run(self, exe: Executor) -> bool:
         with exe.db.lock:
             if not exe.db.indexes:
@@ -2062,7 +2066,9 @@ class ResolveReplacementMaterializedViewAction(Action):
     kills, and 0dt deploys are found too.
     """
 
-    def pick_replacement(self, exe: Executor) -> tuple[str, str] | None:
+    def pick_replacement(self, exe: Executor) -> tuple[str, str, str] | None:
+        """A random live replacement as (qualified replacement, qualified
+        target, bare replacement item name)."""
         exe.execute(
             "SELECT rd.name, rs.name, r_mv.name, td.name, ts.name, t_mv.name"
             " FROM mz_internal.mz_replacements r"
@@ -2080,7 +2086,7 @@ class ResolveReplacementMaterializedViewAction(Action):
         r_db, r_schema, r_name, t_db, t_schema, t_name = self.rng.choice(rows)
         replacement = f"{identifier(r_db)}.{identifier(r_schema)}.{identifier(r_name)}"
         target = f"{identifier(t_db)}.{identifier(t_schema)}.{identifier(t_name)}"
-        return replacement, target
+        return replacement, target, r_name
 
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         return [
@@ -2110,7 +2116,7 @@ class ApplyReplacementMaterializedViewAction(ResolveReplacementMaterializedViewA
         picked = self.pick_replacement(exe)
         if picked is None:
             return False
-        replacement, target = picked
+        replacement, target, _ = picked
         # APPLY REPLACEMENT waits for the target's write frontier to catch up
         # to the replacement's. The wait never finishes if the target is
         # concurrently cascade-dropped (database-issues#9820), so bound it
@@ -2149,8 +2155,38 @@ class DropReplacementMaterializedViewAction(ResolveReplacementMaterializedViewAc
         picked = self.pick_replacement(exe)
         if picked is None:
             return False
-        replacement, _ = picked
+        replacement, _, _ = picked
         # IF EXISTS, a concurrent apply or drop may have resolved it already.
+        exe.execute(f"DROP MATERIALIZED VIEW IF EXISTS {replacement}")
+        return True
+
+
+class CreateOrReplaceReplacementMaterializedViewAction(
+    ResolveReplacementMaterializedViewAction
+):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        errors = super().errors_to_ignore(exe)
+        if exe.db.scenario == Scenario.Rename:
+            # The view's rendered SELECT embeds qualified names captured at
+            # creation time, renames invalidate them
+            errors += ["does not exist"]
+        return errors
+
+    def run(self, exe: Executor) -> bool:
+        picked = self.pick_replacement(exe)
+        if picked is None:
+            return False
+        replacement, target, replacement_name = picked
+        with exe.db.lock:
+            views = [v for v in exe.db.views if str(v) == target]
+        if not views:
+            # The target was renamed or is no longer tracked
+            return False
+        exe.execute(
+            f"CREATE OR REPLACE MATERIALIZED VIEW {replacement} AS {views[0].get_select()}"
+        )
+        # The replaced item is a plain materialized view that nothing tracks.
+        # IF EXISTS, a concurrent CASCADE drop may have removed it already.
         exe.execute(f"DROP MATERIALIZED VIEW IF EXISTS {replacement}")
         return True
 
@@ -2834,18 +2870,13 @@ class ReadOnlyTransactionAction(Action):
 
 
 class DDLTransactionAction(Action):
-    """A DDL statement inside an explicit `BEGIN`/`COMMIT`. Materialize allows
-    only a single statement in a DDL transaction, so the value over autocommit
-    DDL is the open commit window: racing concurrent DDL against it exercises
-    the "another session modified the catalog while this DDL transaction was
-    open" serialization path."""
+    """Race concurrent catalog changes against CREATE TABLE deferred until COMMIT."""
 
     def applicable(self, exe: Executor) -> bool:
         return exe.db.complexity in (Complexity.DDL, Complexity.DDLOnly)
 
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         return [
-            "another session modified the catalog",
             "unknown schema",
         ] + super().errors_to_ignore(exe)
 
@@ -3004,6 +3035,9 @@ class FlipFlagsAction(Action):
             "'.*'",
         ]
         self.flags_with_values["persist_shard_info_metric"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["persist_gc_remove_finalized_rollups"] = (
+            BOOLEAN_FLAG_VALUES
+        )
         self.flags_with_values["persist_part_decode_batch_rows"] = [
             "''",
             "7",
@@ -3161,10 +3195,6 @@ class FlipFlagsAction(Action):
             BOOLEAN_FLAG_VALUES
         )
         self.flags_with_values["cluster"] = ["quickstart", "dont_exist"]
-        self.flags_with_values["enable_frontend_subscribes"] = [
-            "true",
-            "false",
-        ]
         self.flags_with_values["enable_case_literal_transform"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_union_cancellation_after_relation_cse"] = (
             BOOLEAN_FLAG_VALUES
@@ -3185,6 +3215,11 @@ class FlipFlagsAction(Action):
         self.flags_with_values["enable_column_paged_batcher_spill"] = (
             BOOLEAN_FLAG_VALUES
         )
+        # Read once per process, see `apply_pool_config`, so the processes of
+        # one replica can differ.
+        self.flags_with_values["enable_column_paged_batcher_file_extents"] = (
+            BOOLEAN_FLAG_VALUES
+        )
         # Fractions of the *cgroup* memory limit, which under mzcompose's
         # process orchestrator is the whole container budget shared by
         # environmentd and every replica, not one replica's allowance. A
@@ -3197,14 +3232,10 @@ class FlipFlagsAction(Action):
             "0.01",
             "0.02",
         ]
-        self.flags_with_values["column_paged_batcher_lz4"] = BOOLEAN_FLAG_VALUES
-        self.flags_with_values["column_paged_batcher_swap_pageout"] = (
-            BOOLEAN_FLAG_VALUES
-        )
-        self.flags_with_values["column_paged_batcher_spill_worker_count"] = [
-            "0",
-            "2",
-            "4",
+        self.flags_with_values["column_paged_batcher_spill_worker_fraction"] = [
+            "0.0",
+            "0.125",
+            "0.5",
         ]
         self.flags_with_values["column_paged_batcher_eager_backing"] = (
             BOOLEAN_FLAG_VALUES
@@ -3222,11 +3253,15 @@ class FlipFlagsAction(Action):
         self.flags_with_values["enable_compute_correction_v2_spill"] = (
             BOOLEAN_FLAG_VALUES
         )
-        self.flags_with_values["enable_upsert_chunked_stash"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["column_chunk_compress_min_depth"] = [
             "0",  # compress every spilled body
             "1",  # the default: fresh chunks store uncompressed
             "4",  # exempt several young generations
+        ]
+        self.flags_with_values["compute_correction_v2_compress_min_depth"] = [
+            "0",  # compress every spilled body
+            "1",  # the default: fresh chunks store uncompressed
+            "255",  # never compress
         ]
         # 0 forces the estimated-size path for every table, the default forces
         # the exact COUNT(*) path for workload-sized tables.
@@ -3280,7 +3315,6 @@ class FlipFlagsAction(Action):
             "persist_blob_hedged_get_budget_ratio",
             "persist_blob_hedged_get_max_concurrent",
             "persist_blob_hedged_get_warm_interval",
-            "enable_compute_half_join2",
             "enable_mz_join_core",
             "enable_compute_correction_v2",
             "linear_join_yielding",
@@ -3288,6 +3322,8 @@ class FlipFlagsAction(Action):
             "enable_lgalloc_eager_reclamation",
             "enable_s3_tables_region_check",
             "lgalloc_background_interval",
+            "column_paged_batcher_file_release_interval",
+            "column_paged_batcher_file_release_bytes",
             "lgalloc_file_growth_dampener",
             "lgalloc_local_buffer_bytes",
             "lgalloc_slow_clear_bytes",
@@ -3472,7 +3508,7 @@ class FlipFlagsAction(Action):
             "enable_mcp_agent_read_data_product_tool",
             "enable_mcp_developer",
             "enable_mcp_developer_query_tool",
-            "enable_mcp_protocol_2026_07_28",
+            "enable_mcp_unified",
             "mcp_max_response_size",
             "mcp_request_timeout",
             "mz_metrics_lgalloc_map_refresh_interval",
@@ -4666,6 +4702,7 @@ class SetSessionVariableAction(Action):
             "client_min_messages": ["debug1", "info", "notice", "warning", "error"],
             "max_query_result_size": ["100000", "1000000", "1000000000"],
             "emit_timestamp_notice": ["true", "false"],
+            "emit_execution_time_notice": ["true", "false"],
             "emit_trace_id_notice": ["true", "false"],
             # Only UTC is accepted, the rejection of other time zones is
             # deliberate error path coverage.
@@ -5106,6 +5143,7 @@ class ZeroDowntimeDeployAction(Action):
                 ports=ports,
                 sanity_restart=self.sanity_restart,
                 deploy_generation=self.deploy_generation,
+                force_catalog_migration=True,
                 system_parameter_defaults=get_default_system_parameters(),
                 restart="on-failure",
                 healthcheck=LEADER_STATUS_HEALTHCHECK,
@@ -6419,12 +6457,9 @@ class SourceReadHoldSweepAction(Action):
 
     PREPARED BUT DISABLED (commented out of read_action_list). Intended for the
     kill scenario, where racing envd/clusterd restarts stresses read-hold
-    reinstatement: the SS-346 class (a dependent's read hold on a source's remap
-    shard not upheld across a restart, so its since advances past the
-    dependent's upper) and PER-49 (a compute import as_of behind the compacted
-    since after ALTER TABLE ADD COLUMN + kill). Enabling it now just re-triggers
-    those known coordinator/compute panics.
-    TODO: enable in read_action_list once SS-346 and PER-49 are fixed."""
+    reinstatement. Enabling it now just re-triggers PER-49 (a compute import
+    as_of behind the compacted since after ALTER TABLE ADD COLUMN + kill).
+    TODO: enable in read_action_list once PER-49 is fixed."""
 
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         return [
@@ -6484,7 +6519,7 @@ read_action_list = ActionList(
         # PREPARED BUT DISABLED (see class docstrings): enabling these now just
         # re-detects known-unfixed coordinator bugs rather than finding new ones.
         # (DependencyConsistencyAction, 5),  # TODO: enable once SQL-521 fixed
-        # (SourceReadHoldSweepAction, 5),  # TODO: enable once SS-346 & PER-49 fixed
+        # (SourceReadHoldSweepAction, 5),  # TODO: enable once PER-49 fixed
         (SetClusterAction, 1),
         (CommitRollbackAction, 30),
         (ReconnectAction, 1),
@@ -6537,7 +6572,7 @@ dml_nontrans_action_list = ActionList(
         (FlipFlagsAction, 2),
         (SetSessionVariableAction, 2),
         (DiscardAction, 2),
-        # TODO: Reenable when SS-193 and SS-325 are fixed
+        # TODO: Reenable when SS-325 is fixed
         # (SourceSinkStallCheckAction, 4),
         # (TransactionIsolationAction, 1),
     ],
@@ -6622,6 +6657,7 @@ ddl_action_list = ActionList(
         (CreateReplacementMaterializedViewAction, 10),
         (ApplyReplacementMaterializedViewAction, 5),
         (DropReplacementMaterializedViewAction, 5),
+        (CreateOrReplaceReplacementMaterializedViewAction, 5),
         (SealedCollectionCheckAction, 2),
         (TransactionIsolationAction, 1),
         (BoundedStalenessReadAction, 2),

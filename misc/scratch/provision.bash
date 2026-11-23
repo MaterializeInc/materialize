@@ -19,9 +19,18 @@ ARCH_GO=$(echo "$ARCH" | sed -e "s/aarch64/arm64/" -e "s/x86_64/amd64/")
 # Keep these in sync with ci/builder/Dockerfile so scratch matches CI. Docker
 # itself is unpinned there (it uses the distro docker.io); we stay on the 28
 # line until moby#51845 is fixed (Docker 29 is unstable).
+# renovate: datasource=github-releases depName=moby/moby
 DOCKER_VERSION=28.5.2
-DOCKER_COMPOSE_VERSION=5.0.1
-NODE_VERSION=24.16.0
+# renovate: datasource=github-releases depName=docker/compose
+DOCKER_COMPOSE_VERSION=5.8.0
+# renovate: datasource=node-version depName=node
+NODE_VERSION=24.22.3
+# renovate: datasource=github-releases depName=derailed/k9s
+K9S_VERSION=v0.51.0
+# renovate: datasource=github-releases depName=kubernetes/kubernetes
+KUBECTL_VERSION=v1.34.10
+# renovate: datasource=github-releases depName=kubernetes-sigs/kind
+KIND_VERSION=v0.33.0
 NODE_ARCH=$(echo "$ARCH" | sed -e "s/aarch64/arm64/" -e "s/x86_64/x64/")
 
 # Everything runs in parallel — no serial APT bottleneck.
@@ -80,11 +89,11 @@ rm -rf /tmp/awscli.zip /tmp/aws) &
 (curl -fsSL https://astral.sh/uv/install.sh | sudo -u ubuntu sh >/dev/null 2>&1) &
 
 # kubectl + kind + k9s. kind and kubectl mirror ci/builder/Dockerfile.
-(curl -fsSL "https://dl.k8s.io/release/v1.34.10/bin/linux/$ARCH_GO/kubectl" -o /usr/local/bin/kubectl
+(curl -fsSL "https://dl.k8s.io/release/$KUBECTL_VERSION/bin/linux/$ARCH_GO/kubectl" -o /usr/local/bin/kubectl
 chmod +x /usr/local/bin/kubectl) &
-(curl -fsSL "https://kind.sigs.k8s.io/dl/v0.32.0/kind-linux-$ARCH_GO" -o /usr/local/bin/kind
+(curl -fsSL "https://kind.sigs.k8s.io/dl/$KIND_VERSION/kind-linux-$ARCH_GO" -o /usr/local/bin/kind
 chmod +x /usr/local/bin/kind) &
-(curl -fsSL "https://github.com/derailed/k9s/releases/download/v0.50.18/k9s_Linux_$ARCH_GO.tar.gz" \
+(curl -fsSL "https://github.com/derailed/k9s/releases/download/$K9S_VERSION/k9s_Linux_$ARCH_GO.tar.gz" \
     | tar xzf - -C /usr/local/bin k9s
 chmod +x /usr/local/bin/k9s) &
 

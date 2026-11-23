@@ -20,7 +20,6 @@ use mz_repr::{Diff, Timestamp};
 use mz_storage_operators::persist_source::Subtime;
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnation::ColumnationChunker;
 use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::scope_label::ScopeExt;
 use prometheus::IntCounter;
@@ -37,7 +36,7 @@ use crate::logging::compute::{ComputeEvent, ComputeEventBuilder};
 use crate::logging::{BatchLogger, EventQueue, SharedLoggingState};
 use crate::metrics::LoggingMetrics;
 use crate::render::errors::DataflowErrorSer;
-use crate::typedefs::{ErrBatcher, ErrBuilder};
+use crate::typedefs::ErrBatcher;
 
 /// Initialize logging dataflows.
 ///
@@ -202,9 +201,7 @@ impl LoggingContext<'_> {
                     let collection: KeyCollection<_, DataflowErrorSer, Diff> =
                         VecCollection::empty(scope).into();
                     collection
-                        .mz_arrange::<ColumnationChunker<_>, ErrBatcher<_, _>, ErrBuilder<_, _>, _>(
-                            "Arrange logging err",
-                        )
+                        .mz_arrange::<ErrBatcher<_, _>, _>("Arrange logging err")
                         .trace
                 });
 

@@ -34,7 +34,8 @@ T = TypeVar("T")
 say = ui.speaker("C> ")
 
 
-DEFAULT_CONFLUENT_PLATFORM_VERSION = "8.2.0"
+# renovate: datasource=docker depName=confluentinc/cp-kafka versioning=docker
+DEFAULT_CONFLUENT_PLATFORM_VERSION = "8.4.0"
 
 DEFAULT_MZ_VOLUMES = [
     "mzdata:/mzdata",
@@ -111,11 +112,13 @@ def get_minimal_system_parameters(
         "enable_exclude_constraints_option": "true",
         "enable_expressions_in_limit_syntax": "true",
         "enable_fixed_correlated_cte_lowering": "true",
+        "enable_frontend_transaction_completion": "true",
         "enable_introspection_subscribes": "true",
         "enable_lgalloc": "false",
         "enable_load_generator_counter": "true",
         "enable_logical_compaction_window": "true",
-        "enable_mcp_protocol_2026_07_28": "true",
+        "enable_postgres_source_failover": "true",
+        "enable_mcp_unified": "true",
         "enable_metric_sink": "true",
         "enable_multi_worker_storage_persist_sink": "true",
         "enable_rbac_checks": "true",
@@ -172,6 +175,8 @@ def get_minimal_system_parameters(
         config["enable_columnar_lgalloc"] = "false"
     if version < MzVersion.parse_mz("v26.25.0-dev"):
         config["enable_multi_replica_sources"] = "true"
+    if version < MzVersion.parse_mz("v26.26.0-dev"):
+        config["enable_iceberg_sink"] = "true"
 
     if version >= MzVersion.parse_mz("v26.40.0-dev"):
         config["hydration_history_collection_interval"] = "60s"
@@ -179,9 +184,9 @@ def get_minimal_system_parameters(
     if version >= MzVersion.parse_mz("v26.45.0-dev"):
         # Exercise the source persist sink's grouping of a snapshotting export's
         # updates ahead of release to production. At least one default_timestamp_interval
-        # (1s by default). A Postgres source's snapshot and first CDC
-        # rows become visible about this much later, which the PgCdc feature
-        # benchmarks measure.
+        # (1s by default). A Postgres or MySQL source's snapshot and first CDC
+        # rows become visible about this much later. The PgCdc and MySqlCdc
+        # feature benchmarks measure that delay.
         config["storage_persist_sink_description_lookahead"] = "2s"
 
     if sanitizer_enabled():
@@ -209,6 +214,14 @@ def get_minimal_system_parameters(
     if version < MzVersion.parse_mz("v26.47.0-dev"):
         config["enable_frontend_peek_sequencing"] = (
             "true" if version >= MzVersion.parse_mz("v26.9.0-dev") else "false"
+        )
+
+    # Frontend subscribes' flag, which current versions no longer have because
+    # the frontend always sequences subscribes. Older binaries that have it
+    # still read it, so pin the value CI has been running them with.
+    if version < MzVersion.parse_mz("v26.51.0-dev"):
+        config["enable_frontend_subscribes"] = (
+            "true" if version >= MzVersion.parse_mz("v26.18.0-dev") else "false"
         )
 
     # The `WITH (WAIT ...)` graceful-reconfiguration surface. Always accepted
@@ -341,11 +354,25 @@ def get_variable_system_parameters(
             "enable_column_paged_batcher", "false", ["true", "false"]
         ),
         # Varied for the same reason, and because it reaches past the arrange
-        # sites: it installs the process buffer pool and enables the column pager
-        # storage's upsert stash draws from, so defaulting it on would move several
-        # subsystems' memory behavior at once.
+        # sites: it installs the process buffer pool that storage's upsert stash
+        # also draws from, so defaulting it on would move several subsystems'
+        # memory behavior at once.
         VariableSystemParameter(
             "enable_column_paged_batcher_spill", "false", ["true", "false"]
+        ),
+        # On by default so CI exercises the file-backed extent store wherever
+        # a replica has a scratch directory. Off in production while it earns
+        # trust.
+        *(
+            [
+                VariableSystemParameter(
+                    "enable_column_paged_batcher_file_extents",
+                    "true",
+                    ["true", "false"],
+                )
+            ]
+            if version >= MzVersion.parse_mz("v26.51.0-dev")
+            else []
         ),
         # On by default so CI exercises the columnar accumulable diff layout, which
         # is off in production while it earns trust.
@@ -406,11 +433,6 @@ def get_variable_system_parameters(
             ["true", "false"],
         ),
         VariableSystemParameter(
-            "enable_frontend_subscribes",
-            "true" if version >= MzVersion.parse_mz("v26.18.0-dev") else "false",
-            ["true", "false"],
-        ),
-        VariableSystemParameter(
             "enable_simplify_from_less_existence",
             "true",
             ["true", "false"],
@@ -425,17 +447,10 @@ def get_variable_system_parameters(
             "true",
             ["true", "false"],
         ),
-        # On by default so CI exercises the chunked stash flavor, which is
-        # off in production while it earns trust. Only meaningful when
-        # enable_upsert_v2 is true.
-        VariableSystemParameter(
-            "enable_upsert_chunked_stash",
-            "true",
-            ["true", "false"],
-        ),
+        # Varied so the v1 operator keeps coverage while it exists.
         VariableSystemParameter(
             "enable_upsert_v2",
-            "false",
+            "true",
             ["true", "false"],
         ),
         VariableSystemParameter(
@@ -507,6 +522,9 @@ def get_variable_system_parameters(
             ["", "^u1", ".*"],
         ),
         VariableSystemParameter("persist_shard_info_metric", "true", ["true", "false"]),
+        VariableSystemParameter(
+            "persist_gc_remove_finalized_rollups", "true", ["true", "false"]
+        ),
         VariableSystemParameter(
             "persist_encoding_enable_dictionary", "true", ["true", "false"]
         ),
@@ -772,16 +790,18 @@ def get_default_system_parameters(
 # all. Only add it in UNINTERESTING_SYSTEM_PARAMETERS if none of the above
 # apply.
 UNINTERESTING_SYSTEM_PARAMETERS = [
-    "enable_compute_half_join2",
+    # Off by default so tests exercise the refusal to drop in-use indexes.
+    "enable_drop_in_use_index",
     "enable_mz_join_core",
     "linear_join_yielding",
     "column_chunk_compress_min_depth",
+    "compute_correction_v2_compress_min_depth",
     "column_paged_batcher_budget_fraction",
-    "column_paged_batcher_lz4",
-    "column_paged_batcher_swap_pageout",
-    "column_paged_batcher_spill_worker_count",
+    "column_paged_batcher_spill_worker_fraction",
     "column_paged_batcher_eager_backing",
     "column_paged_batcher_pool_rss_target_fraction",
+    "column_paged_batcher_file_release_interval",
+    "column_paged_batcher_file_release_bytes",
     "enable_lgalloc_eager_reclamation",
     "lgalloc_background_interval",
     "lgalloc_file_growth_dampener",
@@ -1088,7 +1108,7 @@ def bootstrap_cluster_replica_size() -> str:
 
 
 def cluster_replica_size_map() -> dict[str, dict[str, Any]]:
-    """scale=<n>,workers=<n>[,mem=<n>GiB][,legacy]"""
+    """scale=<n>,workers=<n>[,mem=<n>GiB][,legacy|,swap]"""
 
     def replica_size(
         scale: int,
@@ -1134,5 +1154,17 @@ def cluster_replica_size_map() -> dict[str, dict[str, Any]]:
         replica_sizes[f"scale=1,workers={workers},mem={workers}GiB"] = replica_size(
             1, workers, memory_limit=f"{workers} GiB"
         )
+
+    # The controller runs the compute memory limiter only on swap sizes, with a
+    # heap limit of `memory_limit + disk_limit`. Swap sizes get no scratch
+    # directory either, so upsert state and buffer pool extents stay in process
+    # memory, where the limiter counts them.
+    for name, size in list(replica_sizes.items()):
+        if name.startswith("scale=") and size["is_cc"]:
+            replica_sizes[f"{name},swap"] = {
+                **size,
+                "disk_limit": size["memory_limit"],
+                "swap_enabled": True,
+            }
 
     return replica_sizes

@@ -11,6 +11,7 @@ import React from "react";
 
 import { Notice } from "~/api/materialize/types";
 
+import { EXECUTION_TIME_NOTICE_CODE } from "./executionTime";
 import NoticeOutput from "./NoticeOutput";
 import PlanInsightsNotice, {
   PLAN_INSIGHTS_NOTICE_CODE,
@@ -34,6 +35,10 @@ const CommandResultNotice = ({
         commandResultIndex={commandResultIndex}
       />
     );
+  }
+  // CommandResult shows the execution time in the result's footer.
+  if (notice.code === EXECUTION_TIME_NOTICE_CODE) {
+    return null;
   }
   return <NoticeOutput notice={notice} />;
 };

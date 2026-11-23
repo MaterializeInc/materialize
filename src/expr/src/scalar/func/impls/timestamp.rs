@@ -29,9 +29,26 @@ use crate::func::parse_timezone;
 use crate::scalar::func::TimestampLike;
 use crate::scalar::func::format::DateTimeFormat;
 
+/// Reports whether a cast that rounds a timestamp from precision `from` to
+/// precision `to` maps distinct values to distinct values.
+fn precision_cast_preserves_uniqueness(
+    from: Option<TimestampPrecision>,
+    to: Option<TimestampPrecision>,
+) -> bool {
+    // An unspecified `from` precision does not bound the input to microseconds:
+    // `date + time` keeps the time's nanoseconds, and every cast rounds them
+    // away.
+    let Some(from) = from else {
+        return false;
+    };
+    let to_p = to.map(|p| p.into_u8()).unwrap_or(MAX_PRECISION);
+    to_p >= from.into_u8()
+}
+
+// Not uniqueness-preserving: see `text_preserves_uniqueness`.
 #[sqlfunc(
     sqlname = "timestamp_to_text",
-    preserves_uniqueness = true,
+    preserves_uniqueness = false,
     inverse = super::CastStringToTimestamp(None)
 )]
 fn cast_timestamp_to_string(a: CheckedTimestamp<NaiveDateTime>) -> String {
@@ -40,9 +57,10 @@ fn cast_timestamp_to_string(a: CheckedTimestamp<NaiveDateTime>) -> String {
     buf
 }
 
+// Not uniqueness-preserving: see `text_preserves_uniqueness`.
 #[sqlfunc(
     sqlname = "timestamp_with_time_zone_to_text",
-    preserves_uniqueness = true,
+    preserves_uniqueness = false,
     inverse = super::CastStringToTimestampTz(None)
 )]
 fn cast_timestamp_tz_to_string(a: CheckedTimestamp<DateTime<Utc>>) -> String {
@@ -92,12 +110,7 @@ pub struct CastTimestampToTimestampTz {
     sqlname = "timestamp_to_timestamp_with_time_zone",
     output_type_expr = SqlScalarType::TimestampTz { precision: self.to }
         .nullable(input_type.nullable),
-    preserves_uniqueness = {
-        let to_p = self.to.map(|p| p.into_u8()).unwrap_or(MAX_PRECISION);
-        let from_p = self.from.map(|p| p.into_u8()).unwrap_or(MAX_PRECISION);
-        // If it's getting cast to a higher precision, it should preserve uniqueness but not otherwise.
-        to_p >= from_p
-    },
+    preserves_uniqueness = precision_cast_preserves_uniqueness(self.from, self.to),
     inverse = super::CastTimestampTzToTimestamp {
         from: self.from,
         to: self.to
@@ -135,12 +148,7 @@ pub struct AdjustTimestampPrecision {
     sqlname = "adjust_timestamp_precision",
     output_type_expr = SqlScalarType::Timestamp { precision: self.to }
         .nullable(input_type.nullable),
-    preserves_uniqueness = {
-        let to_p = self.to.map(|p| p.into_u8()).unwrap_or(MAX_PRECISION);
-        let from_p = self.from.map(|p| p.into_u8()).unwrap_or(MAX_PRECISION);
-        // If it's getting cast to a higher precision, it should preserve uniqueness but not otherwise.
-        to_p >= from_p
-    },
+    preserves_uniqueness = precision_cast_preserves_uniqueness(self.from, self.to),
     is_monotone = true
 )]
 fn adjust_timestamp_precision(
@@ -176,12 +184,7 @@ pub struct CastTimestampTzToTimestamp {
     sqlname = "timestamp_with_time_zone_to_timestamp",
     output_type_expr = SqlScalarType::Timestamp { precision: self.to }
         .nullable(input_type.nullable),
-    preserves_uniqueness = {
-        let to_p = self.to.map(|p| p.into_u8()).unwrap_or(MAX_PRECISION);
-        let from_p = self.from.map(|p| p.into_u8()).unwrap_or(MAX_PRECISION);
-        // If it's getting cast to a higher precision, it should preserve uniqueness but not otherwise.
-        to_p >= from_p
-    },
+    preserves_uniqueness = precision_cast_preserves_uniqueness(self.from, self.to),
     inverse = super::CastTimestampToTimestampTz {
         from: self.from,
         to: self.to
@@ -218,12 +221,7 @@ pub struct AdjustTimestampTzPrecision {
     sqlname = "adjust_timestamp_with_time_zone_precision",
     output_type_expr = SqlScalarType::TimestampTz { precision: self.to }
         .nullable(input_type.nullable),
-    preserves_uniqueness = {
-        let to_p = self.to.map(|p| p.into_u8()).unwrap_or(MAX_PRECISION);
-        let from_p = self.from.map(|p| p.into_u8()).unwrap_or(MAX_PRECISION);
-        // If it's getting cast to a higher precision, it should preserve uniqueness but not otherwise.
-        to_p >= from_p
-    },
+    preserves_uniqueness = precision_cast_preserves_uniqueness(self.from, self.to),
     is_monotone = true
 )]
 fn adjust_timestamp_tz_precision(

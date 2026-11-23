@@ -22,7 +22,7 @@ if ! command -v npm &>/dev/null; then
   echo "hint: install Node.js from https://nodejs.org/ or via your package manager"
 fi
 
-try npm install --prefix test/dataflow-visualizer --silent
+try npm ci --prefix test/dataflow-visualizer --silent
 try npx --prefix test/dataflow-visualizer tsc -p test/dataflow-visualizer/tsconfig.typecheck.json
 
 try_status_report

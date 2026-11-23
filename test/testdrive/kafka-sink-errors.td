@@ -71,8 +71,11 @@ contains:TOPIC METADATA REFRESH INTERVAL must be at least 1 second
   ENVELOPE DEBEZIUM
 contains:sink s1 cannot be exported as a sink
 
-> CREATE MATERIALIZED VIEW mv AS SELECT * FROM v1
-> CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT * FROM v1
+# mv reads a table, because a view over a constant seals right away, and a
+# sealed view can't be replaced.
+> CREATE TABLE t_rp (f1 int)
+> CREATE MATERIALIZED VIEW mv AS SELECT * FROM t_rp
+> CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT * FROM t_rp
 
 ! CREATE SINK s2
   IN CLUSTER ${arg.single-replica-cluster}

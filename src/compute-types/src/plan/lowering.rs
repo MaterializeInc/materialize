@@ -239,7 +239,7 @@ impl Context {
         // source's reads and hoist the shared prefix into the source itself.
         self.refine_source_mfps(&mut dataflow);
 
-        dataflow.try_map_source_operators(MfpPlan::create_from)
+        dataflow.try_map_source_operators(|mfp| MfpPlan::create_from(mfp).map(mfp_plan_mir_to_lir))
     }
 
     /// Identifies common parts of the `MapFilterProject`s pushed onto sibling `Get::Collection`
@@ -1387,8 +1387,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 .arranged
                 .iter()
                 .filter_map(|(key, permutation, thinning)| {
-                    let mut mfp = mfp.clone();
-                    mfp.permute_fn(|c| permutation[c], thinning.len() + key.len());
+                    // `key` refers to input columns, so `mfp` must not be permuted yet.
                     mfp.literal_constraints(&key.iter().map(MirScalarExpr::from).collect_vec())
                         .map(|val| {
                             if let Some(metrics) = &self.metrics {

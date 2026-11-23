@@ -15,7 +15,8 @@ SERVICES = [
     Service(
         "prometheus",
         {
-            "image": "prom/prometheus:v2.46.0",
+            # renovate: datasource=docker depName=prom/prometheus versioning=docker
+            "image": "prom/prometheus:v2.46.0@sha256:d6ead9daf2355b9923479e24d7e93f246253ee6a5eb18a61b0f607219f341a80",
             "ports": ["9090:9090"],
             "volumes": [
                 "./prometheus.yml:/etc/prometheus/prometheus.yml",
@@ -32,7 +33,8 @@ SERVICES = [
     Service(
         "tempo",
         {
-            "image": "grafana/tempo:2.2.0",
+            # renovate: datasource=docker depName=grafana/tempo versioning=docker
+            "image": "grafana/tempo:2.2.0@sha256:0f77cc5f7a3941a903ddaebe8990c82f43b5021b65ec45cdfc7471defce481ca",
             "ports": ["4317:4317", "3200:3200"],
             "volumes": [
                 "./tempo.yml:/etc/tempo.yml",
@@ -45,7 +47,8 @@ SERVICES = [
     Service(
         "grafana",
         {
-            "image": "grafana/grafana:10.0.3",
+            # renovate: datasource=docker depName=grafana/grafana versioning=docker
+            "image": "grafana/grafana:10.0.3@sha256:423040d62678074111e4e72d7dcef23480a94eb4f21b9173204d1a5ee972ec59",
             "ports": ["3000:3000"],
             "environment": [
                 "GF_AUTH_ANONYMOUS_ENABLED=true",

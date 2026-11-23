@@ -29,6 +29,10 @@ from materialize.mzcompose.services.sql_server import (
 from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.parallel_workload.staged_catalog import (
+    PREPARATION_LOG_FILTER,
+    paused_preparation,
+)
 
 SQL_SERVER_TLS_CONF_PATH = MZ_ROOT / "test" / "sql-server-cdc" / "tls-mssconfig.conf"
 
@@ -328,6 +332,40 @@ def workflow_kafka_restart_replica(c: Composition, redpanda: bool = False) -> No
         )
 
         c.up("ssh-bastion-host")
+        c.run_testdrive_files("--no-reset", "kafka-source-after-ssh-restart.td")
+
+
+def workflow_kafka_restart_broker(c: Composition, redpanda: bool = False) -> None:
+    """Kafka sources behind an SSH tunnel recover after the broker restarts."""
+    c.down()
+    with c.override(SshBastionHost(max_startups="2")):
+        broker = "redpanda" if redpanda else "kafka"
+        dependencies = ["materialized", "ssh-bastion-host", broker]
+        if not redpanda:
+            dependencies.append("schema-registry")
+        c.up(*dependencies)
+
+        c.run_testdrive_files("setup.td")
+
+        public_key = c.sql_query("""
+            select public_key_1 from mz_ssh_tunnel_connections ssh \
+            join mz_connections c on c.id = ssh.id
+            where c.name = 'thancred';
+            """)[0][0]
+
+        c.exec(
+            "ssh-bastion-host",
+            "bash",
+            "-c",
+            # sshd rejects a group- or world-writable key file.
+            f"echo '{public_key}' > /etc/authorized_keys/mz && chmod 644 /etc/authorized_keys/mz",
+        )
+
+        c.run_testdrive_files("--no-reset", "kafka-source.td")
+        c.kill(broker)
+        c.run_testdrive_files("--no-reset", "kafka-source-after-broker-failure.td")
+
+        c.up(*[d for d in dependencies if d != "materialized"])
         c.run_testdrive_files("--no-reset", "kafka-source-after-ssh-restart.td")
 
 
@@ -697,6 +735,53 @@ def workflow_rotated_ssh_key_after_restart(c: Composition) -> None:
         )
 
 
+def workflow_staged_alter_connection(c: Composition) -> None:
+    """Preserve concurrently rotated keys when ALTER completes."""
+    c.down(destroy_volumes=True)
+    with c.override(
+        Materialized(
+            additional_system_parameter_defaults={"log_filter": PREPARATION_LOG_FILTER}
+        )
+    ):
+        c.up("materialized", "ssh-bastion-host")
+        c.sql(
+            "ALTER SYSTEM SET enable_connection_validation_syntax = true",
+            user="mz_system",
+            port=6877,
+        )
+        c.sql(
+            "CREATE CONNECTION staged_ssh TO SSH TUNNEL "
+            "(HOST 'ssh-bastion-host', USER 'mz', PORT 22)"
+        )
+        keys_query = (
+            "SELECT public_key_1, public_key_2 FROM mz_ssh_tunnel_connections ssh "
+            "JOIN mz_connections c ON c.id = ssh.id WHERE c.name = 'staged_ssh'"
+        )
+        original_keys = c.sql_query(keys_query)[0]
+        c.exec(
+            "ssh-bastion-host",
+            "bash",
+            "-c",
+            f"printf '%s\\n' '{original_keys[0]}' '{original_keys[1]}' "
+            "> /etc/authorized_keys/mz",
+        )
+        statement = (
+            "ALTER CONNECTION staged_ssh SET (HOST 'ssh-bastion-host') "
+            "WITH (VALIDATE = true)"
+        )
+        c.sql(statement)
+        with paused_preparation(
+            c, "alter_connection", statement, expected_completions=2
+        ) as result:
+            c.sql("ALTER CONNECTION staged_ssh ROTATE KEYS")
+            rotated_keys = c.sql_query(keys_query)[0]
+            assert rotated_keys[0] == original_keys[1], rotated_keys
+            assert rotated_keys != original_keys, rotated_keys
+            assert c.sql_query("SELECT 7") == [(7,)]
+        result.result()
+        assert c.sql_query(keys_query)[0] == rotated_keys
+
+
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--extended",
@@ -708,6 +793,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     # Test against both standard schema registry
     # and kafka implementations, if --extended is passed
     workflows = [
+        (workflow_staged_alter_connection, (), False),
         # These tests core functionality related to kafka with ssh and error reporting.
         # (workflow_kafka, (False,), True),  # TODO: Reenable when https://linear.app/materializeinc/issue/SS-287 is fixed
         (workflow_hidden_hosts, (False,), True),
@@ -715,6 +801,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         (workflow_basic_ssh_features, (), False),
         (workflow_pg, (), True),
         # (workflow_kafka_restart_replica, (), True),  # TODO: Reenable when https://linear.app/materializeinc/issue/SS-287 is fixed
+        (workflow_kafka_restart_broker, (False,), True),
         (workflow_kafka_sink, (), True),
         (workflow_sql_server, (), True),
         (workflow_mysql, (), True),
@@ -724,6 +811,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             [
                 # (workflow_kafka, (True,), True),  # TODO: Reenable when https://linear.app/materializeinc/issue/SS-287 is fixed
                 (workflow_hidden_hosts, (True,), True),
+                (workflow_kafka_restart_broker, (True,), True),
                 # Various special cases related to ssh
                 (workflow_ssh_key_after_restart, (), False),
                 (workflow_rotated_ssh_key_after_restart, (), False),

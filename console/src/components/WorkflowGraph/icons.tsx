@@ -10,14 +10,14 @@
 import React from "react";
 
 import { AllowedObjects } from "~/api/materialize/workflowGraph";
-import { WorkflowGraphNode } from "~/api/materialize/workflowGraphNodes";
+import { WorkflowGraphCanvasNode } from "~/api/materialize/workflowGraphNodes";
 import IndexIcon from "~/svg/IndexIcon";
 import MaterializedViewIcon from "~/svg/MaterializedViewIcon";
 import { DataIcon } from "~/svg/nav/DataIcon";
 import SinkIcon from "~/svg/SinkIcon";
 import TableIcon from "~/svg/TableIcon";
 
-export function nodeIcon(node: WorkflowGraphNode) {
+export function nodeIcon(node: WorkflowGraphCanvasNode) {
   switch (node.type as AllowedObjects) {
     case "index":
       return <IndexIcon />;
@@ -35,7 +35,7 @@ export function nodeIcon(node: WorkflowGraphNode) {
 /**
  * The source icon is different for subsource nodes.
  */
-function sourceIcon(node: WorkflowGraphNode) {
+function sourceIcon(node: WorkflowGraphCanvasNode) {
   if (node.sourceType === "subsource") {
     return <TableIcon />;
   }

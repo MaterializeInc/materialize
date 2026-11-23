@@ -435,6 +435,7 @@
   "/docs/sql/functions/substring/": "https://materialize.com/docs/sql/functions/substring/",
   "/docs/support/": "https://materialize.com/docs/support/",
   "/docs/clusters/troubleshoot-clusters/memory-spike/": "https://materialize.com/docs/clusters/troubleshoot-clusters/memory-spike/",
+  "/docs/clusters/troubleshoot-clusters/cpu-troubleshooting/": "https://materialize.com/docs/clusters/troubleshoot-clusters/cpu-troubleshooting/",
   "/docs/clusters/troubleshoot-clusters/hydration-failures/": "https://materialize.com/docs/clusters/troubleshoot-clusters/hydration-failures/",
   "/docs/sql/system-catalog/": "https://materialize.com/docs/sql/system-catalog/",
   "/docs/sql/system-clusters/": "https://materialize.com/docs/sql/system-clusters/",

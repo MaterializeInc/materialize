@@ -105,8 +105,8 @@ def test_new_benchmark_has_no_ancestor_fields(tmp_path: Path) -> None:
     [result] = compare(tmp_path, threshold=0.10).results
 
     assert result.verdict == Verdict.NEW
-    assert result.current_mean_ns == 50.0
-    assert result.ancestor_mean_ns is None
+    assert result.current_mean == 50.0
+    assert result.ancestor_mean is None
     assert result.change_mean is None
 
 
@@ -117,7 +117,7 @@ def test_missing_change_with_ancestor_warns_and_is_new(tmp_path: Path) -> None:
 
     [result] = report.results
     assert result.verdict == Verdict.NEW
-    assert result.ancestor_mean_ns == 40.0
+    assert result.ancestor_mean == 40.0
     assert len(report.warnings) == 1
     assert "m" in report.warnings[0]
 
@@ -146,6 +146,21 @@ def test_no_regressions(tmp_path: Path) -> None:
     _bench(tmp_path, "b", "b", 101.0, 100.0, (0.01, -0.01, 0.03))
 
     assert not compare(tmp_path, threshold=0.10).has_regressions
+
+
+def test_ancestor_without_raw_csv_measured_wall_time(tmp_path: Path) -> None:
+    _bench(tmp_path, "w", "w", 2.5e7, 2.0e6, (11.5, 11.4, 11.6))
+    (tmp_path / "w" / "new" / "raw.csv").write_text(
+        "group,function,value,throughput_num,throughput_type,sample_measured_value,unit,iteration_count\n"
+        "w,,,,,1.0,instructions,1\n"
+    )
+
+    report = compare(tmp_path, threshold=0.10)
+
+    assert [r.verdict for r in report.results] == [Verdict.NEW]
+    assert report.warnings == [
+        "w: ancestor measured ns, current instructions, treating as new"
+    ]
 
 
 def test_format_duration() -> None:

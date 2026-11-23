@@ -18,16 +18,17 @@
   ==================================
 
   These macros enforce schema isolation rules when strict_mode is enabled.
-  They use the dbt manifest/graph for compile-time validation, meaning:
-  - No database connection required
-  - Validation happens during `dbt compile` or `dbt run`
-  - Conflicts are caught before any SQL is executed
+  They read only the dbt graph, not the database. The source, source_table,
+  sink, view, materialized_view and table materializations call their
+  validator before creating the model, so the checks run during `dbt run` and
+  `dbt build`, not `dbt compile`.
 
-  Rules enforced:
-  1. source_tables can only share a schema with other source_tables or seeds
-  2. sinks can only share a schema with other sinks
-  3. Other types (view, materialized_view, source, table) cannot be in schemas
-     that contain source_tables or sinks
+  Rules enforced (1 to 3 raise an error, 4 warns):
+  1. sources can only share a schema with other sources
+  2. source_tables can only share a schema with other source_tables or seeds
+  3. sinks can only share a schema with other sinks
+  4. views, materialized_views and tables should not share a schema with
+     sources, source_tables or sinks
 
   Enable strict_mode in dbt_project.yml:
     vars:
@@ -194,24 +195,24 @@
 {% macro validate_non_source_table_schema_isolation(target_schema, target_database) %}
 {#
   Called from: view, materialized_view, table materializations
-  Purpose: Prevent these types from being created in schemas reserved for
-           sources, source_tables, or sinks
+  Purpose: Warn when these types are in a schema that also holds sources,
+           source_tables, or sinks
 
   Logic:
   1. Skip validation if strict_mode is not enabled
   2. Scan all nodes in the dbt graph (manifest)
   3. Find nodes in the same schema/database
   4. Check if any are sources, sinks, or source_tables
-  5. If found, raise an error (schema is reserved)
+  5. If found, emit a warning (schema is reserved)
 #}
 
   {# Step 1: Only run validation when strict_mode is enabled #}
   {% if var('strict_mode', False) %}
 
-    {# Step 2: Initialize flags to track if we find isolated types #}
-    {% set has_source = false %}
-    {% set has_sink = false %}
-    {% set has_source_table = false %}
+    {# Step 2: Initialize flags to track if we find isolated types. These live
+       in a namespace because assignments made inside a for loop do not survive
+       the loop otherwise. #}
+    {% set found = namespace(source=false, sink=false, source_table=false) %}
 
     {# Step 3: Iterate through all nodes in the dbt manifest #}
     {% for node in graph.nodes.values() %}
@@ -221,42 +222,29 @@
 
         {# Step 5: Check if this node is a source, sink, or source_table #}
         {% if node.config.materialized == 'source' %}
-          {% set has_source = true %}
+          {% set found.source = true %}
         {% elif node.config.materialized == 'sink' %}
-          {% set has_sink = true %}
+          {% set found.sink = true %}
         {% elif node.config.materialized == 'source_table' %}
-          {% set has_source_table = true %}
+          {% set found.source_table = true %}
         {% endif %}
 
       {% endif %}
     {% endfor %}
 
-    {# Step 6: If schema contains sources, block creation of this object #}
-    {% if has_source %}
-      {{ exceptions.raise_compiler_error(
-        "Cannot create object in schema '" ~ target_schema ~ "'. " ~
-        "Schema contains source objects. " ~
-        "source materializations must be in a dedicated schema."
-      ) }}
-    {% endif %}
-
-    {# Step 7: If schema contains sinks, block creation of this object #}
-    {% if has_sink %}
-      {{ exceptions.raise_compiler_error(
-        "Cannot create object in schema '" ~ target_schema ~ "'. " ~
-        "Schema contains sink objects. " ~
-        "sink materializations must be in a dedicated schema."
-      ) }}
-    {% endif %}
-
-    {# Step 8: If schema contains source_tables, block creation of this object #}
-    {% if has_source_table %}
-      {{ exceptions.raise_compiler_error(
-        "Cannot create object in schema '" ~ target_schema ~ "'. " ~
-        "Schema contains source_table objects. " ~
-        "source_table materializations must be in a dedicated schema."
-      ) }}
-    {% endif %}
+    {# Steps 6-8: Warn for each isolated type found in this schema.
+       NOTE: these warn instead of raising, because runs that exclude sources
+       and sinks never hit the checks on that side and have always passed. #}
+    {% for type_name, is_found in [('source', found.source), ('sink', found.sink), ('source_table', found.source_table)] %}
+      {% if is_found %}
+        {{ exceptions.warn(
+          "Model '" ~ model.name ~ "' is in schema '" ~ target_schema ~ "', which " ~
+          "contains " ~ type_name ~ " objects, but strict_mode requires " ~ type_name ~
+          " materializations to be in a dedicated schema. This will become an error " ~
+          "in a future release."
+        ) }}
+      {% endif %}
+    {% endfor %}
 
   {% endif %}
 {% endmacro %}

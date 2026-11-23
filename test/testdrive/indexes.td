@@ -148,8 +148,9 @@ named_idx               data_view   <VARIABLE_OUTPUT>   {a,b}    ""
 
 > SET CLUSTER TO quickstart
 
-> DROP INDEX data_view_primary_idx
+# A later index on a relation reads from the earlier one, so drop newest first.
 > DROP INDEX named_idx
+> DROP INDEX data_view_primary_idx
 
 # Indexes with specified columns can be automatically named
 > CREATE INDEX ON data_view(a)
@@ -176,8 +177,8 @@ data_view_b_a_idx       data_view   <VARIABLE_OUTPUT>   {b,a}        ""
 data_view_expr_a_idx    data_view   <VARIABLE_OUTPUT>   "{b - a,a}"  ""
 > SET CLUSTER TO quickstart
 
-> DROP INDEX data_view_b_a_idx
 > DROP INDEX data_view_expr_a_idx
+> DROP INDEX data_view_b_a_idx
 
 # Indexes can be both explicitly named and explicitly structured
 > CREATE INDEX named_idx ON data_view (b - a, a)
@@ -393,7 +394,7 @@ mz_views_ind                                                mz_views            
 mz_wallclock_global_lag_recent_history_ind                  mz_wallclock_global_lag_recent_history       mz_catalog_server    {object_id}                                 ""
 mz_webhook_sources_ind                                      mz_webhook_sources                           mz_catalog_server    {id}                                        ""
 pg_attrdef_all_databases_ind                                pg_attrdef_all_databases                     mz_catalog_server    {oid,adrelid,adnum,adbin,adsrc}             ""
-pg_attribute_all_databases_ind                              pg_attribute_all_databases                   mz_catalog_server    {attrelid,attname,atttypid,attlen,attnum,atttypmod,attnotnull,atthasdef,attidentity,attgenerated,attisdropped,attcollation,database_name,pg_type_database_name}    ""
+pg_attribute_all_databases_ind                              pg_attribute_all_databases                   mz_catalog_server    {attrelid}                                  ""
 pg_authid_core_ind                                          pg_authid_core                               mz_catalog_server    {rolname}                                   ""
 pg_class_all_databases_ind                                  pg_class_all_databases                       mz_catalog_server    {relname}                                   ""
 pg_description_all_databases_ind                            pg_description_all_databases                 mz_catalog_server    {objoid,classoid,objsubid,description,oid_database_name,class_database_name}    ""

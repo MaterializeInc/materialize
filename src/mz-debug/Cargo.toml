@@ -20,7 +20,7 @@ kube.workspace = true
 mz-build-info = { path = "../build-info" }
 mz-cloud-resources = { path = "../cloud-resources"}
 mz-ore = { path = "../ore", features = ["cli", "test"] }
-mz-postgres-util = { path = "../postgres-util" }
+mz-postgres-util = { path = "../postgres-util", default-features = false }
 mz-server-core = { path = "../server-core"}
 mz-tls-util = { path = "../tls-util" }
 postgres-openssl.workspace = true

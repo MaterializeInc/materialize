@@ -71,7 +71,9 @@ impl Staged for CreateMaterializedViewStage {
     ) -> Result<StageResult<Box<Self>>, AdapterError> {
         match self {
             CreateMaterializedViewStage::Optimize(stage) => {
-                coord.create_materialized_view_optimize(stage).await
+                coord
+                    .create_materialized_view_optimize(ctx.session().conn_id().clone(), stage)
+                    .await
             }
             CreateMaterializedViewStage::Finish(stage) => {
                 coord.create_materialized_view_finish(ctx, stage).await
@@ -420,6 +422,7 @@ impl Coordinator {
     #[instrument]
     async fn create_materialized_view_optimize(
         &mut self,
+        conn_id: mz_adapter_types::connection::ConnectionId,
         CreateMaterializedViewOptimize {
             validity,
             plan,
@@ -553,6 +556,11 @@ impl Coordinator {
                         }
                     };
 
+                    tracing::debug!(
+                        target: "mz_adapter::catalog_preparation",
+                        %conn_id, kind = "materialized_view", "catalog preparation complete"
+                    );
+                    fail::fail_point!("catalog_materialized_view_ready");
                     Ok(Box::new(stage))
                 })
             },
@@ -599,12 +607,21 @@ impl Coordinator {
 
         // Validate the replacement target, if one is given.
         if let Some(target_id) = replacement_target {
-            let Some(target) = self.catalog().get_entry(&target_id).materialized_view() else {
+            let target_entry = self.catalog().get_entry(&target_id);
+            let Some(target) = target_entry.materialized_view() else {
                 return Err(AdapterError::internal(
                     "create materialized view",
                     "replacement target not a materialized view",
                 ));
             };
+
+            // Best-effort: the target can still seal after this check, so `APPLY REPLACEMENT`
+            // checks again.
+            if self.materialized_view_sealed(target_entry) {
+                return Err(AdapterError::ReplaceMaterializedViewSealed {
+                    name: target_entry.name().item.clone(),
+                });
+            }
 
             // For now, we don't support schema evolution for materialized views.
             let schema_diff = target.desc.latest().diff(global_lir_plan.desc());
@@ -668,12 +685,13 @@ impl Coordinator {
         let local_mir_for_cache = local_mir_plan.expr();
 
         let ops = vec![
-            catalog::Op::DropObjects(
-                drop_ids
+            catalog::Op::DropObjects {
+                objects: drop_ids
                     .into_iter()
                     .map(catalog::DropObjectInfo::Item)
                     .collect(),
-            ),
+                cascade: false,
+            },
             catalog::Op::CreateItem {
                 id: item_id,
                 name: name.clone(),
@@ -1045,13 +1063,9 @@ impl Coordinator {
             as_of,
             mz_now,
             read_holds,
-            plan.source_imports.into_iter().filter_map(|(id, import)| {
-                import
-                    .desc
-                    .arguments
-                    .operators
-                    .map(|plan| (id, plan.into_map_filter_project()))
-            }),
+            plan.source_imports
+                .into_iter()
+                .filter_map(|(id, import)| import.desc.arguments.operators.map(|plan| (id, plan))),
         )
         .await
     }

@@ -29,8 +29,8 @@ $ psql-execute command="\d tbl"
 \                Table "public.tbl"
  Column |  Type   | Collation | Nullable | Default
 --------+---------+-----------+----------+---------
- a      | integer |           |          | NULL
- b      | text    |           |          | NULL
+ a      | integer |           |          |
+ b      | text    |           |          |
 Indexes:
     "tbl_ind" arrangement (b)
     "tbl_lower_ind" arrangement (pg_catalog.lower(b),a)
@@ -289,7 +289,7 @@ public.bool
 > DROP DATABASE foo
 
 ! DROP OBJECT v1
-contains:Expected one of TABLE or VIEW or MATERIALIZED or SOURCE or SINK or METRIC or INDEX or TYPE or ROLE or USER or CLUSTER or SECRET or CONNECTION or DATABASE or SCHEMA or FUNCTION or NETWORK, found identifier
+contains:Expected one of TABLE or VIEW or MATERIALIZED or SOURCE or SINK or METRIC or INDEX or TYPE or ROLE or USER or CLUSTER or SECRET or CONNECTION or DATABASE or SCHEMA or FUNCTION or NETWORK or QUERY, found identifier
 
 > SHOW OBJECTS
 name        type        comment
@@ -513,10 +513,8 @@ name                           comment
 mz_array_types                 ""
 mz_base_types                  ""
 mz_cluster_replica_sizes       ""
-mz_columns                     ""
 mz_egress_ips                  ""
 mz_functions                   ""
-mz_index_columns               ""
 mz_list_types                  ""
 mz_map_types                   ""
 mz_operators                   ""
@@ -541,10 +539,12 @@ mz_audit_events       mz_catalog_server   ""
 mz_aws_privatelink_connections mz_catalog_server ""
 mz_clusters           mz_catalog_server   ""
 mz_cluster_replicas   mz_catalog_server   ""
+mz_columns            mz_catalog_server   ""
 mz_connections        mz_catalog_server   ""
 mz_databases          mz_catalog_server   ""
 mz_default_privileges mz_catalog_server   ""
 mz_iceberg_sinks      mz_catalog_server   ""
+mz_index_columns      mz_catalog_server   ""
 mz_indexes            mz_catalog_server   ""
 mz_kafka_connections  mz_catalog_server   ""
 mz_kafka_sinks        mz_catalog_server   ""
@@ -619,6 +619,8 @@ mz_webhook_sources                       ""
 name                                     comment
 ------------------------------------------------
 mz_activity_log_thinned                  ""
+mz_builtin_columns                       ""
+mz_builtin_index_columns                 ""
 mz_builtin_indexes                       ""
 mz_builtin_log_indexes                   ""
 mz_builtin_materialized_views            ""
@@ -684,6 +686,7 @@ mz_show_my_schema_privileges             ""
 mz_show_my_system_privileges             ""
 mz_show_network_policies                 ""
 mz_show_object_privileges                ""
+mz_show_query_policies                   ""
 mz_show_role_members                     ""
 mz_show_roles                            ""
 mz_show_schema_privileges                ""
@@ -739,6 +742,9 @@ mz_overridden_system_parameters mz_catalog_server   ""
 mz_pending_cluster_replicas    mz_catalog_server   ""
 mz_postgres_source_tables      mz_catalog_server   ""
 mz_postgres_sources            mz_catalog_server   ""
+mz_query_policies              mz_catalog_server   ""
+mz_query_policy_attachments    mz_catalog_server   ""
+mz_query_policy_rules          mz_catalog_server   ""
 mz_replacements                mz_catalog_server   ""
 mz_replica_system_parameters   mz_catalog_server   ""
 mz_source_references           mz_catalog_server   ""
@@ -840,7 +846,7 @@ test_table ""
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-25
+23
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'

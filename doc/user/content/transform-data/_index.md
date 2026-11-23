@@ -53,7 +53,7 @@ Structuring your transformations as views gives you:
 
 {{< linkbox title="Troubleshoot" >}}
 - [Troubleshooting](/serve-results/troubleshooting/)
-- [Freshness troubleshooting](/transform-data/freshness-troubleshooting/)
+- [Freshness troubleshooting](/transform-data/freshness/troubleshoot-freshness/)
 - [Dataflow troubleshooting](/transform-data/dataflow-troubleshooting/)
 - [FAQ: Indexes](/transform-data/faq/)
 {{</ linkbox >}}

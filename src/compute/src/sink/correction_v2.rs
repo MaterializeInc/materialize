@@ -1732,7 +1732,7 @@ struct Chunk<D: Data> {
     /// The generational depth: 0 for chunks built from staged updates or written by a read,
     /// one more than the deepest input for chunks written by a bucket's chain merge. The pool
     /// treats deeper chunks as colder, and compresses them past the floor set by
-    /// [`chunk::set_compress_min_depth`].
+    /// [`chunk::set_sink_compress_min_depth`].
     depth: u8,
 }
 
@@ -2189,8 +2189,8 @@ mod tests {
         let chain = builder.finish();
 
         // Crossing the mint boundary must have produced more than one chunk; otherwise the spill
-        // path (each minted chunk is paged out and read back through the pager) wouldn't be
-        // exercised. The chunk payload itself is now behind the pager (see [`Chunk`]), so we
+        // path (each minted chunk is paged out and read back through the buffer pool) wouldn't be
+        // exercised. The chunk payload itself is now behind the buffer pool (see [`Chunk`]), so we
         // assert on chunk count rather than inspecting the column variant directly.
         assert!(
             chain.chunks.len() > 1,

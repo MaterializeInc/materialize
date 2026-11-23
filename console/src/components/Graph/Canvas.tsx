@@ -182,8 +182,10 @@ export const Canvas = ({
               transform: cssTransform,
             }}
             position="absolute"
-            width={width}
-            height={height}
+            // NOTE: Chakra reads a bare number as a theme size token when one
+            // matches, so a 56px-tall graph would render at size 56 (14rem).
+            width={`${width}px`}
+            height={`${height}px`}
           >
             {children}
           </Flex>

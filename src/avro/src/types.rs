@@ -27,7 +27,6 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use chrono::NaiveDateTime;
-use enum_kinds::EnumKind;
 use itertools::Itertools;
 use serde_json::Value as JsonValue;
 
@@ -62,8 +61,7 @@ pub struct DecimalValue {
     pub scale: usize,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, EnumKind)] // Can't be Eq because there are floats
-#[enum_kind(ScalarKind)]
+#[derive(Clone, Copy, Debug, PartialEq)] // Can't be Eq because there are floats
 pub enum Scalar {
     Null,
     Boolean(bool),

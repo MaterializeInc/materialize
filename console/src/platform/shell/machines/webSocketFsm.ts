@@ -322,7 +322,7 @@ export const webSocketFsm = createMachine<
           actions: completeLatestCommandResult,
         },
         NOTICE: {
-          target: "commandInProgressHasRows",
+          target: "commandInProgressDefault",
           actions: addNoticeToLatestCommandResult,
         },
         ERROR: {

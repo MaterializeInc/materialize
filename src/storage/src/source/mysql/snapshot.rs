@@ -124,6 +124,7 @@ use mz_ore::future::InTask;
 use mz_ore::iter::IteratorExt;
 use mz_ore::metrics::MetricsFutureExt;
 use mz_repr::{Diff, Row, SqlScalarType};
+use mz_storage_types::dyncfgs::STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::MySqlSourceConnection;
 use mz_storage_types::sources::mysql::{GtidPartition, gtid_set_frontier};
@@ -131,7 +132,6 @@ use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
-use mz_timely_util::containers::stack::FueledBuilder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::core::Map;
@@ -143,7 +143,7 @@ use tracing::trace;
 
 use crate::metrics::source::mysql::MySqlSnapshotMetrics;
 use crate::source::RawSourceCreationConfig;
-use crate::source::types::{FuelSize, SignaledFuture, SourceMessage, StackedCollection};
+use crate::source::types::{SharedFuel, SignaledFuture, SourceMessage, StackedCollection};
 use crate::statistics::SourceStatistics;
 
 use super::schemas::verify_schemas;
@@ -692,7 +692,7 @@ pub(crate) fn render<'scope>(
     source_outputs: Vec<SourceOutputInfo>,
     metrics: MySqlSnapshotMetrics,
 ) -> (
-    StackedCollection<'scope, GtidPartition, (usize, Result<SourceMessage, DataflowError>)>,
+    Vec<StackedCollection<'scope, GtidPartition, Result<SourceMessage, DataflowError>>>,
     StreamVec<'scope, GtidPartition, RewindRequest>,
     StreamVec<'scope, GtidPartition, ReplicationError>,
     PressOnDropButton,
@@ -702,7 +702,18 @@ pub(crate) fn render<'scope>(
 
     let (feedback_handle, feedback_data) = scope.feedback(Default::default());
 
-    let (raw_handle, raw_data) = builder.new_output::<FueledBuilder<_>>();
+    // One data output port per source export, in output index order. With concurrent
+    // replication each port is held at the minimum only while this worker still has snapshot
+    // data to emit for that export. Without it all ports are held until the entire snapshot
+    // completes. Every export then observes the same frontier.
+    let export_count = config.source_exports.len();
+    let mut raw_handles = Vec::with_capacity(export_count);
+    let mut raw_streams = Vec::with_capacity(export_count);
+    for _ in 0..export_count {
+        let (handle, stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
+        raw_handles.push(handle);
+        raw_streams.push(stream);
+    }
     let (rewinds_handle, rewinds) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
     // Captures DefiniteErrors that affect the entire source, including all outputs
     let (definite_error_handle, definite_errors) =
@@ -750,19 +761,33 @@ pub(crate) fn render<'scope>(
             .push(output);
     }
 
+    // Read at render time, matching the value the persist sink reads in the same dataflow build.
+    // A read in the async body can observe an `UpdateConfiguration` sequenced after this dataflow's
+    // creation and disagree with the sink because the `ConfigSet` is updated in place.
+    // A nonzero lookahead is the switch, see `STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD`.
+    let concurrent_replication = !STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD
+        .get(config.config.config_set())
+        .is_zero();
+
     let (button, transient_errors): (_, StreamVec<'scope, GtidPartition, Rc<TransientError>>) =
         builder.build_fallible(move |caps| {
             let busy_signal = Arc::clone(&config.busy_signal);
             Box::pin(SignaledFuture::new(busy_signal, async move {
-                let [
-                    data_cap_set,
-                    rewind_cap_set,
-                    definite_error_cap_set,
-                    snapshot_cap_set,
-                ]: &mut [_; 4] = caps.try_into().unwrap();
+                let (data_cap_sets, caps) = caps.split_at_mut(export_count);
+                let [rewind_cap_set, definite_error_cap_set, snapshot_cap_set]: &mut [_; 3] =
+                    caps.try_into().unwrap();
+                let mut raw_handles = SharedFuel::new(raw_handles);
 
                 let id = config.id;
                 let worker_id = config.worker_id;
+
+                // This operator only emits snapshot data for the exports it snapshots. With
+                // concurrent replication the ports of all other exports close up front. Their
+                // frontiers then follow the replication operator alone. They make progress while
+                // the snapshot runs.
+                if concurrent_replication {
+                    release_data_ports(data_cap_sets, &all_outputs.iter().copied().collect());
+                }
 
                 if !all_outputs.is_empty() {
                     // A worker *must* emit a count even if not responsible for snapshotting a table
@@ -812,8 +837,8 @@ pub(crate) fn render<'scope>(
                         return Ok(return_definite_error(
                             DefiniteError::ServerConfigurationError(err.to_string()),
                             &all_outputs,
-                            &raw_handle,
-                            data_cap_set,
+                            &mut raw_handles,
+                            data_cap_sets,
                             &definite_error_handle,
                             definite_error_cap_set,
                         )
@@ -895,13 +920,11 @@ pub(crate) fn render<'scope>(
                     if !config.responsible_for(&output.table_name) {
                         continue;
                     }
-                    let update = (
-                        (output.output_index, Err(err.clone().into())),
-                        GtidPartition::minimum(),
-                        Diff::ONE,
-                    );
-                    let size = update.fuel_size();
-                    raw_handle.give_fueled(&data_cap_set[0], update, size).await;
+                    let output_index = output.output_index;
+                    let update = (Err(err.clone().into()), GtidPartition::minimum(), Diff::ONE);
+                    raw_handles
+                        .give(output_index, &data_cap_sets[output_index][0], update)
+                        .await;
                     tracing::warn!(%id, "timely-{worker_id} stopping snapshot of output {output:?} \
                                 due to schema mismatch");
                 }
@@ -918,8 +941,8 @@ pub(crate) fn render<'scope>(
                         return Ok(return_definite_error(
                             DefiniteError::UnsupportedGtidState(err.to_string()),
                             &all_outputs,
-                            &raw_handle,
-                            data_cap_set,
+                            &mut raw_handles,
+                            data_cap_sets,
                             &definite_error_handle,
                             definite_error_cap_set,
                         )
@@ -930,12 +953,54 @@ pub(crate) fn render<'scope>(
                 trace!(%id, "timely-{worker_id} received snapshot info at: {}",
                        snapshot_gtid_frontier.pretty());
 
+                // Several workers can read parts of a partitioned table. To avoid duplicate rewind
+                // requests, only the worker responsible for the table emits them.
+                let emit_rewinds = |rewind_cap_set: &mut CapabilitySet<GtidPartition>| {
+                    for (table, outputs) in &reader_snapshot_table_info {
+                        if !config.responsible_for(table) {
+                            continue;
+                        }
+                        for output in outputs {
+                            trace!(%id, "timely-{worker_id} producing rewind request for {table}\
+                                         output {}", output.output_index);
+                            let req = RewindRequest {
+                                output_index: output.output_index,
+                                snapshot_upper: snapshot_gtid_frontier.clone(),
+                            };
+                            rewinds_handle.give(&rewind_cap_set[0], req);
+                        }
+                    }
+                    *rewind_cap_set = CapabilitySet::new();
+                };
+
+                // The rewind requests unblock the replication operator. With concurrent
+                // replication they go out now, before any data is copied. The snapshot frontier is
+                // already known at this point. The replication operator then reads the stream
+                // while the snapshot runs and stages its data in the dataflow until the snapshot
+                // completes. Without concurrent replication they go out after the snapshot. That
+                // keeps the two phases serial and avoids the staging cost.
+                if concurrent_replication {
+                    emit_rewinds(rewind_cap_set);
+                }
+
                 let table_ranges = plan_worker_reads(
                     &config,
                     &reader_snapshot_table_info,
                     &snapshot_info.pk_bounds,
                 );
                 let has_work = !table_ranges.is_empty();
+
+                // Ports of snapshotted exports close as soon as this worker has nothing left to
+                // emit for them. At this point that covers outputs that failed schema
+                // verification. It also covers tables this worker reads no part of.
+                if concurrent_replication {
+                    let reading = reader_snapshot_table_info
+                        .iter()
+                        .filter(|(table, _)| table_ranges.contains_key(*table))
+                        .flat_map(|(_, outputs)| outputs.iter().map(|output| output.output_index))
+                        .collect();
+                    release_data_ports(data_cap_sets, &reading);
+                }
 
                 // Returning will release the snapshot capabilities unblocking the leader from dropping the lock connection.
                 if !has_work && !is_snapshot_leader {
@@ -1046,6 +1111,8 @@ pub(crate) fn render<'scope>(
                         None => continue,
                     };
 
+                    mysql_snapshot_failpoint_pause(&table.1).await;
+
                     let mut snapshot_staged = 0;
                     let (query, params) = build_snapshot_query(outputs, pk_range);
                     trace!(%id, "timely-{worker_id} reading snapshot query='{}'", query);
@@ -1077,13 +1144,11 @@ pub(crate) fn render<'scope>(
                                 }
                                 Err(err) => Err(err)?,
                             };
-                            let update = (
-                                (output.output_index, event),
-                                GtidPartition::minimum(),
-                                Diff::ONE,
-                            );
-                            let size = update.fuel_size();
-                            raw_handle.give_fueled(&data_cap_set[0], update, size).await;
+                            let output_index = output.output_index;
+                            let update = (event, GtidPartition::minimum(), Diff::ONE);
+                            raw_handles
+                                .give(output_index, &data_cap_sets[output_index][0], update)
+                                .await;
                         }
                         // This overcounting maintains existing behavior but will be removed once readers no longer rely on the value.
                         snapshot_staged_total += u64::cast_from(outputs.len());
@@ -1098,29 +1163,18 @@ pub(crate) fn render<'scope>(
                     }
                     trace!(%id, "timely-{worker_id} snapshotted {} records from \
                                  table '{table}'", snapshot_staged * u64::cast_from(outputs.len()));
+                    // A transient error above returns with the capabilities still held. That
+                    // keeps a partially copied export from advancing.
+                    if concurrent_replication {
+                        for output in outputs {
+                            data_cap_sets[output.output_index] = CapabilitySet::new();
+                        }
+                    }
                 }
 
-                // We are done with the snapshot so now we will emit rewind requests. It is
-                // important that this happens after the snapshot has finished because this is what
-                // unblocks the replication operator and we want this to happen serially. It might
-                // seem like a good idea to read the replication stream concurrently with the
-                // snapshot but it actually leads to a lot of data being staged for the future,
-                // which needlesly consumed memory in the cluster.
-                for (table, outputs) in &reader_snapshot_table_info {
-                    if !config.responsible_for(table) {
-                        continue;
-                    }
-                    for output in outputs {
-                        trace!(%id, "timely-{worker_id} producing rewind request for {table}\
-                                     output {}", output.output_index);
-                        let req = RewindRequest {
-                            output_index: output.output_index,
-                            snapshot_upper: snapshot_gtid_frontier.clone(),
-                        };
-                        rewinds_handle.give(&rewind_cap_set[0], req);
-                    }
+                if !concurrent_replication {
+                    emit_rewinds(rewind_cap_set);
                 }
-                *rewind_cap_set = CapabilitySet::new();
 
                 Ok(())
             }))
@@ -1131,11 +1185,47 @@ pub(crate) fn render<'scope>(
     let errors = definite_errors.concat(transient_errors.map(ReplicationError::from));
 
     (
-        raw_data.as_collection(),
+        raw_streams
+            .into_iter()
+            .map(|stream| stream.as_collection())
+            .collect(),
         rewinds,
         errors,
         button.press_on_drop(),
     )
+}
+
+/// Test-only pause point, run before this worker reads any rows of `table`. Configuring the
+/// failpoint as `mysql_snapshot_pause=return(<table name>)` holds the snapshot of that table until
+/// the failpoint is deactivated. `return(<table name>:<millis>)` holds it for that many
+/// milliseconds instead. The snapshot then completes in the same dataflow incarnation.
+async fn mysql_snapshot_failpoint_pause(table: &str) {
+    let held_since = std::time::Instant::now();
+    loop {
+        let held = fail::eval("mysql_snapshot_pause", |payload| {
+            let (paused_table, millis) = payload
+                .as_deref()
+                .map(|p| p.split_once(':').unwrap_or((p, "")))
+                .unwrap_or_default();
+            paused_table == table
+                && millis.parse::<u64>().map_or(true, |millis| {
+                    held_since.elapsed() < Duration::from_millis(millis)
+                })
+        });
+        match held {
+            Some(true) => tokio::time::sleep(Duration::from_millis(100)).await,
+            _ => break,
+        }
+    }
+}
+
+/// Drops the capabilities of every data port whose output index is not in `keep`.
+fn release_data_ports(data_cap_sets: &mut [CapabilitySet<GtidPartition>], keep: &BTreeSet<usize>) {
+    for (output_index, cap_set) in data_cap_sets.iter_mut().enumerate() {
+        if !keep.contains(&output_index) {
+            *cap_set = CapabilitySet::new();
+        }
+    }
 }
 
 /// Publish the snapshot size to each table's statistics gauges, using the counts

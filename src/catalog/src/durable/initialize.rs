@@ -50,8 +50,10 @@ use crate::durable::{
     ClusterVariantManaged, DATABASE_ID_ALLOC_KEY, DefaultPrivilege, EXPRESSION_CACHE_SHARD_KEY,
     MOCK_AUTHENTICATION_NONCE_KEY, OID_ALLOC_KEY, ReplicaConfig, ReplicaLocation, Role,
     SCHEMA_ID_ALLOC_KEY, STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY,
-    SYSTEM_REPLICA_ID_ALLOC_KEY, Schema, Transaction, USER_CLUSTER_ID_ALLOC_KEY,
-    USER_NETWORK_POLICY_ID_ALLOC_KEY, USER_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
+    SYSTEM_CLUSTER_REPLICA_SIZE_ID_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY, Schema, Transaction,
+    USER_CLUSTER_ID_ALLOC_KEY, USER_CLUSTER_REPLICA_SIZE_ID_ALLOC_KEY,
+    USER_NETWORK_POLICY_ID_ALLOC_KEY, USER_QUERY_POLICY_ID_ALLOC_KEY, USER_REPLICA_ID_ALLOC_KEY,
+    USER_ROLE_ID_ALLOC_KEY,
 };
 
 /// The key within the "config" Collection that stores the version of the catalog.
@@ -265,6 +267,18 @@ pub(crate) async fn initialize(
             USER_NETWORK_POLICY_ID_ALLOC_KEY.to_string(),
             DEFAULT_ALLOCATOR_ID,
         ),
+        (
+            USER_CLUSTER_REPLICA_SIZE_ID_ALLOC_KEY.to_string(),
+            DEFAULT_ALLOCATOR_ID,
+        ),
+        (
+            SYSTEM_CLUSTER_REPLICA_SIZE_ID_ALLOC_KEY.to_string(),
+            DEFAULT_ALLOCATOR_ID,
+        ),
+        (
+            USER_QUERY_POLICY_ID_ALLOC_KEY.to_string(),
+            DEFAULT_ALLOCATOR_ID,
+        ),
         (AUDIT_LOG_ID_ALLOC_KEY.to_string(), DEFAULT_ALLOCATOR_ID),
         (STORAGE_USAGE_ID_ALLOC_KEY.to_string(), DEFAULT_ALLOCATOR_ID),
         (OID_ALLOC_KEY.to_string(), FIRST_USER_OID.into()),
@@ -398,6 +412,7 @@ pub(crate) async fn initialize(
             ObjectType::Schema => mz_audit_log::ObjectType::Schema,
             ObjectType::Func => mz_audit_log::ObjectType::Func,
             ObjectType::NetworkPolicy => mz_audit_log::ObjectType::NetworkPolicy,
+            ObjectType::QueryPolicy => mz_audit_log::ObjectType::QueryPolicy,
         };
         audit_events.push((
             mz_audit_log::EventType::Grant,
@@ -763,8 +778,7 @@ pub(crate) async fn initialize(
         .get_setting(MOCK_AUTHENTICATION_NONCE_KEY.to_string())
         .is_none()
     {
-        let mut nonce = [0u8; 24];
-        openssl::rand::rand_bytes(&mut nonce).expect("random number generation failed");
+        let nonce: [u8; 24] = rand::random();
         tx.set_setting(
             MOCK_AUTHENTICATION_NONCE_KEY.to_string(),
             Some(BASE64_STANDARD.encode(nonce)),
@@ -799,6 +813,7 @@ fn default_cluster_config(args: &BootstrapArgs) -> Result<ClusterConfig, Catalog
             burst: None,
         }),
         workload_class: None,
+        query_policy: None,
     })
 }
 

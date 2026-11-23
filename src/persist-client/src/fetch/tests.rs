@@ -16,7 +16,7 @@ use timely::progress::Antichain;
 use crate::batch::{
     BLOB_TARGET_SIZE, INLINE_WRITES_SINGLE_MAX_BYTES, INLINE_WRITES_TOTAL_MAX_BYTES,
 };
-use crate::fetch::PART_DECODE_BATCH_ROWS;
+use crate::fetch::{MissingBlobDiagnosis, PART_DECODE_BATCH_ROWS, missing_blob_diagnostics};
 use crate::internal::state::BatchPart;
 use crate::read::ReadHandle;
 use crate::tests::new_test_client;
@@ -177,4 +177,45 @@ async fn batched_part_decode_ts_rewrite(dyncfgs: ConfigUpdates) {
         .await;
 
     assert_batched_reads(&client, shard_id, &mut read, 2, &expected(2)).await;
+}
+
+/// The missing-blob diagnosis tells a lost lease from a live reader and from a
+/// finalized shard.
+#[mz_persist_proc::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+async fn missing_blob_diagnosis(dyncfgs: ConfigUpdates) {
+    let client = new_test_client(&dyncfgs).await;
+    let (_write, read) = client
+        .expect_open::<String, String, u64, i64>(ShardId::new())
+        .await;
+
+    let diagnosis = missing_blob_diagnostics(&read.machine.applier, read.reader_id.clone()).await;
+    assert!(
+        matches!(diagnosis, MissingBlobDiagnosis::LeasePresent { .. }),
+        "{diagnosis}"
+    );
+
+    let _ = read.machine.expire_leased_reader(&read.reader_id).await;
+    let diagnosis = missing_blob_diagnostics(&read.machine.applier, read.reader_id.clone()).await;
+    assert!(
+        matches!(diagnosis, MissingBlobDiagnosis::LeaseExpired { .. }),
+        "{diagnosis}"
+    );
+
+    // Finalizing a shard removes every reader, which is not a lost lease.
+    let shard_id = ShardId::new();
+    let (mut write, mut read) = client
+        .expect_open::<String, String, u64, i64>(shard_id)
+        .await;
+    let () = read.downgrade_since(&Antichain::new()).await;
+    let () = write.advance_upper(&Antichain::new()).await;
+    client
+        .finalize_shard::<String, String, u64, i64>(shard_id, Diagnostics::for_tests())
+        .await
+        .expect("finalization succeeds");
+    let diagnosis = missing_blob_diagnostics(&read.machine.applier, read.reader_id.clone()).await;
+    assert!(
+        matches!(diagnosis, MissingBlobDiagnosis::ShardTombstoned { .. }),
+        "{diagnosis}"
+    );
 }

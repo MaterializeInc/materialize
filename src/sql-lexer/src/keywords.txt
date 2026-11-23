@@ -121,6 +121,7 @@ Create
 Createcluster
 Createdb
 Createnetworkpolicy
+Createquerypolicy
 Createrole
 Creation
 Credential
@@ -188,6 +189,7 @@ Expressions
 External
 Extract
 Factor
+Failover
 False
 Fast
 Features

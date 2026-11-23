@@ -5740,7 +5740,8 @@ fn arb_range(
         any::<bool>(),
         data,
     )
-        .prop_map(
+        .prop_filter_map(
+            "range bounds must canonicalize without overflow",
             |(split, lower_inf, lower_inc, upper_inf, upper_inc, (a, b))| {
                 let mut row = Row::default();
                 let mut packer = row.packer();
@@ -5772,7 +5773,7 @@ fn arb_range(
                         },
                     )));
 
-                    range.canonicalize().unwrap();
+                    range.canonicalize().ok()?;
 
                     // Extract canonicalized state; pretend the range was empty
                     // if the bounds are rewritten.
@@ -5821,7 +5822,7 @@ fn arb_range(
                     }
                 };
 
-                PropRange(row, r)
+                Some(PropRange(row, r))
             },
         )
         .boxed()
@@ -6028,8 +6029,38 @@ fn verify_base_eq_record_nullability() {
 mod tests {
     use mz_ore::assert_ok;
     use mz_proto::protobuf_roundtrip;
+    use proptest::test_runner::TestRunner;
 
     use super::*;
+
+    #[mz_ore::test]
+    fn range_generation_handles_extreme_bounds() {
+        let bounds = [
+            (PropDatum::Int32(i32::MIN), PropDatum::Int32(i32::MAX)),
+            (PropDatum::Int64(i64::MIN), PropDatum::Int64(i64::MAX)),
+            (
+                PropDatum::Date(Date::from_pg_epoch(Date::LOW_DAYS).unwrap()),
+                PropDatum::Date(Date::from_pg_epoch(Date::HIGH_DAYS).unwrap()),
+            ),
+        ];
+        for (lower, upper) in bounds {
+            for pair in [
+                (lower.clone(), upper.clone()),
+                (upper.clone(), lower),
+                (upper.clone(), upper),
+            ] {
+                TestRunner::deterministic()
+                    .run(&arb_range(Just(pair)), |PropRange(row, _)| {
+                        let range = row.unpack_first().unwrap_range();
+                        let mut canonical = range;
+                        prop_assert!(canonical.canonicalize().is_ok());
+                        prop_assert_eq!(range, canonical);
+                        Ok(())
+                    })
+                    .unwrap();
+            }
+        }
+    }
 
     proptest! {
        #[mz_ore::test]

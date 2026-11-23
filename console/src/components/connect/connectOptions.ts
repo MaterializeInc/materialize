@@ -96,6 +96,10 @@ export interface McpClient {
   oneClickInstall?: boolean;
 }
 
+/** Codex's `[mcp_servers.<key>]` table name for a server. `codex mcp login`
+ * looks servers up by this key, so the login command must use it too. */
+const codexServerKey = (serverName: string) => serverName.replace(/-/g, "_");
+
 // Config formats and sign-in behavior verified against each client's docs.
 // When a client changes its config schema, this registry is the single place
 // to update.
@@ -152,7 +156,8 @@ export const MCP_CLIENTS: McpClient[] = [
     name: "Codex CLI",
     kind: "toml",
     configLocation: "Add to ~/.codex/config.toml",
-    authenticateCommand: (serverName) => `codex mcp login ${serverName}`,
+    authenticateCommand: (serverName) =>
+      `codex mcp login ${codexServerKey(serverName)}`,
     signInHint: "Your browser opens to sign in.",
   },
   {
@@ -264,8 +269,7 @@ const buildTomlSnippet = ({ server, baseUrl, token }: McpSnippetOptions) => {
   const header = token
     ? `\nhttp_headers = { "Authorization" = "Basic ${token}" }`
     : "";
-  const tableName = server.serverName.replace(/-/g, "_");
-  return `[mcp_servers.${tableName}]\nurl = "${mcpServerUrl(server, baseUrl)}"${header}`;
+  return `[mcp_servers.${codexServerKey(server.serverName)}]\nurl = "${mcpServerUrl(server, baseUrl)}"${header}`;
 };
 
 /** Builds the client-specific MCP config snippet, using

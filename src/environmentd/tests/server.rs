@@ -180,11 +180,12 @@ fn test_http_sql() {
     // datadriven output after N rows. Any directive with rows=N should be the
     // final directive in a file, since it leaves the websocket in a
     // mid-statement state.
-    // A "fixtimestamp=true" argument can be given to replace timestamps with "<TIMESTAMP>".
-    // A "fixid=true" argument can be given to replace IDs with "<ID>".
     //
     // Datadriven directive for HTTP POST is "http". Input and output are the
     // documented JSON formats.
+    //
+    // Both accept "fixtimestamp=true", "fixid=true" and "fixtiming=true" to replace
+    // timestamps, IDs and execution times with "<TIMESTAMP>", "<ID>" and "<DURATION>".
 
     let fixtimestamp_replacements = [(Regex::new(r#"\d{13}(\.0)?"#).unwrap(), "<TIMESTAMP>")];
     let fixid_replacements = [
@@ -194,6 +195,16 @@ fn test_http_sql() {
         ),
         (Regex::new(r#"\b[ust]\d+\b"#).unwrap(), "<ID>"),
         (Regex::new(r#"\\n[ust]\d+\b"#).unwrap(), "\\n<ID>"),
+    ];
+    let fixtiming_replacements = [
+        (
+            Regex::new(r#"execution time: \d+\.\d+ ms"#).unwrap(),
+            "execution time: <DURATION> ms",
+        ),
+        (
+            Regex::new(r#"\\"duration_us\\":\d+"#).unwrap(),
+            "\\\"duration_us\\\":<DURATION>",
+        ),
     ];
 
     datadriven::walk("tests/testdata/http", |f| {
@@ -259,6 +270,17 @@ fn test_http_sql() {
         ));
 
         f.run(|tc| {
+            let mut replacements = Vec::new();
+            if tc.args.contains_key("fixtimestamp") {
+                replacements.extend_from_slice(&fixtimestamp_replacements);
+            }
+            if tc.args.contains_key("fixid") {
+                replacements.extend_from_slice(&fixid_replacements);
+            }
+            if tc.args.contains_key("fixtiming") {
+                replacements.extend_from_slice(&fixtiming_replacements);
+            }
+
             let msg = match tc.directive.as_str() {
                 "ws-text" => Message::Text(tc.input.clone().into()),
                 "ws-binary" => Message::Binary(tc.input.as_bytes().to_vec().into()),
@@ -269,7 +291,12 @@ fn test_http_sql() {
                         .json(&json)
                         .send()
                         .unwrap();
-                    return format!("{}\n{}\n", res.status(), res.text().unwrap());
+                    let status = res.status();
+                    let mut text = res.text().unwrap();
+                    for (re, replace) in &replacements {
+                        text = re.replace_all(&text, *replace).into_owned();
+                    }
+                    return format!("{}\n{}\n", status, text);
                 }
                 _ => panic!("unknown directive {}", tc.directive),
             };
@@ -278,14 +305,6 @@ fn test_http_sql() {
                 .get("rows")
                 .map(|rows| rows.get(0).map(|row| row.parse::<usize>().unwrap()))
                 .flatten();
-
-            let mut replacements = Vec::new();
-            if tc.args.contains_key("fixtimestamp") {
-                replacements.extend_from_slice(&fixtimestamp_replacements);
-            }
-            if tc.args.contains_key("fixid") {
-                replacements.extend_from_slice(&fixid_replacements);
-            }
 
             ws.send(msg).unwrap();
             let mut responses = String::new();
@@ -1420,6 +1439,387 @@ fn test_ws_select_streams_rows_then_size_error() {
     );
 }
 
+/// Runs `request`, which must execute a constant `INSERT INTO {table}` in an implicit
+/// transaction, such that the INSERT's commit fails: the INSERT parks after packing its
+/// rows, `table` gains a column, and the INSERT resumes with rows of a stale arity.
+#[allow(clippy::disallowed_methods)]
+fn with_failing_insert_commit<T: Send + 'static>(
+    ddl: &mut postgres::Client,
+    table: &str,
+    request: impl FnOnce() -> T + Send + 'static,
+) -> T {
+    // Sends "exited" when the request thread ends, also when it panics.
+    struct OnExit(std::sync::mpsc::Sender<&'static str>);
+    impl Drop for OnExit {
+        fn drop(&mut self) {
+            let _ = self.0.send("exited");
+        }
+    }
+
+    let (events, events_rx) = std::sync::mpsc::channel();
+    let resume = Arc::new(std::sync::Barrier::new(2));
+    fail::cfg_callback("insert_after_pack_before_commit", {
+        let events = events.clone();
+        let resume = Arc::clone(&resume);
+        move || {
+            let _ = events.send("packed");
+            // The callback parks a runtime worker that the ALTER TABLE below needs.
+            // `block_in_place` hands the worker's queue to another thread first, see
+            // `test_insert_concurrent_alter_table` in tests/sql.rs.
+            tokio::task::block_in_place(|| resume.wait());
+        }
+    })
+    .unwrap();
+    let request = thread::spawn(move || {
+        let _on_exit = OnExit(events);
+        request()
+    });
+    // A request that ends before the failpoint fails the test with its own error, instead of
+    // leaving the test waiting for the failpoint.
+    if events_rx.recv().unwrap() != "packed" {
+        fail::remove("insert_after_pack_before_commit");
+        request.join().unwrap();
+        panic!("the request completed without reaching the failpoint");
+    }
+    ddl.batch_execute(&format!("ALTER TABLE {table} ADD COLUMN b int"))
+        .unwrap();
+    fail::remove("insert_after_pack_before_commit");
+    resume.wait();
+    request.join().unwrap()
+}
+
+/// Sends `request` and renders its responses up to `ReadyForQuery`, skipping notices and
+/// parameter statuses.
+fn ws_request_messages(
+    ws: &mut tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>>,
+    request: serde_json::Value,
+) -> Vec<String> {
+    ws.send(Message::Text(request.to_string().into())).unwrap();
+    let mut msgs = Vec::new();
+    loop {
+        let Message::Text(text) = ws.read().unwrap() else {
+            continue;
+        };
+        let msg = match serde_json::from_str::<WebSocketResponse>(&text).unwrap() {
+            WebSocketResponse::CommandStarting(_) => "CommandStarting".to_string(),
+            WebSocketResponse::CommandComplete(tag) => format!("CommandComplete {tag}"),
+            WebSocketResponse::Error(err) => format!("Error {}", err.code),
+            WebSocketResponse::Rows(_) => "Rows".to_string(),
+            WebSocketResponse::Row(_) => "Row".to_string(),
+            WebSocketResponse::Notice(_) | WebSocketResponse::ParameterStatus(_) => continue,
+            WebSocketResponse::ReadyForQuery(_) => break,
+            other @ WebSocketResponse::BackendKeyData(_) => panic!("unexpected message {other:?}"),
+        };
+        msgs.push(msg);
+    }
+    msgs
+}
+
+/// Sends `sql` as a simple query on a new pgwire connection and renders the errors, row
+/// descriptions, rows and `CommandComplete`s it gets back, up to `ReadyForQuery`.
+fn pgwire_simple_query_messages(addr: std::net::SocketAddr, sql: &str) -> Vec<String> {
+    use postgres_protocol::message::backend::Message;
+    use postgres_protocol::message::frontend;
+    use tokio_postgres::fallible_iterator::FallibleIterator;
+
+    let mut stream = std::net::TcpStream::connect(addr).unwrap();
+    let mut read_buf = bytes::BytesMut::new();
+    let mut read_until_ready = |stream: &mut std::net::TcpStream| {
+        let mut msgs = Vec::new();
+        loop {
+            if let Some(msg) = Message::parse(&mut read_buf).unwrap() {
+                match msg {
+                    Message::ReadyForQuery(_) => return msgs,
+                    Message::ErrorResponse(err) => {
+                        let code = err
+                            .fields()
+                            .find(|f| Ok(f.type_() == b'C'))
+                            .unwrap()
+                            .map(|f| String::from_utf8_lossy(f.value_bytes()).into_owned());
+                        msgs.push(format!("Error {}", code.unwrap()));
+                    }
+                    Message::CommandComplete(_) => msgs.push("CommandComplete".into()),
+                    Message::RowDescription(_) => msgs.push("Rows".into()),
+                    Message::DataRow(_) => msgs.push("Row".into()),
+                    _ => {}
+                }
+            } else {
+                let mut chunk = [0; 1 << 13];
+                let n = stream.read(&mut chunk).unwrap();
+                assert!(n > 0, "connection closed");
+                read_buf.extend_from_slice(&chunk[..n]);
+            }
+        }
+    };
+    let mut buf = bytes::BytesMut::new();
+    frontend::startup_message(
+        vec![
+            ("user", "materialize"),
+            ("options", "--welcome_message=off"),
+        ],
+        &mut buf,
+    )
+    .unwrap();
+    stream.write_all(&buf).unwrap();
+    read_until_ready(&mut stream);
+    buf.clear();
+    frontend::query(sql, &mut buf).unwrap();
+    stream.write_all(&buf).unwrap();
+    read_until_ready(&mut stream)
+}
+
+/// A commit failure replaces the completion of the statement that ends an implicit transaction,
+/// and it stops the request.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_implicit_commit_failure() {
+    let server = test_util::TestHarness::default().start_blocking();
+    server.enable_feature_flags(&["enable_alter_table_add_column"]);
+    let mut system = server
+        .pg_config_internal()
+        .user(&SYSTEM_USER.name)
+        .connect(postgres::NoTls)
+        .unwrap();
+    let user = &HTTP_DEFAULT_USER.name;
+    for statement in [
+        format!("CREATE ROLE {user}"),
+        format!("GRANT ALL PRIVILEGES ON SYSTEM TO {user}"),
+        format!("GRANT ALL PRIVILEGES ON CLUSTER quickstart TO {user}"),
+        format!("GRANT ALL PRIVILEGES ON DATABASE materialize TO {user}"),
+        format!("GRANT ALL PRIVILEGES ON SCHEMA materialize.public TO {user}"),
+    ] {
+        system.batch_execute(&statement).unwrap();
+    }
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    let tables = [
+        "http_t",
+        "http_simple_t",
+        "ws_t",
+        "ws_simple_t",
+        "pg_t",
+        "pg_simple_t",
+    ];
+    for table in tables {
+        client
+            .batch_execute(&format!("CREATE TABLE {table} (a int)"))
+            .unwrap();
+    }
+    for table in ["http_t", "http_simple_t"] {
+        system
+            .batch_execute(&format!("GRANT ALL PRIVILEGES ON TABLE {table} TO {user}"))
+            .unwrap();
+    }
+
+    let http_url = Url::parse(&format!("http://{}/api/sql", server.http_local_addr())).unwrap();
+    let mut http_request = |table: &str, request: serde_json::Value| {
+        let http_url = http_url.clone();
+        with_failing_insert_commit(&mut client, table, move || {
+            Client::new()
+                .post(http_url)
+                .json(&request)
+                .send()
+                .unwrap()
+                .json::<serde_json::Value>()
+                .unwrap()
+        })
+    };
+    let body = http_request(
+        "http_t",
+        serde_json::json!({
+            "queries": [{"query": "INSERT INTO http_t VALUES (1)"}, {"query": "SELECT 1"}]
+        }),
+    );
+    let results = body["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1, "one result, the commit failure: {body}");
+    assert_eq!(results[0]["error"]["code"], "40001", "{body}");
+
+    // In a simple request the commit follows the rows of the last statement, and its failure
+    // replaces that statement's rows.
+    let body = http_request(
+        "http_simple_t",
+        serde_json::json!({"query": "INSERT INTO http_simple_t VALUES (1); SELECT 1"}),
+    );
+    let results = body["results"].as_array().unwrap();
+    assert_eq!(
+        results.len(),
+        2,
+        "the INSERT's result and the commit failure: {body}"
+    );
+    assert_eq!(results[0]["ok"], "INSERT 0 1", "{body}");
+    assert_eq!(results[1]["error"]["code"], "40001", "{body}");
+
+    let (mut ws, _resp) = tungstenite::connect(server.ws_addr()).unwrap();
+    test_util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
+    let (mut ws, msgs) = with_failing_insert_commit(&mut client, "ws_t", move || {
+        let msgs = ws_request_messages(
+            &mut ws,
+            serde_json::json!({
+                "queries": [{"query": "INSERT INTO ws_t VALUES (1)"}, {"query": "SELECT 1"}]
+            }),
+        );
+        (ws, msgs)
+    });
+    assert_eq!(msgs, ["CommandStarting", "Error 40001"]);
+
+    // In a simple request the statements share one implicit transaction, which commits after
+    // the rows of the last statement and before its completion.
+    let (_ws, msgs) = with_failing_insert_commit(&mut client, "ws_simple_t", move || {
+        let msgs = ws_request_messages(
+            &mut ws,
+            serde_json::json!({"query": "INSERT INTO ws_simple_t VALUES (1); SELECT 1"}),
+        );
+        (ws, msgs)
+    });
+    assert_eq!(
+        msgs,
+        [
+            "CommandStarting",
+            "CommandComplete INSERT 0 1",
+            "CommandStarting",
+            "Rows",
+            "Row",
+            "Error 40001",
+        ]
+    );
+
+    // pgwire's simple query protocol commits likewise, so the commit error replaces the
+    // CommandComplete of the statement that ends the query.
+    let pgwire_addr = server.sql_local_addr();
+    let msgs = with_failing_insert_commit(&mut client, "pg_t", move || {
+        pgwire_simple_query_messages(pgwire_addr, "INSERT INTO pg_t VALUES (1)")
+    });
+    assert_eq!(msgs, ["Error 40001"]);
+    let msgs = with_failing_insert_commit(&mut client, "pg_simple_t", move || {
+        pgwire_simple_query_messages(pgwire_addr, "INSERT INTO pg_simple_t VALUES (1); SELECT 1")
+    });
+    assert_eq!(msgs, ["CommandComplete", "Rows", "Row", "Error 40001"]);
+
+    for table in tables {
+        let count: i64 = client
+            .query_one(&format!("SELECT count(*) FROM {table}"), &[])
+            .unwrap()
+            .get(0);
+        assert_eq!(count, 0, "the failed write to {table} must not land");
+    }
+}
+
+/// Implicit commit waits are outside result readiness, but explicit COMMIT executes the wait.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_execution_time_result_ready_boundary() {
+    const HOLD: Duration = Duration::from_secs(1);
+    const FAILPOINT: &str = "group_commit_before_apply_write";
+
+    fn arm() {
+        fail::cfg_callback(FAILPOINT, move || {
+            // Keep runtime workers available while delaying the ordered group committer.
+            // Delay every commit because the first one may only advance table uppers.
+            tokio::task::block_in_place(|| {
+                thread::sleep(HOLD);
+            })
+        })
+        .unwrap();
+    }
+    let micros = |detail: &serde_json::Value| detail["duration_us"].as_u64().unwrap();
+    let hold_micros = u64::try_from(HOLD.as_micros()).unwrap();
+
+    let server = test_util::TestHarness::default().start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client.batch_execute("CREATE TABLE dt (a int)").unwrap();
+
+    let (mut ws, _resp) = tungstenite::connect(server.ws_addr()).unwrap();
+    test_util::auth_with_ws(
+        &mut ws,
+        BTreeMap::from([("emit_execution_time_notice".into(), "on".into())]),
+    )
+    .unwrap();
+    // Bound a broken request instead of hanging the test.
+    if let tungstenite::stream::MaybeTlsStream::Plain(stream) = ws.get_ref() {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(120)))
+            .unwrap();
+    }
+    // Sends `request` and returns the details of its execution time notices and how long the
+    // request took.
+    let mut run_ws = |request: serde_json::Value| {
+        arm();
+        let start = Instant::now();
+        ws.send(Message::Text(request.to_string().into())).unwrap();
+        let mut details = Vec::new();
+        loop {
+            let Message::Text(text) = ws.read().expect("request must complete") else {
+                continue;
+            };
+            let msg: serde_json::Value = serde_json::from_str(&text).unwrap();
+            match msg["type"].as_str().unwrap() {
+                "Notice" if msg["payload"]["code"] == "MZ012" => {
+                    let detail: serde_json::Value =
+                        serde_json::from_str(msg["payload"]["detail"].as_str().unwrap()).unwrap();
+                    details.push(detail);
+                }
+                "ReadyForQuery" => break,
+                "Error" => panic!("{msg}"),
+                _ => {}
+            }
+        }
+        fail::remove(FAILPOINT);
+        (details, start.elapsed())
+    };
+
+    // Compare the reported duration with the entire request, not an absolute speed limit.
+    // The commit delay must be absent even though success is delivered after that wait.
+    let (details, elapsed) = run_ws(serde_json::json!({
+        "queries": [{"query": "INSERT INTO dt VALUES (1)"}]
+    }));
+    let kinds: Vec<_> = details.iter().map(|d| d["kind"].clone()).collect();
+    assert_eq!(kinds, ["staged"], "{details:?}");
+    assert!(
+        elapsed >= Duration::from_micros(micros(&details[0])) + HOLD,
+        "{details:?}, request took {elapsed:?}"
+    );
+
+    // In an explicit transaction, `COMMIT` carries the commit.
+    let (details, _) = run_ws(serde_json::json!({
+        "queries": [
+            {"query": "BEGIN"},
+            {"query": "INSERT INTO dt VALUES (3)"},
+            {"query": "COMMIT"}
+        ]
+    }));
+    let kinds: Vec<_> = details.iter().map(|d| d["kind"].clone()).collect();
+    assert_eq!(kinds, ["completed", "staged", "completed"], "{details:?}");
+    assert!(micros(&details[2]) >= hold_micros, "{details:?}");
+
+    // pgwire's simple query protocol commits before the statement's `CommandComplete` too.
+    let (notice_tx, notice_rx) = std::sync::mpsc::channel();
+    let mut pg = server
+        .pg_config()
+        .options("--emit_execution_time_notice=on --welcome_message=off")
+        .notice_callback(move |notice| {
+            let _ = notice_tx.send(notice);
+        })
+        .connect(postgres::NoTls)
+        .unwrap();
+    arm();
+    let start = Instant::now();
+    pg.batch_execute("INSERT INTO dt VALUES (4)").unwrap();
+    let elapsed = start.elapsed();
+    fail::remove(FAILPOINT);
+    let details: Vec<serde_json::Value> = notice_rx
+        .try_iter()
+        .filter(|notice| notice.code().code() == "MZ012")
+        .map(|notice| serde_json::from_str(notice.detail().unwrap()).unwrap())
+        .collect();
+    let kinds: Vec<_> = details.iter().map(|d| d["kind"].clone()).collect();
+    assert_eq!(kinds, ["staged"], "{details:?}");
+    assert!(
+        elapsed >= Duration::from_micros(micros(&details[0])) + HOLD,
+        "{details:?}, request took {elapsed:?}"
+    );
+}
+
 /// Regression test for SQL-428: the JSON `/api/sql` endpoint enforces
 /// `max_result_size` on `Row::byte_len`, the same quantity the WebSocket
 /// transport and pgwire use. A result that exceeds the cap fails cleanly with a
@@ -2195,6 +2595,63 @@ async fn test_termination_races() {
         .expect("coordinator did not survive an abandoned failed startup");
 }
 
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+async fn test_session_owned_completion_after_role_drop() {
+    use mz_adapter::session::{EndTransactionAction, TransactionStatus};
+    use mz_postgres_util::{batch_execute, sql};
+
+    let server = test_util::TestHarness::default().start().await;
+    let admin = server.connect().await.unwrap();
+    batch_execute(&admin, sql!("CREATE ROLE completion_reader"))
+        .await
+        .unwrap();
+    let adapter = server.inner.adapter_client();
+    let session = adapter.new_session(
+        SessionConfig {
+            conn_id: adapter.new_conn_id().unwrap(),
+            uuid: Uuid::new_v4(),
+            user: "completion_reader".into(),
+            client_ip: Some(std::net::Ipv4Addr::LOCALHOST.into()),
+            external_metadata_rx: None,
+            helm_chart_version: None,
+            authenticator_kind: AuthenticatorKind::None,
+            groups: None,
+        },
+        Authenticated,
+    );
+    let mut session = adapter.startup(session).await.unwrap();
+    session.start_transaction(Some(1)).unwrap();
+    let stmt = mz_sql::parse::parse("SELECT 1").unwrap().pop().unwrap().ast;
+    session
+        .declare("completion_portal".into(), stmt, "SELECT 1".into())
+        .await
+        .unwrap();
+    batch_execute(&admin, sql!("DROP ROLE completion_reader"))
+        .await
+        .unwrap();
+
+    let before = adapter.metrics().frontend_transaction_completions.get();
+    let error = session
+        .end_transaction(EndTransactionAction::Commit)
+        .await
+        .unwrap_err();
+    assert_contains!(error.to_string(), "concurrently dropped");
+    assert_eq!(
+        adapter.metrics().frontend_transaction_completions.get(),
+        before + 1
+    );
+    assert!(matches!(
+        session.session().transaction(),
+        TransactionStatus::Default
+    ));
+    assert!(
+        session
+            .session()
+            .get_portal_unverified("completion_portal")
+            .is_none()
+    );
+}
+
 #[mz_ore::test]
 fn test_internal_console_proxy() {
     let server = test_util::TestHarness::default().start_blocking();
@@ -2661,7 +3118,7 @@ async fn test_leader_promotion_mixed_code_version() {
     client_this.simple_query("SELECT 1").await.unwrap();
 
     // Simulate a rolling upgrade and wait for the preflight checks.
-    let listeners_next = test_util::Listeners::new(&harness).await.unwrap();
+    let listeners_next = test_util::Listeners::new(&harness).unwrap();
     let internal_http_addr_next = listeners_next.inner.http["internal"].handle.local_addr;
     let config_next = harness
         .clone()
@@ -3383,6 +3840,57 @@ async fn test_http_metrics() {
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)]
 #[allow(clippy::disallowed_methods)]
+async fn test_session_end_does_not_force_group_commit() {
+    const SESSIONS: u64 = 100;
+    let server = test_util::TestHarness::default().start().await;
+    let watcher = server.connect().await.unwrap();
+    let live_sessions = || async {
+        watcher
+            .query_one("SELECT count(*) FROM mz_internal.mz_sessions", &[])
+            .await
+            .unwrap()
+            .get::<_, i64>(0)
+    };
+    let group_commits = || {
+        server
+            .metrics_registry
+            .gather()
+            .into_iter()
+            .find(|m| m.name() == "mz_append_table_duration_seconds")
+            .map_or(0, |m| m.get_metric()[0].get_histogram().get_sample_count())
+    };
+
+    let sessions_before = live_sessions().await;
+    let commits_before = group_commits();
+    let start = Instant::now();
+    for _ in 0..SESSIONS {
+        let client = server.connect().await.unwrap();
+        client.query_one("SELECT 1", &[]).await.unwrap();
+    }
+    Retry::default()
+        .max_duration(Duration::from_secs(30))
+        .retry_async(|_| async {
+            match live_sessions().await {
+                n if n == sessions_before => Ok(()),
+                n => Err(n),
+            }
+        })
+        .await
+        .expect("closed sessions should leave mz_sessions");
+    let elapsed = start.elapsed();
+    let commits = group_commits() - commits_before;
+
+    // Tables still advance about once a second, so allow those commits plus slack.
+    let allowed = elapsed.as_secs() + 5;
+    assert!(
+        commits <= allowed,
+        "{SESSIONS} sessions ending caused {commits} group commits in {elapsed:?}, allowed {allowed}",
+    );
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)]
+#[allow(clippy::disallowed_methods)]
 async fn test_statement_metrics() {
     let server = test_util::TestHarness::default().start().await;
 
@@ -3424,6 +3932,40 @@ async fn test_statement_metrics() {
             ("strategy", "constant"),
         ],
     );
+
+    // An HTTP or WebSocket result that needs no cluster gets the same strategy. The metric's
+    // `application_name` label holds only recognized names, so this uses the SQL Shell's.
+    let mut http_url = Url::parse(&format!("http://{}/api/sql", server.http_local_addr())).unwrap();
+    http_url
+        .query_pairs_mut()
+        .append_pair("options", r#"{"application_name":"web_console_shell"}"#);
+    let response = reqwest::Client::new()
+        .post(http_url)
+        .json(&serde_json::json!({"query": "SELECT 1"}))
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+    let strategy = server
+        .metrics_registry
+        .gather()
+        .into_iter()
+        .find(|m| m.name() == "mz_time_to_first_row_seconds")
+        .expect("mz_time_to_first_row_seconds metric should exist")
+        .get_metric()
+        .iter()
+        .find(|m| {
+            m.get_label()
+                .iter()
+                .any(|l| l.name() == "application_name" && l.value() == "web_console_shell")
+        })
+        .and_then(|m| {
+            m.get_label()
+                .iter()
+                .find(|l| l.name() == "strategy")
+                .map(|l| l.value().to_string())
+        });
+    assert_eq!(strategy.as_deref(), Some("constant"));
 
     // Each SELECT or SUBSCRIBE with an AS OF clause counts once per execution. A cursor's SUBSCRIBE
     // counts when FETCH runs it, not at DECLARE.
@@ -3850,10 +4392,10 @@ fn webhook_max_request_size() {
         })
     };
 
-    // Default is 5 MiB: a 6 MiB body must be rejected with 413.
-    assert_eq!(post(6 * 1024 * 1024).as_u16(), 413);
+    const DEFAULT_LIMIT: usize = 5 * 1024 * 1024;
+    assert_eq!(post(DEFAULT_LIMIT + 1).as_u16(), 413);
 
-    // Raise the limit to 10 MiB and confirm the 6 MiB body is now accepted.
+    // Raise the limit to 10 MiB and confirm the same body is now accepted.
     mz_client
         .batch_execute("ALTER SYSTEM SET webhook_max_request_size_bytes = 10485760")
         .unwrap();
@@ -3862,13 +4404,13 @@ fn webhook_max_request_size() {
     Retry::default()
         .max_duration(std::time::Duration::from_secs(30))
         .retry(|_| {
-            if post(6 * 1024 * 1024).is_success() {
+            if post(DEFAULT_LIMIT + 1).is_success() {
                 Ok(())
             } else {
                 Err(())
             }
         })
-        .expect("6 MiB body accepted after raising the limit to 10 MiB");
+        .expect("body over the default accepted after raising the limit to 10 MiB");
 
     // Lower the limit below the default and confirm enforcement is live: a
     // body that would have been accepted at the default is now rejected.
@@ -3878,13 +4420,13 @@ fn webhook_max_request_size() {
     Retry::default()
         .max_duration(std::time::Duration::from_secs(30))
         .retry(|_| {
-            if post(2048).as_u16() == 413 {
+            if post(1024 + 1).as_u16() == 413 {
                 Ok(())
             } else {
                 Err(())
             }
         })
-        .expect("2 KiB body rejected after lowering the limit to 1 KiB");
+        .expect("body over 1 KiB rejected after lowering the limit to 1 KiB");
 }
 
 /// A `CHECK` expression that allocates a multiple of the request body must be refused rather than
@@ -4778,6 +5320,106 @@ fn test_replacement_materialized_view_stale_expression_cache_entry_dropped_on_op
     }
 }
 
+// A pending replacement whose inputs are not readable at its target's write
+// frontier gets an as-of beyond that frontier. Bootstrapping must accept that
+// as-of instead of panicking in as-of selection, and applying the replacement
+// afterwards must succeed.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_replacement_materialized_view_ahead_of_target_survives_restart() {
+    let data_dir = tempfile::tempdir().unwrap();
+    let harness = test_util::TestHarness::default()
+        .data_directory(data_dir.path())
+        .with_system_parameter_default(
+            "enable_replacement_materialized_views".to_string(),
+            "true".to_string(),
+        );
+
+    {
+        let server = harness.clone().start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        for stmt in [
+            "CREATE CLUSTER c SIZE 'scale=1,workers=1'",
+            "CREATE TABLE t1 (a int)",
+            "INSERT INTO t1 VALUES (1)",
+            "CREATE MATERIALIZED VIEW mv IN CLUSTER c AS SELECT a FROM t1",
+        ] {
+            client.batch_execute(stmt).unwrap();
+        }
+        let row = client.query_one("SELECT a FROM mv", &[]).unwrap();
+        assert_eq!(row.get::<_, i32>(0), 1);
+
+        // Without replicas, the write frontier of `mv` stops advancing.
+        client
+            .batch_execute("ALTER CLUSTER c SET (REPLICATION FACTOR 0)")
+            .unwrap();
+        Retry::default()
+            .max_duration(Duration::from_secs(30))
+            .retry(|_| {
+                let replicas: i64 = client
+                    .query_one(
+                        "SELECT count(*) FROM mz_cluster_replicas r \
+                         JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'c'",
+                        &[],
+                    )
+                    .unwrap()
+                    .get(0);
+                if replicas == 0 {
+                    Ok(())
+                } else {
+                    Err(format!("{replicas} replicas left"))
+                }
+            })
+            .unwrap();
+        std::thread::sleep(Duration::from_secs(2));
+
+        for stmt in [
+            "CREATE TABLE t2 (a int)",
+            "INSERT INTO t2 VALUES (2)",
+            "CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv IN CLUSTER c AS SELECT a FROM t2",
+        ] {
+            client.batch_execute(stmt).unwrap();
+        }
+
+        // `mz_frontiers` reports a new collection only after its first frontier
+        // update, so the comparison is NULL until then.
+        let ahead: bool = Retry::default()
+            .max_duration(Duration::from_secs(30))
+            .retry(|_| {
+                let ahead: Option<bool> = client
+                    .query_one(
+                        "SELECT
+                             (SELECT f.read_frontier FROM mz_internal.mz_frontiers f
+                              JOIN mz_tables t ON f.object_id = t.id WHERE t.name = 't2')
+                             >=
+                             (SELECT f.write_frontier FROM mz_internal.mz_frontiers f
+                              JOIN mz_materialized_views m ON f.object_id = m.id
+                              WHERE m.name = 'mv')",
+                        &[],
+                    )
+                    .unwrap()
+                    .get(0);
+                ahead.ok_or("frontiers not reported yet")
+            })
+            .unwrap();
+        assert!(ahead, "t2 must not be readable at the write frontier of mv");
+    }
+
+    {
+        let server = harness.start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        client
+            .batch_execute("ALTER CLUSTER c SET (REPLICATION FACTOR 1)")
+            .unwrap();
+        client
+            .batch_execute("ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp")
+            .unwrap();
+        let row = client.query_one("SELECT a FROM mv", &[]).unwrap();
+        assert_eq!(row.get::<_, i32>(0), 2);
+    }
+}
+
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
 #[allow(clippy::disallowed_methods)]
@@ -5511,11 +6153,7 @@ fn test_mcp_cors_allows_transport_headers() {
 fn test_mcp_agent_protocol_2026_07_28() {
     let harness = test_util::TestHarness::default()
         .with_mcp_routes(true, false)
-        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
-        .with_system_parameter_default(
-            "enable_mcp_protocol_2026_07_28".to_string(),
-            "true".to_string(),
-        );
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string());
     run_mcp_datadriven("tests/testdata/mcp/agent_2026_07_28", harness);
 }
 
@@ -5524,11 +6162,7 @@ fn test_mcp_agent_protocol_2026_07_28() {
 fn test_mcp_developer_protocol_2026_07_28() {
     let harness = test_util::TestHarness::default()
         .with_mcp_routes(false, true)
-        .with_system_parameter_default("enable_mcp_developer".to_string(), "true".to_string())
-        .with_system_parameter_default(
-            "enable_mcp_protocol_2026_07_28".to_string(),
-            "true".to_string(),
-        );
+        .with_system_parameter_default("enable_mcp_developer".to_string(), "true".to_string());
     run_mcp_datadriven("tests/testdata/mcp/developer_2026_07_28", harness);
 }
 
@@ -6125,6 +6759,65 @@ fn test_mcp_developer_honors_x_materialize_user_header() {
         result_text.contains("mz_support"),
         "MCP developer on the internal listener must resolve the session to mz_support \
          via injected x-materialize-user header, got result: {result_text}, full body: {body}"
+    );
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+#[allow(clippy::disallowed_methods)]
+fn test_mcp_unified_returns_503_when_flag_is_off() {
+    let server = test_util::TestHarness::default()
+        .with_mcp_unified_route()
+        .with_system_parameter_default("enable_mcp_unified".to_string(), "false".to_string())
+        .start_blocking();
+    let (status, _) = mcp_post(
+        &format!("http://{}/api/mcp", server.http_local_addr()),
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
+    );
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+}
+
+/// `/api/mcp` on the internal listener honors `x-materialize-user`, the same
+/// as `/api/mcp/developer` (CLO-158), and tags its sessions `mz_mcp`.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+#[allow(clippy::disallowed_methods)]
+fn test_mcp_unified_honors_x_materialize_user_header() {
+    let server = test_util::TestHarness::default()
+        .with_mcp_unified_route()
+        .with_system_parameter_default("enable_mcp_unified".to_string(), "true".to_string())
+        .start_blocking();
+
+    let res = Client::new()
+        .post(format!(
+            "http://{}/api/mcp",
+            server.internal_http_local_addr()
+        ))
+        .header("x-materialize-user", "mz_support")
+        .json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "query",
+                "arguments": {
+                    "cluster": "mz_catalog_server",
+                    "sql_query": "SELECT current_user, current_setting('application_name')"
+                }
+            }
+        }))
+        .send()
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body: serde_json::Value = res.json().unwrap();
+    let result_text = body["result"]["content"][0]["text"].as_str().unwrap_or("");
+    assert!(
+        result_text.contains("mz_support"),
+        "/api/mcp must resolve the session to the injected user, got: {body}"
+    );
+    assert!(
+        result_text.contains("mz_mcp\""),
+        "/api/mcp sessions must set application_name to mz_mcp, got: {body}"
     );
 }
 
@@ -6931,6 +7624,7 @@ fn test_oauth_protected_resource_metadata_path_suffixed_aliases() {
 
     for suffix in [
         "/.well-known/oauth-protected-resource",
+        "/.well-known/oauth-protected-resource/api/mcp",
         "/.well-known/oauth-protected-resource/api/mcp/agent",
         "/.well-known/oauth-protected-resource/api/mcp/developer",
     ] {
@@ -6949,9 +7643,26 @@ fn test_oauth_protected_resource_metadata_path_suffixed_aliases() {
         assert_eq!(
             authorization_servers,
             vec!["https://issuer.test.example.com".to_string()],
-            "all three URIs must serve the same metadata document",
+            "every URI must serve the same metadata document",
         );
     }
+
+    // RFC 9728 §3.3: clients reject a document whose `resource` differs from
+    // the URL they built the well-known URI from.
+    let res = Client::new()
+        .get(&format!(
+            "http://{}/.well-known/oauth-protected-resource/api/mcp",
+            server.http_local_addr()
+        ))
+        .send()
+        .unwrap();
+    let body: serde_json::Value = res.json().unwrap();
+    let resource = body["resource"].as_str().expect("resource is a string");
+    let path = url::Url::parse(resource)
+        .expect("resource is a URL")
+        .path()
+        .to_string();
+    assert_eq!(path, "/api/mcp", "unexpected resource {resource}");
 }
 
 /// An `oidc_issuer` value that does not parse as a URL must NOT be
@@ -7541,6 +8252,97 @@ fn test_mcp_agent_rbac() {
     );
 }
 
+/// A materialized view whose only index sits on a cluster the role cannot use
+/// is advertised with a null cluster. `query` must still read it when the
+/// agent omits `cluster` (DEX-71).
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_mcp_agent_query_reads_null_cluster_product() {
+    let server = test_util::TestHarness::default()
+        .with_mcp_routes(true, false)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
+        .start_blocking();
+
+    let agents_url = format!("http://{}/api/mcp/agent", server.http_local_addr());
+
+    let mut super_user = server
+        .pg_config_internal()
+        .user(&SYSTEM_USER.name)
+        .connect(postgres::NoTls)
+        .unwrap();
+    let user = &HTTP_DEFAULT_USER.name;
+    for stmt in [
+        format!("CREATE ROLE {user}"),
+        format!("GRANT USAGE ON DATABASE materialize TO {user}"),
+        format!("GRANT USAGE ON SCHEMA materialize.public TO {user}"),
+        "CREATE CLUSTER hidden REPLICAS ()".to_string(),
+        "CREATE MATERIALIZED VIEW null_cluster_product IN CLUSTER quickstart AS SELECT 42::int AS id"
+            .to_string(),
+        "CREATE INDEX null_cluster_product_idx IN CLUSTER hidden ON null_cluster_product (id)"
+            .to_string(),
+        format!("GRANT SELECT ON null_cluster_product TO {user}"),
+    ] {
+        super_user.batch_execute(&stmt).unwrap();
+    }
+
+    let call = |id: u64, name: &str, arguments: serde_json::Value| {
+        mcp_post(
+            &agents_url,
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "tools/call",
+                "params": {"name": name, "arguments": arguments}
+            }),
+        )
+    };
+    let product = "\"materialize\".\"public\".\"null_cluster_product\"";
+    let sql_query = format!("SELECT id FROM {product}");
+
+    let (status, body) = call(
+        1,
+        "get_data_product_details",
+        serde_json::json!({"name": product}),
+    );
+    assert_eq!(status, StatusCode::OK);
+    let rows: serde_json::Value =
+        serde_json::from_str(body["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    // Column 1 of `mz_mcp_data_product_details` is `cluster`.
+    assert!(
+        rows[0][1].is_null(),
+        "the hidden index cluster should be advertised as null: {rows}"
+    );
+
+    for arguments in [
+        serde_json::json!({"sql_query": sql_query}),
+        serde_json::json!({"cluster": null, "sql_query": sql_query}),
+    ] {
+        let (status, body) = call(2, "query", arguments.clone());
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            body["error"].is_null() && body["result"]["isError"] != true,
+            "{arguments} should read on the default cluster: {body}"
+        );
+        let text = body["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("42"), "{arguments} returned {text}");
+    }
+
+    let (status, body) = call(
+        3,
+        "query",
+        serde_json::json!({"cluster": "hidden", "sql_query": sql_query}),
+    );
+    assert_eq!(status, StatusCode::OK);
+    let error = body["error"]["message"]
+        .as_str()
+        .or_else(|| body["result"]["content"][0]["text"].as_str())
+        .unwrap_or_default();
+    assert!(
+        error.contains("permission denied"),
+        "naming the hidden cluster should be refused: {body}"
+    );
+}
+
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn test_inject_audit_events() {
@@ -7764,6 +8566,64 @@ fn test_startup_only_system_var_warns() {
     assert!(
         !notices.iter().any(|message| message.contains(WARNING)),
         "RESET ALL warned without changing anything, notices: {notices:?}"
+    );
+}
+
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_alter_system_session_default_notice() {
+    let server = test_util::TestHarness::default().start_blocking();
+
+    let (tx, mut rx) = futures::channel::mpsc::unbounded();
+    let mut client = server
+        .pg_config_internal()
+        .notice_callback(move |notice| tx.unbounded_send(notice).expect("send notice"))
+        .connect(postgres::NoTls)
+        .unwrap();
+
+    const NOTICE: &str = "this will have no effect on the current session";
+    let mut notified = |stmt: &str| -> bool {
+        client.batch_execute(stmt).unwrap();
+        let notices: Vec<postgres::error::DbError> =
+            std::iter::from_fn(|| rx.try_recv().ok()).collect();
+        notices
+            .iter()
+            .any(|notice| notice.message().contains(NOTICE))
+    };
+
+    for stmt in [
+        "ALTER SYSTEM SET statement_timeout = '2min'",
+        "ALTER SYSTEM RESET statement_timeout",
+        "ALTER SYSTEM SET statement_logging_default_sample_rate = 0.5",
+        "ALTER SYSTEM RESET statement_logging_default_sample_rate",
+    ] {
+        assert!(notified(stmt), "session default: {stmt} did not notify");
+    }
+    for stmt in [
+        "ALTER SYSTEM SET enable_refresh_every_mvs = true",
+        "ALTER SYSTEM RESET enable_refresh_every_mvs",
+    ] {
+        assert!(!notified(stmt), "system-only var: {stmt} notified");
+    }
+
+    for stmt in [
+        "ALTER SYSTEM SET statement_timeout = '2min'",
+        "ALTER SYSTEM SET statement_logging_default_sample_rate = 0.5",
+    ] {
+        notified(stmt);
+        assert!(
+            notified("ALTER SYSTEM RESET ALL"),
+            "RESET ALL after {stmt} did not notify"
+        );
+    }
+    assert!(
+        !notified("ALTER SYSTEM RESET ALL"),
+        "RESET ALL without changes notified"
+    );
+    notified("ALTER SYSTEM SET enable_refresh_every_mvs = true");
+    assert!(
+        !notified("ALTER SYSTEM RESET ALL"),
+        "RESET ALL of only system-only vars notified"
     );
 }
 

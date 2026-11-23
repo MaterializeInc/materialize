@@ -232,6 +232,27 @@ export type WorkflowGraphNode = InferResult<
   ReturnType<typeof buildWorkflowGraphNodesQuery>
 >[0];
 
+// The details fields, which a catalog row lacks, plus two that catalog rows
+// leave null: the database of a system object, and the source type of anything
+// but a source. The node query types its NULL source types as strings.
+type WorkflowGraphCanvasNullableField =
+  | "createdAt"
+  | "sourceStatus"
+  | "sourceSnapshotCommitted"
+  | "sinkStatus"
+  | "connectionId"
+  | "connectionName"
+  | "databaseName"
+  | "sourceType";
+
+/** A graph node, which can be drawn from its catalog row before its details load. */
+export type WorkflowGraphCanvasNode = Omit<
+  WorkflowGraphNode,
+  WorkflowGraphCanvasNullableField
+> & {
+  [Field in WorkflowGraphCanvasNullableField]: WorkflowGraphNode[Field] | null;
+};
+
 /**
  * Fetches details for nodes of the workflow graph.
  */

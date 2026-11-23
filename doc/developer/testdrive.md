@@ -509,9 +509,10 @@ The temporary directory to use. If no ```--temp-dir``` option is specified, it w
 
 #### `testdrive.aws-endpoint`
 
-#### `testdrive.materialize-internal-http-addr`
+#### `testdrive.materialize-http-url`
 
-#### `testdrive.materialize-http-addr`
+The base URL of the HTTP API: `https://` under `--materialize-use-https`, else
+`http://`.
 
 #### `testdrive.materialize-sql-addr`
 
@@ -686,6 +687,8 @@ SELECT * FROM test_table ORDER BY id
 1 Alice
 2 Bob
 ```
+
+Decimals are displayed with their declared scale. A Materialize `numeric` without a declared scale is written to Iceberg as `decimal(38, 10)`, so `1.5` reads back as `1.5000000000`.
 
 NULL values are displayed as `<null>`:
 

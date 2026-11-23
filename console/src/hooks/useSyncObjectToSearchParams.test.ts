@@ -9,6 +9,7 @@
 
 import { renderHook, waitFor } from "@testing-library/react";
 import { act } from "react-dom/test-utils";
+import { useSearchParams } from "react-router-dom";
 
 import { RouterWrapper } from "~/test/utils";
 
@@ -106,6 +107,41 @@ describe("useSyncObjectToSearchParams", () => {
 
     await waitFor(() =>
       expect(location.search).toBe(encodeURI("?key1=value2")),
+    );
+  });
+
+  it("keeps search params it didn't write, and removes one it wrote once the object drops it", async () => {
+    window.history.replaceState(null, "", "/");
+    const input: { object: Record<string, string> } = {
+      object: { sortField: "name", q: "orders" },
+    };
+
+    const hook = renderHook(
+      () => {
+        useSyncObjectToSearchParams(input.object);
+        return useSearchParams()[1];
+      },
+      {
+        wrapper: RouterWrapper,
+      },
+    );
+
+    await waitFor(() =>
+      expect(location.search).toBe("?sortField=name&q=orders"),
+    );
+    act(() => {
+      hook.result.current((params) => {
+        params.set("configure", "overview");
+        return params;
+      });
+    });
+    act(() => {
+      input.object = { sortField: "name" };
+      hook.rerender();
+    });
+
+    await waitFor(() =>
+      expect(location.search).toBe("?configure=overview&sortField=name"),
     );
   });
 });

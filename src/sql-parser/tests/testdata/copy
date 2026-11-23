@@ -135,6 +135,28 @@ COPY t TO 's3://path/' || repeat('1', 2)
 =>
 Copy(CopyStatement { relation: Named { name: Name(UnresolvedItemName([Ident("t")])), columns: [] }, direction: To, target: Expr(Op { op: Op { namespace: None, op: "||" }, expr1: Value(String("s3://path/")), expr2: Some(Function(Function { name: Name(UnresolvedItemName([Ident("repeat")])), args: Args { args: [Value(String("1")), Value(Number("2"))], order_by: [] }, filter: None, over: None, distinct: false })) }), options: [] })
 
+# A `time`/`timestamp` cast must not take the options' `WITH` as `WITH TIME ZONE`.
+parse-statement
+COPY t FROM TIMESTAMP '2020-01-01 00:00:00' (FORMAT CSV)
+----
+COPY t FROM '2020-01-01 00:00:00'::timestamp WITH (FORMAT = csv)
+=>
+Copy(CopyStatement { relation: Named { name: Name(UnresolvedItemName([Ident("t")])), columns: [] }, direction: From, target: Expr(Cast { expr: Value(String("2020-01-01 00:00:00")), data_type: Other { name: Name(UnresolvedItemName([Ident("timestamp")])), typ_mod: [] }, failure_mode: Error }), options: [CopyOption { name: Format, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("csv")]))) }] })
+
+parse-statement
+COPY t TO '01:02:03'::time WITH (FORMAT CSV)
+----
+COPY t TO '01:02:03'::time WITH (FORMAT = csv)
+=>
+Copy(CopyStatement { relation: Named { name: Name(UnresolvedItemName([Ident("t")])), columns: [] }, direction: To, target: Expr(Cast { expr: Value(String("01:02:03")), data_type: Other { name: Name(UnresolvedItemName([Ident("time")])), typ_mod: [] }, failure_mode: Error }), options: [CopyOption { name: Format, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("csv")]))) }] })
+
+parse-statement
+COPY t FROM '2020-01-01'::timestamp(3) WITH TIME ZONE WITH (FORMAT CSV)
+----
+COPY t FROM '2020-01-01'::timestamptz(3) WITH (FORMAT = csv)
+=>
+Copy(CopyStatement { relation: Named { name: Name(UnresolvedItemName([Ident("t")])), columns: [] }, direction: From, target: Expr(Cast { expr: Value(String("2020-01-01")), data_type: Other { name: Name(UnresolvedItemName([Ident("timestamptz")])), typ_mod: [3] }, failure_mode: Error }), options: [CopyOption { name: Format, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("csv")]))) }] })
+
 parse-statement
 COPY (select * from t) TO 's3://path/' || repeat('1', 2)
 ----

@@ -10,9 +10,8 @@
 // Disallow usage of `unwrap()`.
 #![warn(clippy::unwrap_used)]
 #![cfg_attr(nightly_doc_features, feature(doc_cfg))]
-// Without this, cargo clippy complains with:
-//     overflow evaluating the requirement `&str: std::marker::Send`
-// in implement_peek_plan's return of a Result<crate::ExecuteResponse, AdapterError>.
+// Without this, rustc overflows its query depth when computing the layout of deeply nested async
+// fn bodies, e.g. `Coordinator::catalog_transact_with_side_effects`.
 #![recursion_limit = "256"]
 
 //! Coordinates client requests with the dataflow layer.
@@ -43,10 +42,13 @@ mod command;
 mod coord;
 mod error;
 mod explain;
-mod frontend_peek;
 mod frontend_read_then_write;
+mod frontend_transaction;
 mod notice;
 mod optimize;
+mod peek_registry;
+mod peek_sequencing;
+mod query_policy;
 mod util;
 
 pub mod catalog;
@@ -78,7 +80,7 @@ pub use crate::coord::timestamp_selection::{
 };
 pub use crate::coord::{Config, RemoteSystemParameters, load_remote_system_parameters, serve};
 pub use crate::error::{AdapterError, AuthenticationError};
-pub use crate::notice::AdapterNotice;
+pub use crate::notice::{AdapterNotice, ExecutionTime};
 pub use crate::util::{ResultExt, verify_datum_desc};
 pub use crate::webhook::{
     AppendWebhookError, AppendWebhookResponse, AppendWebhookValidator, WebhookAppenderCache,

@@ -34,7 +34,7 @@ operator                      total_memory   total_records
 > EXPLAIN ANALYZE MEMORY FOR INDEX materialize.blue.t_idx;
 operator                      total_memory   total_records
 ----------------------------------------------------------
-"Arrange (#0{x})"             <XXX>          <null>
+"Arrange (#0{x})"             <null>         <null>
 "  Stream <XXX>"              <null>         <null>
 
 > EXPLAIN ANALYZE CLUSTER CPU;

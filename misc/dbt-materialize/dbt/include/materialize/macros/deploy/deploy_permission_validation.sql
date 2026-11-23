@@ -69,7 +69,7 @@ FROM create_permission, usage_permission;
 {% endmacro %}
 
 {% macro internal_ensure_createcluster_permission() %}
-{% set has_create_cluster = run_query("SELECT has_system_privilege('CREATECLUSTER') IS FALSE, current_user()") %}
+{% set has_create_cluster = run_query("SELECT has_system_privilege('CREATECLUSTER') IS FALSE, quote_ident(current_role)") %}
 {% if execute %}
     {% if has_create_cluster.rows[0][0] %}
         {{ exceptions.raise_compiler_error("""
@@ -117,7 +117,7 @@ missing_ownership AS (
     FROM cluster_with_ownership
 )
 
-SELECT name, quote_ident(current_role)
+SELECT quote_ident(name), quote_ident(current_role)
 FROM missing_ownership
 {% endset %}
 
@@ -169,7 +169,7 @@ missing_ownership AS (
     FROM schemas_with_ownership
 )
 
-SELECT name, quote_ident(current_role)
+SELECT quote_ident(name), quote_ident(current_role)
 FROM missing_ownership
 {% endset %}
 

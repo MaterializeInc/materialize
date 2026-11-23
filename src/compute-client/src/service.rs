@@ -12,7 +12,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::mem;
 
-use async_trait::async_trait;
 use bytesize::ByteSize;
 use differential_dataflow::lattice::Lattice;
 use mz_expr::row::RowCollection;
@@ -20,7 +19,7 @@ use mz_ore::cast::CastInto;
 use mz_ore::soft_panic_or_log;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Timestamp, UpdateCollection};
-use mz_service::client::{GenericClient, Partitionable, PartitionedState};
+use mz_service::client::{Partitionable, PartitionedState};
 use timely::PartialOrder;
 use timely::progress::frontier::{Antichain, MutableAntichain};
 use uuid::Uuid;
@@ -30,28 +29,6 @@ use crate::protocol::response::{
     ComputeResponse, CopyToResponse, FrontiersResponse, PeekError, PeekResponse,
     StashedPeekResponse, SubscribeBatch, SubscribeResponse,
 };
-
-/// A client to a compute server.
-pub trait ComputeClient: GenericClient<ComputeCommand, ComputeResponse> {}
-
-impl<C> ComputeClient for C where C: GenericClient<ComputeCommand, ComputeResponse> {}
-
-#[async_trait]
-impl GenericClient<ComputeCommand, ComputeResponse> for Box<dyn ComputeClient> {
-    async fn send(&mut self, cmd: ComputeCommand) -> Result<(), anyhow::Error> {
-        (**self).send(cmd).await
-    }
-
-    /// # Cancel safety
-    ///
-    /// This method is cancel safe. If `recv` is used as the event in a [`tokio::select!`]
-    /// statement and some other branch completes first, it is guaranteed that no messages were
-    /// received by this client.
-    async fn recv(&mut self) -> Result<Option<ComputeResponse>, anyhow::Error> {
-        // `GenericClient::recv` is required to be cancel safe.
-        (**self).recv().await
-    }
-}
 
 /// Maintained state for partitioned compute clients.
 ///

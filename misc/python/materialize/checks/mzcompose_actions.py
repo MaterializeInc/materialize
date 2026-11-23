@@ -54,6 +54,7 @@ class StartMz(MzcomposeAction):
         deploy_generation: int | None = None,
         restart: str | None = None,
         force_migrations: str | None = None,
+        force_catalog_migration: bool = False,
         publish: bool | None = None,
     ) -> None:
         if healthcheck is None:
@@ -76,6 +77,7 @@ class StartMz(MzcomposeAction):
         self.deploy_generation = deploy_generation
         self.restart = restart
         self.force_migrations = force_migrations
+        self.force_catalog_migration = force_catalog_migration
         self.publish = publish
         self.scenario = scenario
 
@@ -127,6 +129,7 @@ class StartMz(MzcomposeAction):
             deploy_generation=self.deploy_generation,
             restart=self.restart,
             force_migrations=self.force_migrations,
+            force_catalog_migration=self.force_catalog_migration,
             publish=self.publish,
             default_replication_factor=self.scenario.default_replication_factor,
             support_external_clusterd=True,
@@ -252,7 +255,9 @@ class SetupIcebergTesting(MzcomposeAction):
 
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
-        iceberg_credentials = setup_polaris_for_iceberg(c)
+        iceberg_credentials = setup_polaris_for_iceberg(
+            c, polaris_extra_environment=["JAVA_OPTS_APPEND=-Xmx2g"]
+        )
         input = dedent(
             f"""
             > CREATE VIEW iceberg_credentials AS SELECT '{iceberg_credentials[0]}' AS user, '{iceberg_credentials[1]}' AS key;
