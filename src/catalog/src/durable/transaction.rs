@@ -3002,6 +3002,11 @@ impl<'a> Transaction<'a> {
         self.upper
     }
 
+    /// Returns the metrics for the backing durable catalog.
+    pub fn metrics(&self) -> &crate::durable::Metrics {
+        self.durable_catalog.metrics()
+    }
+
     fn ensure_committable(&self) -> Result<(), CatalogError> {
         match self.commit_capability {
             Some(_) => Ok(()),

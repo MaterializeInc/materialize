@@ -635,6 +635,37 @@ metrics:
   help: Count of transaction commits.
   source: src/catalog/src/durable/metrics.rs
   visibility: internal
+- name: mz_catalog_transaction_step_seconds_bucket
+  help: >-
+    Wall time of catalog transaction steps, including failed attempts. Steps can
+    nest and repeat, so their sums are not an additive latency breakdown. The mode
+    distinguishes commit preparation, dry runs, and durable handle work.
+  labels:
+  - le
+  - mode
+  - step
+  source: src/catalog/src/durable/metrics.rs
+  visibility: internal
+- name: mz_catalog_transaction_step_seconds_count
+  help: >-
+    Wall time of catalog transaction steps, including failed attempts. Steps can
+    nest and repeat, so their sums are not an additive latency breakdown. The mode
+    distinguishes commit preparation, dry runs, and durable handle work.
+  labels:
+  - mode
+  - step
+  source: src/catalog/src/durable/metrics.rs
+  visibility: internal
+- name: mz_catalog_transaction_step_seconds_sum
+  help: >-
+    Wall time of catalog transaction steps, including failed attempts. Steps can
+    nest and repeat, so their sums are not an additive latency breakdown. The mode
+    distinguishes commit preparation, dry runs, and durable handle work.
+  labels:
+  - mode
+  - step
+  source: src/catalog/src/durable/metrics.rs
+  visibility: internal
 - name: mz_catalog_transactions_started
   help: Total number of started transactions.
   source: src/catalog/src/durable/metrics.rs
