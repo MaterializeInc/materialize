@@ -1495,7 +1495,13 @@ mod tests {
                 if self.fail {
                     return Err(CredentialsError::provider_error("injected failure"));
                 }
-                Ok(Credentials::new(format!("akid-{n}"), "secret", None, None, "test"))
+                Ok(Credentials::new(
+                    format!("akid-{n}"),
+                    "secret",
+                    None,
+                    None,
+                    "test",
+                ))
             })
         }
     }
