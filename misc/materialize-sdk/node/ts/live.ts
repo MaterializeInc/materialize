@@ -22,28 +22,11 @@ import {
 } from "pg";
 
 import { ServerError, UsageError } from "./errors.js";
+import type { Event } from "./values.js";
+import { eventFromJson } from "./values_json.js";
 
 /** One row's cells in their text format, `null` for SQL `NULL`. */
-export type Row = (string | null)[];
-
-/** A change and the `mz_timestamp` it happened at. */
-export type Update = { timestamp: bigint } & (
-  | { op: "diff"; row: Row; diff: bigint }
-  | { op: "upsert"; key: Row; value: Row }
-  | { op: "delete"; key: Row }
-  | { op: "key_violation"; key: Row }
-);
-
-/** What a subscription yields, in the core's JSON form. */
-export type Event =
-  | { event: "snapshot_chunk"; updates: Update[] }
-  | {
-      event: "batch";
-      lower: bigint | null;
-      upper: bigint;
-      snapshot: boolean;
-      updates: Update[];
-    };
+type Row = (string | null)[];
 
 export interface LiveOptions {
   maxRows?: number;
@@ -226,7 +209,7 @@ export class LiveSubscription implements AsyncIterableIterator<Event> {
       // One push per event: a FETCH can release more events than a call
       // takes arguments.
       for (const event of pushed.events) {
-        this.events.push(native(event));
+        this.events.push(eventFromJson(event));
       }
     }
     return { done: false, value: this.events.shift()! };
@@ -286,19 +269,4 @@ export class LiveSubscription implements AsyncIterableIterator<Event> {
     );
     return new ServerError(message, sqlstate, classification);
   }
-}
-
-/** Turns the decimal strings of the core's JSON form into `bigint`s. */
-function native(event: any): Event {
-  for (const update of event.updates) {
-    update.timestamp = BigInt(update.timestamp);
-    if (update.op === "diff") {
-      update.diff = BigInt(update.diff);
-    }
-  }
-  if (event.event === "batch") {
-    event.upper = BigInt(event.upper);
-    event.lower = event.lower === null ? null : BigInt(event.lower);
-  }
-  return event;
 }
