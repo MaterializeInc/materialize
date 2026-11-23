@@ -84,6 +84,37 @@ Check that work was eliminated rather than moved to commit or cache maintenance.
 
 ## Follow-up candidates
 
+### Incremental durable trace consolidation
+
+The shared decoded-state implementation (`b3740feb6b`, naming follow-up
+`7cd2c9665e`) was measured in
+[build 238](https://buildkite.com/materialize/spec-sheet/builds/238).
+At 30k objects, startup fell to about 0.02 ms and total catalog transaction
+time fell from about 66 ms to 31-33 ms. Throughput improved 22-44% across
+the six object/client cases. The 5k result was mixed, with higher sampled CPU.
+The full report is `tools/ddl-performance/OPTIMIZATION.md` in
+materialize-spec-sheet, commit `3283d36`.
+
+The next target is the durable trace's full-catalog consolidation. In the 30k
+eight-client view profile it accounts for 14.5% of inclusive CPU samples.
+Retain consolidated raw update identities in an ordered map, buffer incoming
+updates at the existing application boundary, and consolidate only changed
+entries. Store the common compacted timestamp once instead of rewriting it in
+every entry. Do not change synchronization, fencing, or migration boundaries.
+
+Compatibility includes signed net multiplicities needed by repair migrations,
+distinct JSON forms that decode equally, and timestamps advanced by canceled
+updates. Empty progress and filtered audit/fence updates must not advance the
+retained trace timestamp. Compare against full-vector consolidation and retain
+open, debug, migration, savepoint, and decode-recovery coverage.
+
+The comparison baseline is the decoded-state implementation. Capture effective
+settings in both runs and improve resource coverage before attributing changes:
+builds 237 and 238 had an unresolved override-count difference and sparse 30k
+telemetry. Report instrumentation overhead and unavailable observations.
+
+### Other candidates
+
 - Extend semantic command replay to ordinary CREATE/DROP operations.
 - Separate ordered publication from asynchronous completion waits.
 - Replace catalog-wide quota scans with incremental accounting if measured.

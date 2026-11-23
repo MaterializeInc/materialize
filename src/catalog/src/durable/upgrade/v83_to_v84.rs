@@ -119,7 +119,7 @@ pub async fn upgrade(
         "running versioned Catalog upgrade (repair Role row drift)",
     );
 
-    let (repairs, stats) = compute_repairs(&unopened_catalog_state.snapshot);
+    let (repairs, stats) = compute_repairs(&unopened_catalog_state.snapshot.to_vec());
 
     if !repairs.is_empty() {
         tracing::info!(
@@ -616,6 +616,14 @@ mod tests {
             (dangling.clone(), Diff::MINUS_ONE),
             (live, Diff::ONE),
         ]);
+        let mut trace = crate::durable::persist::SnapshotTrace::from(snap);
+        trace.consolidate();
+        let snap = trace.to_vec();
+        assert_eq!(
+            snap.len(),
+            3,
+            "parsed-equal JSON forms must remain distinct"
+        );
         let (repairs, stats) = compute_repairs(&snap);
         assert_eq!(
             repairs,

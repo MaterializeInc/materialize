@@ -99,7 +99,7 @@ pub async fn upgrade(
         "running versioned Catalog upgrade (repair Role row drift)",
     );
 
-    let (repairs, stats) = compute_repairs(&unopened_catalog_state.snapshot);
+    let (repairs, stats) = compute_repairs(&unopened_catalog_state.snapshot.to_vec());
 
     if !repairs.is_empty() {
         tracing::info!(
