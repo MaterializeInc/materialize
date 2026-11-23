@@ -5978,11 +5978,13 @@ fn run_mcp_datadriven_inner(
 
         let agents_url = format!("http://{}/api/mcp/agent", server.http_local_addr());
         let developer_url = format!("http://{}/api/mcp/developer", server.http_local_addr());
+        let unified_url = format!("http://{}/api/mcp", server.http_local_addr());
 
         f.run(|tc| {
             let url = match tc.directive.as_str() {
                 "mcp-agent" => &agents_url,
                 "mcp-developer" => &developer_url,
+                "mcp-unified" => &unified_url,
                 // Setup SQL, executed over pgwire as the default HTTP user
                 // (the role the MCP endpoints run as), e.g. to create user
                 // objects for the `query` tool to target.
@@ -6102,6 +6104,18 @@ fn test_mcp_agent_restricted() {
         .with_mcp_routes(true, false)
         .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string());
     run_mcp_datadriven_restricted("tests/testdata/mcp/agent_restricted", harness);
+}
+
+/// Tests the unified `/api/mcp` route. The agent route is on too, so the file
+/// also covers the new tool name there.
+#[mz_ore::test]
+fn test_mcp_unified() {
+    let harness = test_util::TestHarness::default()
+        .with_mcp_routes(true, false)
+        .with_mcp_unified_route()
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
+        .with_system_parameter_default("enable_mcp_unified".to_string(), "true".to_string());
+    run_mcp_datadriven("tests/testdata/mcp/unified", harness);
 }
 
 /// Tests that the MCP agent endpoint returns 503 when the feature flag is disabled.
