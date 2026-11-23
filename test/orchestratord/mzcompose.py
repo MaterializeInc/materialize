@@ -321,7 +321,9 @@ def stop_and_remove_container(container_name: str) -> None:
 
 
 # renovate: datasource=docker depName=registry versioning=docker
-REGISTRY_PROXY_IMAGE = "registry:2@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373"
+REGISTRY_PROXY_IMAGE = (
+    "registry:2@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373"
+)
 
 
 def pull_registry_proxy_image(max_attempts: int = 5) -> None:
