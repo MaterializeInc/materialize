@@ -98,8 +98,8 @@ cargo test -p mz-catalog --test builtin_registry
 * **New function with a payload** (any variant that carries data, e.g. a
   target type, a regex, a scale): the registry build panics naming the
   variant. Add a representative `Sample` to `unary_samples()`,
-  `binary_samples()`, or `variadic_samples()` in
-  `src/expr/src/scalar/func/registry.rs`. If a property depends on the
+  `binary_samples()`, `variadic_samples()`, `aggregate_samples()`, or
+  `table_samples()` in `src/expr/src/scalar/func/registry.rs`. If a property depends on the
   payload (e.g. a cast only errors when it has a scale), add a second sample
   with `.labeled("...")` covering the other branch. Payload-free variants and
   plain `#[sqlfunc]` functions need no sample.

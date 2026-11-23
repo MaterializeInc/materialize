@@ -14,6 +14,10 @@
 # arguments from a table column, so it runs in a dataflow, which is how a
 # durably stored plan would run it. Rows whose input errors live in their own
 # tables, because one erroring row fails the whole query.
+#
+# Unlike `table_func.slt`, which is in `tests_without_views` in
+# `test/sqllogictest/mzcompose.py`, this file runs with `--auto-index-selects`,
+# so CI also checks each successful query as a maintained indexed view.
 
 mode cockroach
 
@@ -31,6 +35,12 @@ COMPLETE 0
 
 # NOTE: jsonb numbers are normalized, so `1.50` reads back as `1.5`.
 # PostgreSQL keeps the written scale.
+
+# NOTE: jsonb values print without spaces, as `[1,2]`, where PostgreSQL prints
+# `[1, 2]` (database-issues#7085).
+
+# NOTE: Rows 6 to 8 are not objects. These functions return no rows for them,
+# where PostgreSQL errors (DB-75 covers `jsonb_object_keys`).
 
 statement ok
 CREATE TABLE objs (id int, v jsonb)
@@ -98,6 +108,9 @@ SELECT id, k FROM objs, jsonb_object_keys(v) AS k ORDER BY id, k
 5  esc"ape
 5  kéy
 
+# NOTE: `WITH ORDINALITY` numbers the keys in sorted order. PostgreSQL numbers
+# shorter keys first.
+
 query ITTI
 SELECT id, key, value, ordinality FROM objs, jsonb_each(v) WITH ORDINALITY ORDER BY id, ordinality
 ----
@@ -116,6 +129,9 @@ SELECT id, key, value, ordinality FROM objs, jsonb_each(v) WITH ORDINALITY ORDER
 5  kéy  "éx"  2
 
 # jsonb_array_elements, jsonb_array_elements_text
+
+# NOTE: Rows 6 to 8 are not arrays. These functions return no rows for them,
+# where PostgreSQL errors.
 
 statement ok
 CREATE TABLE arrs (id int, v jsonb)
@@ -190,6 +206,8 @@ SELECT id, e, n FROM arrs, jsonb_array_elements(v) WITH ORDINALITY AS t(e, n) OR
 5  "␠"  6
 
 # aclexplode, mz_aclexplode
+
+# NOTE: `aclexplode` of an empty array returns no rows, where PostgreSQL errors.
 
 statement ok
 CREATE TABLE acls (id int, a aclitem[], m mz_aclitem[])
@@ -483,6 +501,9 @@ SELECT id, s FROM subscripts, generate_subscripts(a, d) AS s ORDER BY id, s
 8  1
 
 # regexp_matches
+
+# NOTE: A pattern without capture groups returns `{}`. PostgreSQL returns the
+# whole match, as our own `regexp_match` does (DB-68).
 
 statement ok
 CREATE TABLE matches (id int, s text, p text, f text)

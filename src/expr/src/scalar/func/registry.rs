@@ -1344,20 +1344,32 @@ fn aggregate_samples() -> Vec<Sample<AggregateFunc>> {
         ignore_nulls: false,
     };
     // Order-sensitive aggregates take a record of the aggregated value and
-    // the ORDER BY columns.
-    let ordered = |value| record_of(vec![value, SqlScalarType::Int32]);
+    // the ORDER BY columns. The ORDER BY column's type differs from every
+    // value type below, so reading the wrong field changes the output type.
+    let ordered = |value| record_of(vec![value, SqlScalarType::Date]);
     let original_row = record_of(vec![SqlScalarType::Int32]);
     // Ranking functions take the partition's original rows as a list.
     let ranking_input = ordered(list_type(original_row.clone()));
     // Value window functions and window aggregates take a record of the
     // original row and the encoded arguments.
     let window_input = |args| ordered(record_of(vec![original_row.clone(), args]));
-    // lag and lead encode (value, offset, default).
+    // lag and lead encode (value, offset, default). The value's type differs
+    // from the offset's, so reading the wrong field changes the output type.
     let lag_lead_args = record_of(vec![
+        SqlScalarType::String,
         SqlScalarType::Int32,
-        SqlScalarType::Int32,
-        SqlScalarType::Int32,
+        SqlScalarType::String,
     ]);
+    let numeric_with_scale = || SqlScalarType::Numeric {
+        max_scale: Some(NumericMaxScale::try_from(2i64).expect("valid scale")),
+    };
+    let precision = || Some(TimestampPrecision::try_from(3i64).expect("valid precision"));
+    let timestamp_with_precision = || SqlScalarType::Timestamp {
+        precision: precision(),
+    };
+    let timestamptz_with_precision = || SqlScalarType::TimestampTz {
+        precision: precision(),
+    };
     vec![
         aggregate(
             AggregateFunc::JsonbAgg {
@@ -1399,6 +1411,23 @@ fn aggregate_samples() -> Vec<Sample<AggregateFunc>> {
                 SqlScalarType::String,
             ])),
         ),
+        aggregate(
+            AggregateFunc::StringAgg {
+                order_by: order_by(),
+            },
+            ordered(SqlScalarType::Record {
+                fields: vec![
+                    (ColumnName::from("f0"), SqlScalarType::String.nullable(true)),
+                    (
+                        ColumnName::from("f1"),
+                        SqlScalarType::String.nullable(false),
+                    ),
+                ]
+                .into(),
+                custom_id: None,
+            }),
+        )
+        .labeled("nullable_value"),
         aggregate(
             AggregateFunc::RowNumber {
                 order_by: order_by(),
@@ -1451,8 +1480,22 @@ fn aggregate_samples() -> Vec<Sample<AggregateFunc>> {
                 ],
                 order_by: order_by(),
             },
-            window_input(record_of(vec![lag_lead_args, SqlScalarType::Int32])),
+            window_input(record_of(vec![lag_lead_args.clone(), SqlScalarType::Int32])),
         ),
+        aggregate(
+            AggregateFunc::FusedValueWindowFunc {
+                funcs: vec![
+                    lag_lead(LagLeadType::Lead),
+                    AggregateFunc::LastValue {
+                        order_by: order_by(),
+                        window_frame: window_frame(),
+                    },
+                ],
+                order_by: order_by(),
+            },
+            window_input(record_of(vec![lag_lead_args, SqlScalarType::Int32])),
+        )
+        .labeled("lead_last"),
         aggregate(
             AggregateFunc::WindowAggregate {
                 wrapped_aggregate: Box::new(AggregateFunc::SumInt32),
@@ -1463,12 +1506,31 @@ fn aggregate_samples() -> Vec<Sample<AggregateFunc>> {
         ),
         aggregate(
             AggregateFunc::FusedWindowAggregate {
-                wrapped_aggregates: vec![AggregateFunc::SumInt32, AggregateFunc::MaxInt32],
+                wrapped_aggregates: vec![AggregateFunc::SumInt32, AggregateFunc::MaxString],
                 order_by: order_by(),
                 window_frame: window_frame(),
             },
-            window_input(record_of(vec![SqlScalarType::Int32, SqlScalarType::Int32])),
+            window_input(record_of(vec![SqlScalarType::Int32, SqlScalarType::String])),
         ),
+        // These return their input type, which the natural `String`,
+        // unscaled and unprecise inputs cannot tell from a fixed type.
+        aggregate(
+            AggregateFunc::MaxString,
+            SqlScalarType::VarChar { max_length: None },
+        )
+        .labeled("varchar"),
+        aggregate(
+            AggregateFunc::MinString,
+            SqlScalarType::VarChar { max_length: None },
+        )
+        .labeled("varchar"),
+        aggregate(AggregateFunc::MaxNumeric, numeric_with_scale()).labeled("scale"),
+        aggregate(AggregateFunc::MinNumeric, numeric_with_scale()).labeled("scale"),
+        aggregate(AggregateFunc::SumNumeric, numeric_with_scale()).labeled("scale"),
+        aggregate(AggregateFunc::MaxTimestamp, timestamp_with_precision()).labeled("precision"),
+        aggregate(AggregateFunc::MinTimestamp, timestamp_with_precision()).labeled("precision"),
+        aggregate(AggregateFunc::MaxTimestampTz, timestamptz_with_precision()).labeled("precision"),
+        aggregate(AggregateFunc::MinTimestampTz, timestamptz_with_precision()).labeled("precision"),
     ]
 }
 
@@ -1515,6 +1577,29 @@ fn table_samples() -> Vec<Sample<TableFunc>> {
             })
             .expect("unnest_list supports WITH ORDINALITY"),
         ),
+        table(
+            TableFunc::with_ordinality(TableFunc::TabletizedScalar {
+                name: "tabletized".to_string(),
+                relation: SqlRelationType::new(vec![SqlScalarType::Int32.nullable(true)]),
+            })
+            .expect("tabletized scalars support WITH ORDINALITY"),
+        )
+        .labeled("tabletized"),
+        // Neither inner function above has keys or breaks monotonicity.
+        table(
+            TableFunc::with_ordinality(TableFunc::GuardSubquerySize {
+                column_type: SqlScalarType::Int32,
+            })
+            .expect("guard_subquery_size supports WITH ORDINALITY"),
+        )
+        .labeled("guard"),
+        table(
+            TableFunc::with_ordinality(TableFunc::UnnestMap {
+                value_type: SqlScalarType::Int32,
+            })
+            .expect("unnest_map supports WITH ORDINALITY"),
+        )
+        .labeled("keyed"),
     ]
 }
 
