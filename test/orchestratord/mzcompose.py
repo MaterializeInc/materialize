@@ -4009,6 +4009,170 @@ def workflow_failure_events(
     print("workflow_failure_events PASSED")
 
 
+def workflow_recreate_with_last_known_status(
+    c: Composition,
+    parser: WorkflowArgumentParser,
+) -> None:
+    """Test that a recreated Materialize resource takes its resource ID and
+    active generation from the last-known annotations.
+
+    This is what restoring a backup needs: the resource is deleted and
+    recreated on existing data, and it has to come back under the same resource
+    names, on the generation after the one its catalog recorded.
+    """
+    parser.add_argument(
+        "--recreate-cluster",
+        action=argparse.BooleanOptionalAction,
+        help="Recreate cluster if it exists already",
+    )
+    parser.add_argument(
+        "--tag",
+        type=str,
+        help="Custom version tag to use",
+    )
+    parser.add_argument(
+        "--orchestratord-override",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Override orchestratord tag",
+    )
+    args = parser.parse_args()
+
+    resource_id_annotation = "materialize.cloud/last-known-resource-id"
+    generation_annotation = "materialize.cloud/last-known-active-generation"
+    namespace = "materialize-environment"
+
+    def wait_for_generation(generation: int) -> None:
+        def check() -> None:
+            status = get_materialize_status_at_stored_version() or {}
+            conditions = status.get("conditions") or [{}]
+            assert (
+                status.get("activeGeneration") == generation
+                and conditions[0].get("type") == "UpToDate"
+                and conditions[0].get("status") == "True"
+            ), f"Not up to date on generation {generation}: {status}"
+
+        retry(check, 900)
+
+    def resources_named_after(resource_id: str) -> list[str]:
+        names = spawn.capture(
+            [
+                "kubectl",
+                "get",
+                "statefulsets,deployments,services,pods",
+                "-n",
+                namespace,
+                "-o",
+                "name",
+            ]
+        ).split()
+        return [name for name in names if f"/mz{resource_id}-" in name]
+
+    definition = setup(c, args)
+    init(definition)
+    run(definition, False)
+    wait_for_generation(1)
+
+    # Roll out once more. A recreated resource that starts over at generation
+    # 1 would then be fenced out by the catalog.
+    definition["materialize"]["spec"]["environmentdExtraEnv"] = [
+        {"name": "RECREATE_WITH_LAST_KNOWN_STATUS_TEST", "value": "true"},
+    ]
+    definition["materialize"]["spec"]["requestRollout"] = str(uuid.uuid4())
+    apply_materialize(definition)
+    wait_for_generation(2)
+
+    old = get_materialize_at_stored_version()
+    mz_name = old["metadata"]["name"]
+    resource_id = old["status"]["resourceId"]
+    assert resources_named_after(resource_id), "No resources named after the ID"
+    print(f"Resource ID {resource_id} is on generation 2")
+
+    # While the old resource exists, no other resource can take its ID, and it
+    # gets no status.
+    other = {"materialize": copy.deepcopy(definition["materialize"])}
+    other["materialize"]["metadata"]["name"] = "12345678-1234-1234-1234-123456789013"
+    other["materialize"]["metadata"]["annotations"] = {
+        resource_id_annotation: resource_id
+    }
+    kubectl_apply_retrying_webhook(
+        ["kubectl", "apply", "-f", "-"], [other["materialize"]]
+    )
+    note = wait_for_failure_note(other, lambda note: "already uses" in note)
+    print(f"Resource ID {resource_id} was refused: {note}")
+    other_name = other["materialize"]["metadata"]["name"]
+    other_status = json.loads(
+        spawn.capture(
+            [
+                "kubectl",
+                "get",
+                "materializes.v1alpha1.materialize.cloud",
+                other_name,
+                "-n",
+                namespace,
+                "-o",
+                "json",
+            ]
+        )
+    ).get("status")
+    assert other_status is None, other_status
+    spawn.runv(
+        [
+            "kubectl",
+            "delete",
+            "materializes.materialize.cloud",
+            other_name,
+            "-n",
+            namespace,
+            "--wait=true",
+            "--timeout=300s",
+        ]
+    )
+
+    # Delete the resource in the foreground, so that it only goes away once
+    # everything named after its ID has been garbage collected. A background
+    # delete removes the resource first, and a new resource with the same ID
+    # would then apply over the leftovers while they are being deleted.
+    spawn.runv(
+        [
+            "kubectl",
+            "delete",
+            "materializes.materialize.cloud",
+            mz_name,
+            "-n",
+            namespace,
+            "--cascade=foreground",
+            "--wait=true",
+            "--timeout=300s",
+        ]
+    )
+    remaining = resources_named_after(resource_id)
+    assert not remaining, f"Still exist after a foreground delete: {remaining}"
+
+    # Recreate it on the same data, with what its old status held.
+    definition["materialize"]["spec"]["environmentId"] = old["spec"]["environmentId"]
+    definition["materialize"]["metadata"]["annotations"] = {
+        resource_id_annotation: resource_id,
+        generation_annotation: "2",
+    }
+    apply_materialize(definition)
+    wait_for_generation(3)
+
+    new = get_materialize_at_stored_version()
+    assert new["metadata"]["uid"] != old["metadata"]["uid"], "Resource not recreated"
+    assert new["status"]["resourceId"] == resource_id, new["status"]
+
+    def check_environmentd() -> None:
+        pods = get_environmentd_data()["items"]
+        assert len(pods) == 1, [pod["metadata"]["name"] for pod in pods]
+        name = pods[0]["metadata"]["name"]
+        assert name.startswith(f"mz{resource_id}-environmentd-3-"), name
+        assert pods[0]["status"]["phase"] == "Running", pods[0]["status"]
+
+    retry(check_environmentd, 300)
+    print("workflow_recreate_with_last_known_status PASSED")
+
+
 def workflow_manually_promote(
     c: Composition,
     parser: WorkflowArgumentParser,

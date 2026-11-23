@@ -46,6 +46,7 @@ use mz_cloud_resources::crd::{
     ManagedResource,
     balancer::v1alpha1::{Balancer, BalancerSpec},
     console::v1alpha1::{BalancerdRef, Console, ConsoleSpec, HttpConnectionScheme},
+    materialize::LAST_KNOWN_RESOURCE_ID_ANNOTATION,
     materialize::MaterializeRolloutStrategy,
     materialize::v1alpha1::{Materialize, MaterializeStatus},
 };
@@ -332,6 +333,49 @@ impl Context {
 
         Ok(())
     }
+
+    /// Checks that no other Materialize resource uses, or is about to use,
+    /// `resource_id`, the ID that `mz`'s initial status gets. That ID comes
+    /// from `mz`'s [`LAST_KNOWN_RESOURCE_ID_ANNOTATION`] if it has one, and is
+    /// random otherwise.
+    ///
+    /// Resources are named after the resource ID, so two Materialize
+    /// resources sharing one would manage, and tear down, each other's
+    /// resources.
+    async fn check_resource_id_conflicts(
+        &self,
+        client: &Client,
+        mz: &Materialize,
+        resource_id: &str,
+    ) -> Result<(), Error> {
+        let mz_api: Api<Materialize> = Api::all(client.clone());
+        let all_mz = mz_api.list(&ListParams::default()).await?;
+        for existing_mz in &all_mz.items {
+            if existing_mz.metadata.uid == mz.metadata.uid {
+                continue;
+            }
+            // A resource with no status yet takes its ID from its annotation,
+            // so two new resources asking for the same ID both conflict.
+            let existing_resource_id = match &existing_mz.status {
+                Some(status) => Some(status.resource_id.as_str()),
+                None => existing_mz
+                    .annotations()
+                    .get(LAST_KNOWN_RESOURCE_ID_ANNOTATION)
+                    .map(|id| id.as_str()),
+            };
+            if existing_resource_id == Some(resource_id) {
+                return Err(Error::Anyhow(anyhow::anyhow!(
+                    "Materialize resource {}/{} would use resource ID {resource_id}, which Materialize resource {}/{} already uses. If it comes from the {LAST_KNOWN_RESOURCE_ID_ANNOTATION} annotation, delete the old resource first, or remove the annotation to get a new resource ID.",
+                    mz.namespace(),
+                    mz.name_unchecked(),
+                    existing_mz.namespace(),
+                    existing_mz.name_unchecked(),
+                )));
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]
@@ -358,6 +402,8 @@ impl k8s_controller::Context for Context {
         let status = mz.status();
         if mz.status.is_none() {
             let step = metadata.step("initialize_status");
+            self.check_resource_id_conflicts(&client, mz, &status.resource_id)
+                .await?;
             self.update_status(metadata, &mz_api, mz, status, true)
                 .await?;
             step.finish(Outcome::Completed);
