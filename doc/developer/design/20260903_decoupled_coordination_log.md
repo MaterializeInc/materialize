@@ -6,8 +6,7 @@ Finish native-only M3 under the [prompt](20260903_decoupled_coordination_prompt.
 Preserve compatible full writers, explicit retirement, durable protection,
 adapter-owned policy, shared query transport and required formats. Keep the PR draft.
 
-**Next action:** publish the verified repairs and triage the next CI build,
-including the unsupported-upgrade wrapper failure. Measure the controller's
+**Next action:** follow CI after the verified test-lint correction. Measure the controller's
 current cold-open stages before choosing a startup change. Run final-head
 acceptance once after the remaining repairs, not per change.
 
@@ -31,11 +30,12 @@ acceptance once after the remaining repairs, not per change.
 
 ## Outstanding work
 
-- **CI.** [Build 144427](https://buildkite.com/materialize/test/builds/144427)
-  ran runtime jobs and failed. It predates the local repairs listed under
-  verified outcomes. Still failing without a repair: the unsupported-upgrade
-  skip trips the wrapper's empty-service-log check, and the merge check fails
-  on conflicts with main. Inventory: `ci-144427/terminal-failures-research.md`.
+- **CI.** [Build 144487](https://buildkite.com/materialize/test/builds/144487)
+  found formatting and Clippy errors in the sink-status test. Both reproduced
+  locally, and the correction passes `bin/fmt --check` and workspace Clippy.
+  Broad runtime verification remains pending. The unsupported upgrade job is
+  now skipped before its wrapper runs. Merge skew remains an accepted failure
+  on the pinned base. Evidence: `ci-144487/`.
 - **Controller cold startup.** About 18 s of the roughly 20 s is builtin view
   reconstruction, from older captures. Re-measure on current code before
   choosing a change. The replica metadata shortcut cannot supply exact published
@@ -97,6 +97,8 @@ scheduled for 2026-11-23 19:02:53 UTC. Recheck access and extend it.
 
 Scratch worktrees:
 
+- `/home/ubuntu/materialize-m3-final-head`: clean checkout of `788ede24` plus
+  the verified sink-status assertion correction. Workspace Clippy passes here.
 - `/home/ubuntu/materialize-m3-controller-followups`: main worktree, based on
   `8ef1fc1b` with recorded runtime source overlays.
 - `/home/ubuntu/materialize-m3-fixture-checks`: test worktree with the decoder,

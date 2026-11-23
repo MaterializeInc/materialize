@@ -2058,7 +2058,14 @@ async fn sink_status_without_applicable_observation_is_created() {
             let MirRelationExpr::Constant { rows, .. } = view.optimized_expr().as_inner() else {
                 panic!("literal status projection did not evaluate");
             };
-            assert_eq!(rows.as_ref().unwrap(), &vec![(Row::pack_slice(&[Datum::String(expected)]), mz_repr::Diff::ONE)]);
+            let expected_rows = vec![(
+                Row::pack_slice(&[Datum::String(expected)]),
+                mz_repr::Diff::ONE,
+            )];
+            assert_eq!(
+                rows.as_ref().expect("evaluate literal status projection"),
+                &expected_rows,
+            );
         }
         catalog.expire().await;
     }).await;
