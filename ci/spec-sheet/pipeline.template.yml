@@ -126,7 +126,7 @@ steps:
       queue: linux-aarch64-medium
 
   - id: cluster-spec-sheet-ddl-smoke
-    label: "DDL catalog scaling: staging smoke"
+    label: "Cluster spec sheet: DDL catalog scaling smoke (against Staging)"
     timeout_in_minutes: 90
     depends_on: devel-docker-tags
     concurrency: 1
@@ -148,7 +148,7 @@ steps:
       queue: linux-aarch64-medium
 
   - id: cluster-spec-sheet-ddl
-    label: "DDL catalog scaling: 5k, 10k, 30k"
+    label: "Cluster spec sheet: DDL catalog scaling 5k, 10k, 30k (against Staging)"
     timeout_in_minutes: 1440
     depends_on: cluster-spec-sheet-ddl-smoke
     concurrency: 1
