@@ -13,6 +13,7 @@ tests of each SDK package that need a running server.
 """
 
 import os
+import tempfile
 
 from materialize import MZ_ROOT, spawn
 from materialize.mzcompose.composition import Composition
@@ -27,12 +28,44 @@ SERVICES = [
 
 def workflow_default(c: Composition) -> None:
     c.up("materialized")
-    url = (
-        f"host=localhost port={c.default_port('materialized')} "
-        "user=materialize dbname=materialize"
-    )
+    with tempfile.TemporaryDirectory() as state:
+        state_file = os.path.join(state, "restart.json")
+        cargo_test(c, {}, "--skip", "before_a_restart", "--skip", "after_a_restart")
+        phase = {"MATERIALIZE_SDK_RESTART_STATE": state_file}
+        cargo_test(
+            c,
+            {**phase, "MATERIALIZE_SDK_RESTART_PHASE": "before"},
+            "--exact",
+            "before_a_restart",
+        )
+        # A filter that matches no test passes, so check that each phase ran.
+        assert os.path.exists(state_file), "the first restart phase did not run"
+        c.kill("materialized")
+        c.up("materialized")
+        cargo_test(
+            c,
+            {**phase, "MATERIALIZE_SDK_RESTART_PHASE": "after"},
+            "--exact",
+            "after_a_restart",
+        )
+        assert not os.path.exists(state_file), "the second restart phase did not run"
+
+
+def cargo_test(c: Composition, env: dict[str, str], *filters: str) -> None:
+    """Runs the ignored tests that match `filters`. The ports are looked up on
+    each run, because a restart can change them."""
+    url = "host=localhost port={} user={} dbname=materialize"
     spawn.runv(
-        ["cargo", "test", "--locked", "--", "--ignored"],
+        ["cargo", "test", "--locked", "--tests", "--", "--ignored", *filters],
         cwd=MZ_ROOT / "misc" / "materialize-sdk",
-        env={**os.environ, "MATERIALIZE_URL": url},
+        env={
+            **os.environ,
+            "MATERIALIZE_URL": url.format(
+                c.default_port("materialized"), "materialize"
+            ),
+            "MATERIALIZE_SYSTEM_URL": url.format(
+                c.port("materialized", 6877), "mz_system"
+            ),
+            **env,
+        },
     )

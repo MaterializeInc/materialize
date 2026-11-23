@@ -17,7 +17,9 @@ cargo clippy --all-targets -- -D warnings
 ```
 
 The Rust package's integration tests need a running Materialize. The nightly
-pipeline runs them through `test/materialize-sdk`. From the repository root:
+pipeline runs them through `test/materialize-sdk`, which also restarts
+Materialize between the two phases of the restart test. From the repository
+root:
 
 ```
 bin/mzcompose --find materialize-sdk run default
@@ -32,10 +34,12 @@ ALTER SYSTEM SET enable_logical_compaction_window = true;
 ALTER SYSTEM SET enable_alter_table_add_column = true;
 ```
 
-Then run the tests from `misc/materialize-sdk`:
+Then run the tests from `misc/materialize-sdk`, skipping the restart phases:
 
 ```
-MATERIALIZE_URL="host=localhost port=6875 user=materialize" cargo test -- --ignored
+MATERIALIZE_URL="host=localhost port=6875 user=materialize" \
+MATERIALIZE_SYSTEM_URL="host=localhost port=6877 user=mz_system" \
+cargo test --tests -- --ignored --skip before_a_restart --skip after_a_restart
 ```
 
 `bin/fmt` formats it with the rest of the repository.
