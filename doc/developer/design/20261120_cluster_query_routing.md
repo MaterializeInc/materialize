@@ -119,22 +119,32 @@ until the peek finishes, whichever replica serves it.
 
 ### Replica choice
 
-The controller will choose round-robin among, in order of preference:
+The controller will choose round-robin among the replicas that host every
+input of the read and whose write frontier for each input is already past
+the read time.
 
-1. replicas that host every input and whose write frontier for each input is
-   already past the read time,
-2. if there are none, any replica that hosts every input,
-3. if there are none, any replica.
+If no replica qualifies, the read will go to every replica, exactly as
+under `BROADCAST`, and the first replica to catch up will answer. This is
+the case while replicas hydrate, after a restart or a `CREATE INDEX`, and
+whenever every replica lags the read time. Today any hydrated replica can
+answer a read, because the first response wins. Falling back to broadcast
+keeps that property: a read never waits on a hydrating or lagging replica
+when another replica could answer it. The cost is broadcast's cost, paid
+only while no replica is caught up.
 
-The first tier keeps reads off replicas that are hydrating, restarting, or
-lagging, without a separate health signal. A replica stuck while still
-connected, for example deep in swap, drops out of the first tier only while
-another replica is ahead of it. See Open questions.
+A read that no replica hosts an input for, such as a persist fast-path read
+of a table without an index, has nothing to catch up on and will go to any
+replica.
+
+The choice is made once, when the read is issued. A replica that falls
+behind after a read was sent to it still holds that read. See Open
+questions.
 
 ### Failure handling
 
 When a replica is dropped or disconnects, the controller will re-send its
-in-flight balanced fast-path peeks to a replica chosen by the same rule.
+in-flight balanced fast-path peeks by the same rule, to one replica or, if
+none is caught up, to all of them.
 This is safe because every replica hosts the peeked collection. Under
 #38857, peeks that target a removed replica are finished with an error. The
 re-send will run before that cleanup, and only for peeks whose target the
@@ -153,9 +163,9 @@ reads.
 | Goal | Under `BALANCED` |
 |---|---|
 | Mask rehydration time after a replica crash | Kept. Every replica still hydrates every index and materialized view. |
-| (a) Resize by adding and dropping replicas | Kept. A new replica starts receiving reads once its frontiers pass the read time. |
+| (a) Resize by adding and dropping replicas | Kept. A new replica starts receiving reads once its frontiers pass the read time. Until any replica is caught up, reads are broadcast. |
 | (b) Mask a partition or slow network link to some replicas | Partly kept. A disconnect moves in-flight fast-path reads to another replica. A slow link that does not disconnect delays the reads sent over it. |
-| (c) Mask slow processing on some replicas | Given up for reads. Under broadcast the first response wins, so a slow replica costs nothing. Under `BALANCED`, a read sent to a slow replica waits for it. The readiness tier covers slowness that shows as frontier lag, but not a replica that is current and slow. |
+| (c) Mask slow processing on some replicas | Given up for reads. Under broadcast the first response wins, so a slow replica costs nothing. Under `BALANCED`, a read sent to a slow replica waits for it. Replica choice skips replicas whose slowness shows as frontier lag, and broadcasts when no replica is caught up, but it does not skip a replica that is current and slow. |
 
 The reference doc also states that a replica which applies the full history
 reaches the same state as every other replica. Replica targeting already
@@ -303,7 +313,7 @@ expensive reads stall one replica and the other sessions on that replica,
 while round-robin lets one session reach every replica in turn. It balances
 poorly when a few connections carry most of the traffic, as with the
 connection pool of an application server.
-Any hash also has to respect the readiness tier, so it has to be computed
+Any hash also has to respect replica choice, so it has to be computed
 over the replicas that are currently ready. A rendezvous hash keeps most
 sessions on their replica when that set changes.
 
@@ -336,9 +346,9 @@ time grows with the replica.
 
 ## Open questions
 
-- How should the controller handle a replica that is stuck but connected?
-  Candidates are excluding replicas that lag the most advanced replica by
-  more than a bound, and re-sending peeks that are pending past a timeout.
+- How should the controller handle a read whose replica falls behind or
+  gets stuck after the read was sent to it? Re-sending peeks that are
+  pending past a timeout is the candidate.
   This interacts with CPU-333, where a non-yielding operator keeps a replica
   busy after the read is cancelled.
 - Should slow-path reads move to another replica when theirs fails, and
