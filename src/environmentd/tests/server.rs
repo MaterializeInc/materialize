@@ -8767,3 +8767,106 @@ fn test_cluster_labeled_metrics_are_removed_at_zero_replicas() {
         );
     }
 }
+
+/// With `--unsafe-pinned-plans-dir`, indexes and materialized views run their
+/// pinned plans after a restart, even when the optimizer would now plan them
+/// differently. Here the difference is an index on `t1` created after the
+/// items, which replanning at boot picks up.
+///
+/// Within one build, items are only replanned at boot when the optimizer
+/// features differ from their cached plans', so the restart changes
+/// `persist_fast_path_limit`, which affects no index or materialized view
+/// plan. The `control` view, whose pin is deleted, checks that the restart
+/// replanned: otherwise the pinned items would keep their plans regardless.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_pinned_plans_dir() {
+    let data_dir = tempfile::tempdir().unwrap();
+    let pins_dir = tempfile::tempdir().unwrap();
+    let harness = test_util::TestHarness::default()
+        .unsafe_mode()
+        .data_directory(data_dir.path())
+        .with_pinned_plans_dir(pins_dir.path());
+    let join = "SELECT t1.a FROM t1 JOIN t2 ON t1.a = t2.a";
+    let global_id = |client: &mut postgres::Client, name: &str| -> String {
+        client
+            .query_one(
+                "SELECT g.global_id
+                 FROM mz_internal.mz_object_global_ids g JOIN mz_objects o ON g.id = o.id
+                 WHERE o.name = $1",
+                &[&name],
+            )
+            .unwrap()
+            .get(0)
+    };
+    let explain = |client: &mut postgres::Client, item: &str| -> String {
+        client
+            .query_one(&format!("EXPLAIN PHYSICAL PLAN FOR {item}"), &[])
+            .unwrap()
+            .get(0)
+    };
+    let pin_file = |id: &str| pins_dir.path().join(format!("{id}.json"));
+
+    let (mv, idx) = {
+        let server = harness.clone().start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        for statement in [
+            "CREATE TABLE t1 (a int)",
+            "CREATE TABLE t2 (a int)",
+            "INSERT INTO t1 VALUES (1), (2)",
+            "INSERT INTO t2 VALUES (2)",
+            &format!("CREATE MATERIALIZED VIEW mv AS {join}"),
+            &format!("CREATE MATERIALIZED VIEW control AS {join}"),
+            &format!("CREATE VIEW v AS {join}"),
+            "CREATE INDEX idx ON v (a)",
+            "CREATE MATERIALIZED VIEW builtin_mv AS SELECT count(*) FROM mz_tables",
+            "CREATE INDEX t1_a ON t1 (a)",
+        ] {
+            client.batch_execute(statement).unwrap();
+        }
+        let mv = global_id(&mut client, "mv");
+        let idx = global_id(&mut client, "idx");
+        let control = global_id(&mut client, "control");
+        let builtin_mv = global_id(&mut client, "builtin_mv");
+        assert!(pin_file(&mv).exists(), "creating {mv} pinned it");
+        assert!(pin_file(&idx).exists(), "creating {idx} pinned it");
+        assert!(
+            !pin_file(&builtin_mv).exists(),
+            "{builtin_mv} reads a builtin"
+        );
+        std::fs::remove_file(pin_file(&control)).unwrap();
+        (mv, idx)
+    };
+
+    let server = harness
+        .with_system_parameter_default("persist_fast_path_limit".into(), "26".into())
+        .start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    let plan = explain(&mut client, "MATERIALIZED VIEW control");
+    assert!(
+        plan.contains("t1_a"),
+        "the restart replanned the unpinned control, which now uses the newer index:\n{plan}"
+    );
+    for item in ["MATERIALIZED VIEW mv", "INDEX idx"] {
+        let plan = explain(&mut client, item);
+        assert!(
+            !plan.contains("t1_a"),
+            "{item} kept its pinned plan, which predates the index:\n{plan}"
+        );
+    }
+    client.batch_execute("INSERT INTO t2 VALUES (1)").unwrap();
+    for (relation, id) in [("mv", &mv), ("v", &idx)] {
+        let rows: Vec<i32> = client
+            .query(&format!("SELECT a FROM {relation} ORDER BY a"), &[])
+            .unwrap()
+            .iter()
+            .map(|row| row.get(0))
+            .collect();
+        assert_eq!(
+            rows,
+            [1, 2],
+            "{relation} ({id}) runs its pinned plan, including on new input"
+        );
+    }
+}

@@ -738,7 +738,7 @@ impl Coordinator {
         // isn't shown confusing notices about an item that wasn't actually
         // created.
         let output_desc = global_lir_plan.desc().clone();
-        let (mut df_desc, raw_df_meta) = global_lir_plan.unapply();
+        let (df_desc, raw_df_meta) = global_lir_plan.unapply();
         let df_meta = {
             let system_catalog = self.catalog().for_system_session();
             let full_name = self.catalog().resolve_full_name(&name, None);
@@ -776,6 +776,7 @@ impl Coordinator {
         let transact_result = self
             .catalog_transact_with_side_effects(Some(ctx), ops, move |coord, _ctx| {
                 Box::pin(async move {
+                    let mut df_desc = coord.pinned_or_fresh_plan(global_id, df_desc);
                     // Save plan structures.
                     coord
                         .catalog_mut()

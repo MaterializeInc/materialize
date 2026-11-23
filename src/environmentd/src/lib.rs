@@ -234,6 +234,8 @@ pub struct Config {
     pub force_builtin_schema_migration: Option<String>,
     /// See [`BootstrapArgs::force_catalog_migration`].
     pub force_catalog_migration: bool,
+    /// See [`mz_adapter::Config::pinned_plans_dir`].
+    pub pinned_plans_dir: Option<PathBuf>,
 }
 
 /// Configuration for the Catalog.
@@ -834,6 +836,7 @@ impl Listeners {
             license_key: config.license_key,
             external_login_password_mz_system: config.external_login_password_mz_system,
             force_builtin_schema_migration: config.force_builtin_schema_migration,
+            pinned_plans_dir: config.pinned_plans_dir,
         })
         .instrument(info_span!("adapter::serve"))
         .await?;
