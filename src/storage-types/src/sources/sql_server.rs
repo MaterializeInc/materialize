@@ -51,6 +51,14 @@ pub const SNAPSHOT_PROGRESS_REPORT_INTERVAL: Config<Duration> = Config::new(
     ParameterScope::Replica,
 );
 
+pub const SNAPSHOT_LOCK_WAIT_TIMEOUT: Config<Duration> = Config::new(
+    "sql_server_snapshot_lock_wait_timeout",
+    Duration::from_secs(60 * 60),
+    "Maximum amount of time a snapshot waits for each upstream table lock. A snapshot that \
+    times out fails and is retried.",
+    ParameterScope::Replica,
+);
+
 pub const CDC_CLEANUP_CHANGE_TABLE: Config<bool> = Config::new(
     "sql_server_cdc_cleanup_change_table",
     false,

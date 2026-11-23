@@ -350,17 +350,16 @@ impl Client {
     /// `capture_instances`.
     ///
     /// [`CdcStream`]: crate::cdc::CdcStream
-    pub fn cdc<I, M>(&mut self, capture_instances: I, metrics: M) -> crate::cdc::CdcStream<'_, M>
+    pub fn cdc<I>(&mut self, capture_instances: I) -> crate::cdc::CdcStream<'_>
     where
         I: IntoIterator,
         I::Item: Into<Arc<str>>,
-        M: SqlServerCdcMetrics,
     {
         let instances = capture_instances
             .into_iter()
             .map(|i| (i.into(), None))
             .collect();
-        crate::cdc::CdcStream::new(self, instances, metrics)
+        crate::cdc::CdcStream::new(self, instances)
     }
 }
 
