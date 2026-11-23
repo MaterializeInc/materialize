@@ -92,9 +92,9 @@ impl Coordinator {
             return plan;
         };
 
-        // NOTE: Every failure past this point panics. Falling back to the
-        // fresh plan would let a test that expects to run the stored plan
-        // pass without running it.
+        // NOTE: Every unexpected failure past this point panics. Falling back
+        // to the fresh plan would let a test that expects to run the stored
+        // plan pass without running it.
         if let Some(pinned) = files.load(id) {
             let ctx = CatalogInstantiationContext {
                 catalog: self.catalog().state(),
