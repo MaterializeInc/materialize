@@ -43,6 +43,7 @@ uuid = { workspace = true, features = ["serde", "v4"] }
 async-trait.workspace = true
 bincode.workspace = true
 futures.workspace = true
+proptest.workspace = true
 
 [features]
 default = []
