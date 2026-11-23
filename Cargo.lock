@@ -633,18 +633,12 @@ dependencies = [
 
 [[package]]
 name = "asyncband"
-version = "0.7.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f2d85fd3d291fabcc40c7232c92c280ec1754fd7b5d7ea769f143222143e179a"
-dependencies = [
- "hashbrown 0.17.1",
-]
-
-[[package]]
-name = "asyncband"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e53c31fb18f42e765610b2146531390e56966f601d8ffca530d292a34fe4218"
+dependencies = [
+ "hashbrown 0.17.1",
+]
 
 [[package]]
 name = "asynchronous-codec"
@@ -7316,7 +7310,7 @@ dependencies = [
  "mz-sql-parser",
  "mz-storage-types",
  "mz-tracing",
- "nix 0.32.0",
+ "nix 0.31.4",
  "num_cpus",
  "openssl",
  "openssl-sys",
@@ -7678,7 +7672,7 @@ dependencies = [
  "libc",
  "mz-dyncfg",
  "mz-ore",
- "nix 0.32.0",
+ "nix 0.31.4",
  "paste",
  "prometheus",
  "thiserror 2.0.21",
@@ -7822,7 +7816,7 @@ dependencies = [
  "mz-ore",
  "mz-repr",
  "mz-secrets",
- "nix 0.32.0",
+ "nix 0.31.4",
  "scopeguard",
  "serde",
  "serde_json",
@@ -9410,21 +9404,9 @@ dependencies = [
 
 [[package]]
 name = "nix"
-version = "0.31.3"
+version = "0.31.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf20d2fde8ff38632c426f1165ed7436270b44f199fc55284c38276f9db47c3d"
-dependencies = [
- "bitflags 2.13.2",
- "cfg-if",
- "cfg_aliases",
- "libc",
-]
-
-[[package]]
-name = "nix"
-version = "0.32.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77730ed34f01f4990cb2ea67fec715ecebc6fab9a6396cf83c5529b13f581bdc"
+checksum = "2bc81ce8148d3b4f3274da811f11cdd824ae661ee4ef732cdb229825cf5be7f7"
 dependencies = [
  "bitflags 2.13.2",
  "cfg-if",
@@ -10261,7 +10243,7 @@ checksum = "9cf20a545b305cf1da722b236b5155c9bb35f1d5ceb28c048bd96ca842f41b5b"
 dependencies = [
  "android_system_properties",
  "log",
- "nix 0.31.3",
+ "nix 0.31.4",
  "objc2",
  "objc2-foundation",
  "objc2-ui-kit",
@@ -11741,12 +11723,12 @@ dependencies = [
 
 [[package]]
 name = "reqsign-azure-storage"
-version = "3.3.0"
+version = "3.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7260e6c1d89422ba62d624a32c491b561386fb364ac4bf0959c740e34b251a2e"
+checksum = "cd2821e751de92f75df704aed0039ca43f8a21c8635021c4727898369274fb05"
 dependencies = [
  "anyhow",
- "asyncband 0.7.2",
+ "asyncband 0.8.0",
  "base64 0.23.1",
  "bytes",
  "form_urlencoded",
@@ -15308,7 +15290,7 @@ dependencies = [
  "indexmap 2.14.2",
  "libc",
  "memchr",
- "nix 0.32.0",
+ "nix 0.31.4",
  "typed-path",
  "windows-sys 0.61.2",
  "zeroize",
