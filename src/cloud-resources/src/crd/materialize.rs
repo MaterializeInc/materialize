@@ -42,12 +42,10 @@ pub const LAST_KNOWN_ACTIVE_GENERATION_ANNOTATION: &str =
 /// recreated on existing data, for example after a restore, keeps the names of
 /// the resource it replaces.
 ///
-/// The operator refuses an ID that another Materialize resource still has. So
-/// delete the old resource with `--cascade=foreground`: it then stays until
-/// Kubernetes has deleted everything named after its ID, and the new resource
-/// can't start until that's done. With the default background deletion, the
-/// old resource disappears at once, and the new one would reuse names that
-/// Kubernetes is still deleting.
+/// The operator refuses an ID that another Materialize resource still has.
+/// The prior resource must be entirely cleaned up (`--cascade=foreground`)
+/// before redeploying. Otherwise, you may hit collisions with resources that
+/// are actively being deleted.
 pub const LAST_KNOWN_RESOURCE_ID_ANNOTATION: &str = "materialize.cloud/last-known-resource-id";
 pub const FORCE_ROLLOUT_ANNOTATION: &str = "materialize.cloud/force-rollout";
 
