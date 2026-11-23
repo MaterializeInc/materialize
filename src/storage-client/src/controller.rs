@@ -578,10 +578,10 @@ pub trait StorageController: Debug {
         expected_version: RelationVersion,
     ) -> Result<(), StorageError>;
 
-    /// Registers the `DataSource::Table` collections among `ids` during bootstrap.
+    /// Registers migrated `DataSource::Table` collections during read-only bootstrap.
     ///
-    /// Runtime registration must go through the adapter's group committer. In read-only mode, only
-    /// migrated tables are registered.
+    /// All read-write registration (including bootstrap) must go through the adapter's group
+    /// committer so it checks the catalog fence and retries txns-shard upper conflicts.
     async fn register_table_collections(
         &mut self,
         register_ts: Timestamp,
@@ -687,10 +687,10 @@ pub trait StorageController: Debug {
         identifiers: Vec<GlobalId>,
     ) -> Result<(), StorageError>;
 
-    /// Appends to tables during bootstrap.
+    /// Appends to migrated builtin tables during read-only bootstrap.
     ///
-    /// Runtime writes must go through the adapter's group committer. The returned receiver resolves
-    /// when the atomic write completes.
+    /// All read-write writes (including bootstrap) must go through the adapter's group committer.
+    /// The returned receiver resolves when the atomic write completes.
     fn append_table(
         &mut self,
         write_ts: Timestamp,

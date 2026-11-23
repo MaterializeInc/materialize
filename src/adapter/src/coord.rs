@@ -167,7 +167,7 @@ use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::sinks::{S3SinkFormat, StorageSinkDesc};
 use mz_storage_types::sources::kafka::KAFKA_PROGRESS_DESC;
 use mz_storage_types::sources::{IngestionDescription, SourceExport, Timeline};
-use mz_timestamp_oracle::{TimestampOracleConfig, WriteTimestamp};
+use mz_timestamp_oracle::TimestampOracleConfig;
 use mz_transform::dataflow::DataflowMetainfo;
 use opentelemetry::trace::TraceContextExt;
 use semver::Version;
@@ -2938,26 +2938,15 @@ impl Coordinator {
             })
             .collect();
 
-        // Append empty batches to advance the timestamp of all tables.
+        // Advance all table uppers through the group committer so this barrier
+        // checks the catalog fence before touching txns and retries upper
+        // conflicts against a fenced generation still finishing bootstrap.
         debug!("coordinator init: advancing all tables to current timestamp");
-        let WriteTimestamp {
-            timestamp: write_ts,
-            advance_to,
-        } = self.get_local_write_ts().await;
-        let appends = table_metas
-            .iter()
-            .map(|meta| (meta.table.global_id_writes(), Vec::new()))
-            .collect();
-        // Append the tables in the background. We apply the write timestamp before getting a read
-        // timestamp and reading a snapshot of each table, so the snapshots will block on their own
-        // until the appends are complete.
-        let table_fence_rx = self
-            .controller
-            .storage
-            .append_table(write_ts.clone(), advance_to, appends)
-            .expect("invalid updates");
-
-        self.apply_local_write(write_ts).await;
+        assert!(
+            self.pending_writes.is_empty(),
+            "no pending writes before bootstrap_tables barrier"
+        );
+        self.builtin_table_update().execute(Vec::new()).await;
 
         // Add builtin table updates the clear the contents of all system tables
         debug!("coordinator init: resetting system tables");
@@ -3025,12 +3014,6 @@ impl Coordinator {
         for retractions in retractions_res {
             builtin_table_updates.push(retractions);
         }
-
-        // Now that the snapshots are complete, the appends must also be complete.
-        table_fence_rx
-            .await
-            .expect("One-shot shouldn't be dropped during bootstrap")
-            .unwrap_or_terminate("cannot fail to append");
 
         info!("coordinator init: sending builtin table updates");
         let builtin_updates_fut = self.builtin_table_update().execute(builtin_table_updates);
@@ -3370,14 +3353,26 @@ impl Coordinator {
         }
 
         // Register txn-wal tables before the later system-table snapshot.
-        self.controller
-            .storage
-            .register_table_collections(register_ts, created_gids)
-            .await
-            .unwrap_or_terminate("cannot fail to register tables");
-
-        if !self.controller.read_only() {
-            self.apply_local_write(register_ts).await;
+        if self.controller.read_only() {
+            self.controller
+                .storage
+                .register_table_collections(register_ts, created_gids)
+                .await
+                .unwrap_or_terminate("cannot fail to register tables");
+        } else {
+            let registrations = self
+                .controller
+                .storage
+                .table_registrations(created_gids)
+                .unwrap_or_terminate("cannot fail to look up table registrations");
+            if registrations.is_empty() {
+                self.apply_local_write(register_ts).await;
+            } else {
+                // Route through the group committer so registration checks the
+                // catalog fence and retries txns-shard upper conflicts (for
+                // example when a fenced generation is still finishing bootstrap).
+                self.register_tables_via_committer(registrations).await;
+            }
         }
     }
 

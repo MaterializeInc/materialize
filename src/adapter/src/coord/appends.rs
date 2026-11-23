@@ -1499,4 +1499,63 @@ mod tests {
         })
         .await;
     }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn test_register_cmd_retries_invalid_uppers() {
+        Catalog::with_debug(|catalog| async move {
+            let initial_upper = catalog.current_upper().await;
+            let oracle = Arc::new(MemTimestampOracle::starting_at(initial_upper));
+            let handle = Arc::new(ConflictingTableWriteHandle::new(1));
+            let oracle_dyn: Arc<dyn TimestampOracle<Timestamp> + Send + Sync> =
+                Arc::<MemTimestampOracle>::clone(&oracle);
+            let handle_dyn: Arc<dyn TableWriteHandle> =
+                Arc::<ConflictingTableWriteHandle>::clone(&handle);
+            let (tx, rx) = mpsc::unbounded_channel();
+            let (internal_cmd_tx, _internal_cmd_rx) = mpsc::unbounded_channel();
+            let committer = GroupCommitter {
+                rx,
+                oracle: oracle_dyn,
+                table_write_handle: handle_dyn,
+                catalog_upper: catalog.upper_handle(),
+                internal_cmd_tx,
+                now: SYSTEM_TIME.clone(),
+                metrics: Metrics::register_into(&MetricsRegistry::new()),
+                max_attempts: ConfigValHandle::disconnected(2),
+            };
+            let task = task::spawn(|| "test_group_committer", committer.run());
+
+            let (result_tx, result_rx) = oneshot::channel();
+            tx.send(TableWriteCmd::Register {
+                tables: Vec::new(),
+                result: result_tx,
+            })
+            .expect("committer alive");
+            let registered_ts = result_rx.await.expect("register completed");
+
+            drop(tx);
+            task.await;
+
+            let attempts = handle
+                .write_timestamps
+                .lock()
+                .expect("lock poisoned")
+                .clone();
+            assert_eq!(attempts.len(), 2, "one conflict, one success");
+            assert!(
+                attempts[0] < attempts[1],
+                "retry must use a fresh, larger timestamp: {attempts:?}"
+            );
+            assert_eq!(registered_ts, attempts[1]);
+            assert_eq!(oracle.apply_writes.load(Ordering::SeqCst), 1);
+            assert_eq!(oracle.read_ts().await, registered_ts);
+            assert!(
+                catalog.current_upper().await >= registered_ts.step_forward(),
+                "catalog upper must advance past registration timestamp"
+            );
+
+            catalog.expire().await;
+        })
+        .await;
+    }
 }
