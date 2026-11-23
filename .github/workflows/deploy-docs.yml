@@ -31,7 +31,7 @@ permissions: {}
 jobs:
   lint:
     name: Lint docs
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     permissions:
       contents: read # check out the repository
@@ -45,7 +45,7 @@ jobs:
   deploy:
     name: Deploy docs
     needs: lint
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     # Restricted to main; the AWS role trusts only this environment.
     environment: docs-production
