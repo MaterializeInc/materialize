@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 # CA bundle for apt's HTTPS transport, before ca-certificates is installed.
-FROM gcr.io/distroless/cc-debian13:debug-nonroot@sha256:7de8839a160a71a27345cc21929f1403099579b907bddd2d05f6816ee385a2c6 AS ca-certs
+FROM gcr.io/distroless/cc-debian13:debug-nonroot@sha256:bdb634669ffbf44cdfef9495238b03ce33a02e9ef631fc718b7dd6d2531f4325 AS ca-certs
 
 FROM golang:1.27.4@sha256:205c7636d74e0ffbe3d007162df7d74f859f5a8c8322dfb9f907977686c126cf AS builder
 # Fetch apt sources over HTTPS only.

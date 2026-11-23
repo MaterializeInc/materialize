@@ -15,7 +15,7 @@ MZFROM console AS console
 MZFROM openssh-static AS openssh-static
 
 # CA bundle for apt's HTTPS transport, before ca-certificates is installed.
-FROM gcr.io/distroless/cc-debian13:debug-nonroot@sha256:7de8839a160a71a27345cc21929f1403099579b907bddd2d05f6816ee385a2c6 AS ca-certs
+FROM gcr.io/distroless/cc-debian13:debug-nonroot@sha256:bdb634669ffbf44cdfef9495238b03ce33a02e9ef631fc718b7dd6d2531f4325 AS ca-certs
 
 # In production, we use distroless images based on Debian 13.
 # We retain apt and install more packages in this image for development.

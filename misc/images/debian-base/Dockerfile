@@ -10,7 +10,7 @@
 # The CA bundle comes from this pinned image, so certificate updates arrive
 # only through Renovate's digest bumps of it. Only the bundle is copied, since
 # the `ca-certificates` package depends on the `openssl` CLI.
-FROM gcr.io/distroless/cc-debian13:debug-nonroot@sha256:7de8839a160a71a27345cc21929f1403099579b907bddd2d05f6816ee385a2c6 AS ca-certs
+FROM gcr.io/distroless/cc-debian13:debug-nonroot@sha256:bdb634669ffbf44cdfef9495238b03ce33a02e9ef631fc718b7dd6d2531f4325 AS ca-certs
 
 FROM debian:13-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
 
