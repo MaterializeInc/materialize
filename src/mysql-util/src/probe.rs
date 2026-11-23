@@ -1079,10 +1079,13 @@ pub(crate) mod tests {
         // MySQL collation names start with their character set's name, so
         // the charset is pinned explicitly without a second parameter.
         let charset = collation.split('_').next().expect("nonempty collation");
+        // NOTE: With automatic recalculation on, a 1,005-row table was observed with
+        // a persisted row count of 31 after the `ANALYZE TABLE` below.
         #[allow(clippy::disallowed_methods)]
         conn.query_drop(format!(
             "CREATE TABLE {db}.t (id VARCHAR(36) CHARACTER SET {charset} \
-             COLLATE {collation} PRIMARY KEY NOT NULL)"
+             COLLATE {collation} PRIMARY KEY NOT NULL) \
+             STATS_AUTO_RECALC=0, STATS_PERSISTENT=1"
         ))
         .await?;
 
