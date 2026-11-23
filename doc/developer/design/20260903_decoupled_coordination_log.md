@@ -6,9 +6,11 @@ Finish native-only M3 under the [prompt](20260903_decoupled_coordination_prompt.
 Preserve compatible full writers, explicit retirement, durable protection,
 adapter-owned policy, shared query transport and required formats. Keep the PR draft.
 
-**Next action:** run final-head native acceptance with uninstrumented binaries.
-CI runtime jobs need the pubsubd image repository made public by team-testing.
-Keep the measured startup optimization proposals separate from acceptance.
+**Next action:** finish the active scheduled-MV acceptance run. The other current
+native workflows and repaired catalog-completion fixture passed. The proposed
+ALTER SINK overlap-acquisition repair awaits approval. Its read-floor difference
+is confirmed by source, but is not yet tied to the CI timeout. Keep startup
+optimization proposals separate.
 
 ## Decisions in force
 
@@ -30,22 +32,22 @@ Keep the measured startup optimization proposals separate from acceptance.
 
 ## Outstanding work
 
-- **CI.** [Build 144489](https://buildkite.com/materialize/test/builds/144489)
-  passes formatting and Clippy. The x86 build fails because `materialize/pubsubd`
-  is not public on Docker Hub, leaving dependent runtime jobs unrun. Aljoscha
-  has been asked to arrange registry provisioning. Do not bypass the check or
-  change registry visibility without approval. The unsupported upgrade job is
-  skipped. Merge skew remains an accepted pinned-base failure. Evidence:
-  `ci-144489/`.
+- **CI.** [Build 144492](https://buildkite.com/materialize/test/builds/144492)
+  ran runtime integration. The registry blocker is resolved. The stale Rust
+  expectation reproduced locally and its test-only repair passes, with fresh CI
+  still required. A parallel platform check times out waiting for Iceberg sink
+  progress before the catalog write. Actual sink lag versus observation failure
+  remains unresolved. See `ci-144492/triage.md` and `alter-sink-read-floor.md`
+  there. Merge skew remains accepted.
 - **Startup proposal.** Current debug cold startup reaches controller HTTP in
   19.81 s and SQL in 48.96 s. Ordinary builtin optimization costs about 15 CPU-s,
   mostly logical optimization. Exact metadata rules out simply enabling replica
   deferral on the controller. Paired cache publication could avoid duplicate
   adapter work, but needs compatibility and startup-order decisions. No such
   change is approved. See `current-controller-startup-outcome.md`.
-- **Final-head acceptance** after the above: lifecycle, DDL and combined
-  ingestion, adapter loss, subscriptions, 60s four-index, scheduled-MV suites
-  and the version-pair walkthrough.
+- **Remaining acceptance:** scheduled-MV suites are active on pinned debug
+  artifacts. No build overlaps them. The focused Rust repair retains successful
+  creation, zero reallocation and all existing deadlines.
 - **Two unexplained events.** A walkthrough run stopped on the resource guard
   and passed on rerun. A probe shows a guard weakness but not the original
   process. The scheduled-MV suite failed once intermittently. A recurrence of
@@ -53,36 +55,21 @@ Keep the measured startup optimization proposals separate from acceptance.
 
 ## Verified outcomes
 
-Runtime implementation `8ef1fc1b` passed the distinct-package-version
-walkthrough, scheduled-MV suites, DDL with combined ingestion, adapter loss,
-subscription identity and the 60s four-index workflow. PostgreSQL, MySQL and
-SQL Server handover passed with live predecessors and forced reconnects, at
-reduced input volume. The version pair shares source and plan encoding. It is
-not release-skew coverage. Outcomes and limits:
-`final-native-{lifecycle,ddl,adapter-loss,subscriptions,four-index}-outcome.md`
-and `final-cdc-evidence/`.
+Implementation `c1b310c5` passed the default-debug two-version walkthrough,
+DDL with combined ingestion, adapter loss, subscription identity and the 60s
+four-index workflow. Both versions wrote before and after promotion, with warmed
+execution and surviving protection preserved. Retired reopening was rejected.
+The pair shares implementation and plan encoding, not arbitrary-release
+compatibility. DDL used a stricter resource split, so do not compare its timing
+with earlier container runs. Other container runs retained the original caps.
+Evidence: `current-native-acceptance/`.
 
-Committed since that implementation, with targeted checks:
-
-- Fixed-refresh creation retains its snapshot across unrelated DDL and rejects
-  changed dependencies, namespaces and privileges. The two-adapter regression
-  passes with the repair and fails without it. See `fixed-refresh-outcome.md`.
-- Sink status reports `created` when no observation applies.
-- Status-history coverage is split: exactly the latest five rows survive a
-  prune, and a restart delivers `starting` and `running`. No production change.
-- Shard-lookup decoding keeps its guard in the stored view. `tables.td` passes.
-- Replica removal before startup registration returns the typed error.
-- Catalog, cluster and SRF expectations match the native builtin inventory.
-- The unreleased v97 catalog snapshot is current. Older snapshots are untouched.
-- Dependency, refresh and shard rows derive from durable state. Startup pruning
-  and storage-usage collection write conditionally.
-- Replicas defer builtin view optimization outside required schema closures.
-  Matched debug runs: replica startup CPU 91.5 to 43.8 CPU-seconds, fresh
-  serving 54.6 to 50.5 s. See `replica-startup-comparison.md`.
-
-Candidate Persist outputs stay non-writing until promotion. Temporary ownership
-is checked durably before promotion and through SQL afterward. Debug upsert OOM
-also reproduces on the pinned base.
+Targeted checks cover fixed-refresh snapshot retention and current privilege
+validation, conditional shared maintenance, catalog-derived introspection,
+status-history retention and replica reconstruction. Earlier connector handover
+runs kept predecessors live and forced reconnects, at reduced input volume.
+Detailed outcomes: `fixed-refresh-outcome.md`, `final-cdc-evidence/`,
+`replica-startup-comparison.md` and `native-final-bounded-audit.md`.
 
 ## Machines and evidence
 
@@ -100,10 +87,10 @@ Scratch worktrees:
 
 - `/home/ubuntu/materialize-m3-final-head`: clean checkout of `c1b310c5`.
   The profiling overlay is restored and its runtimes and containers removed.
-  Uninstrumented current-head binaries are in
-  `current-controller-baseline/artifacts/` under the evidence root. The shared
-  Cargo target contains diagnostic binaries until rebuilt. Do not use those
-  for acceptance.
+  Current primary binaries are in `current-controller-baseline/artifacts/`.
+  The verified version pair is in
+  `current-native-acceptance/native-compatible-frontier-current/artifacts/`.
+  Use their manifests, not the shared Cargo target, for acceptance.
 - `/home/ubuntu/materialize-m3-controller-followups`: main worktree, based on
   `8ef1fc1b` with recorded runtime source overlays.
 - `/home/ubuntu/materialize-m3-fixture-checks`: test worktree with the decoder,
