@@ -279,17 +279,21 @@ impl crate::coord::Coordinator {
             .set_read_policies(policies);
     }
 
-    /// Acquire request-scoped durable protection at the earliest readable time.
+    /// Acquire request-scoped durable protection. With no timestamp preference,
+    /// reuse the client's established window. A requested time may need an earlier
+    /// grant, but the returned floor still reflects current readability and must
+    /// be checked before reading at a fixed timestamp.
     pub(crate) async fn acquire_query_read_holds(
         &mut self,
         id_bundle: &CollectionIdBundle,
+        read_ts: Option<Timestamp>,
     ) -> Result<ReadHolds, crate::AdapterError> {
         let client = self.query_client.as_ref().ok_or_else(|| {
             crate::AdapterError::Internal("durable query read protection is not initialized".into())
         })?;
         let incarnation = client.protection.incarnation();
         let (holds, _) = self
-            .acquire_client_read_protection(incarnation, id_bundle.clone(), |_| Ok(None))
+            .acquire_client_read_protection(incarnation, id_bundle.clone(), |_| Ok(read_ts))
             .await?;
         Ok(holds)
     }

@@ -6,10 +6,11 @@ Finish native-only M3 under the [prompt](20260903_decoupled_coordination_prompt.
 Preserve compatible full writers, explicit retirement, durable protection,
 adapter-owned policy, shared query transport and required formats. Keep the PR draft.
 
-**Next action:** obtain approval for the scoped ALTER SINK overlap-acquisition
-repair and resolve the pubsubd registry check. Native acceptance and the test-only
-Rust repair passed. The ALTER read-floor difference is confirmed by source, but
-is not yet tied to the CI timeout. Keep startup optimization proposals separate.
+**Next action:** resolve the private pubsubd image path, then rerun relevant CI.
+It cannot be made public for this prototype. Preserve public-image checks for
+other images and native runtime coverage. The scoped ALTER SINK repair now has
+a failing-before, passing-after Iceberg witness. Its role in the original broad
+CI timeout remains unverified. Keep startup optimization proposals separate.
 
 ## Decisions in force
 
@@ -34,25 +35,30 @@ is not yet tied to the CI timeout. Keep startup optimization proposals separate.
 - **CI.** [Build 144502](https://buildkite.com/materialize/test/builds/144502)
   again reports pubsubd as non-public on Docker Hub. Build 144492 ran runtime
   integration but skipped the normal x86 image-build step. That did not prove
-  registry provisioning was resolved. Do not bypass the check. The stale Rust
-  expectation is repaired and verified locally, with fresh CI still required.
-  The earlier Iceberg ALTER timeout remains unexplained. See `ci-144492/triage.md`,
-  `ci-144492/alter-sink-read-floor.md` and `ci-144502/`. Merge skew remains accepted.
+  registry provisioning was resolved. A scoped private-image path is still
+  required. The stale Rust expectation and ALTER read-floor repair are verified
+  locally, with fresh CI still required. See `ci-144492/triage.md`,
+  `alter-sink-overlap/outcome.md` and `ci-144502/`. Merge skew remains accepted.
 - **Startup proposal.** Current debug cold startup reaches controller HTTP in
   19.81 s and SQL in 48.96 s. Ordinary builtin optimization costs about 15 CPU-s,
   mostly logical optimization. Exact metadata rules out simply enabling replica
   deferral on the controller. Paired cache publication could avoid duplicate
   adapter work, but needs compatibility and startup-order decisions. No such
   change is approved. See `current-controller-startup-outcome.md`.
-- **ALTER SINK decision:** the proposed repair would acquire earlier protected
-  input history for overlap, rather than reuse a later adapter grant. Do not
-  change ordinary SQL timestamp selection. Approval and a regression are pending.
 - **Two unexplained events.** A walkthrough run stopped on the resource guard
   and passed on rerun. A probe shows a guard weakness but not the original
   process. The scheduled-MV suite failed once intermittently. A recurrence of
   either needs diagnosis, not a rerun.
 
 ## Verified outcomes
+
+ALTER SINK acquires earlier protected input history through existing durable
+admission rather than reusing a later adapter grant. Ordinary SQL acquisition
+is unchanged. The debug Iceberg witness timed out at 300s before the repair and
+completed in 0.238s afterward, with external rows verified. The unchanged
+commit-interval check passed before and after. Targeted protection tests and
+independent review cover admission and races. See `alter-sink-overlap/outcome.md`
+for the exact witness, limits, receipts and failed harness attempts.
 
 Implementation `c1b310c5` passed the default-debug two-version walkthrough,
 DDL with combined ingestion, adapter loss, subscription identity, the 60s
@@ -90,6 +96,9 @@ Scratch worktrees:
 - `/home/ubuntu/materialize-m3-final-head`: clean checkout of `c1b310c5`.
   The profiling overlay is restored and its runtimes and containers removed.
   Current primary binaries are in `current-controller-baseline/artifacts/`.
+  The scoped ALTER SINK binaries are in `alter-sink-overlap/artifacts-after/`,
+  with separate source and binary receipts. They have targeted coverage, not a
+  repeat of the full acceptance suite.
   The verified version pair is in
   `current-native-acceptance/native-compatible-frontier-current/artifacts/`.
   Use their manifests, not the shared Cargo target, for acceptance.

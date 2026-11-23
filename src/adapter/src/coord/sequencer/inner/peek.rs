@@ -1075,7 +1075,7 @@ impl Coordinator {
                 .into_iter()
                 .collect(),
         };
-        let result = match self.acquire_query_read_holds(&imports).await {
+        let result = match self.acquire_query_read_holds(&imports, None).await {
             Ok(holds) => self.start_query_sink(
                 Arc::clone(&catalog),
                 df_desc,

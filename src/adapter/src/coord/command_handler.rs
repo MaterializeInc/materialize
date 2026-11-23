@@ -2182,7 +2182,7 @@ impl Coordinator {
             // It's important that we acquire read holds _before_ we determine the least valid read.
             // Otherwise, we're not guaranteed that the since frontier doesn't
             // advance forward from underneath us.
-            let read_holds = self.acquire_query_read_holds(&ids).await?;
+            let read_holds = self.acquire_query_read_holds(&ids, None).await?;
 
             // Acquisition can follow peer DDL. Both CREATE and EXPLAIN must
             // validate against the catalog used to resolve their inputs.

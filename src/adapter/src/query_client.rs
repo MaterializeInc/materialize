@@ -1283,13 +1283,18 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    async fn earliest_acquisition_publishes_before_returning() {
+        acquisition_catalog_harness(AcquisitionCase::Earliest).await;
+    }
+
+    #[mz_ore::test(tokio::test)]
     async fn acquisition_from_snapshot_before_incarnation_consults_live_writer() {
         acquisition_catalog_harness(AcquisitionCase::SnapshotBeforeIncarnation).await;
     }
 
     #[mz_ore::test(tokio::test)]
     async fn competing_permission_publication_reobserves_without_reselecting_timestamp() {
-        for read_ts in [None, Some(Timestamp::from(50))] {
+        for read_ts in [None, Some(Timestamp::MIN), Some(Timestamp::from(50))] {
             acquisition_catalog_harness(AcquisitionCase::PermissionRace(read_ts)).await;
         }
     }
@@ -1308,6 +1313,7 @@ mod tests {
 
     enum AcquisitionCase {
         Historical,
+        Earliest,
         SnapshotBeforeIncarnation,
         PermissionRace(Option<Timestamp>),
         UninstalledIndex,
@@ -2322,10 +2328,20 @@ mod tests {
             catalog.state().collection_compaction_bounds()[&id],
             frontier(40)
         );
+        let (requested_time, historical_floor) = if matches!(case, AcquisitionCase::Earliest) {
+            let reusable = client
+                .prepare_read(&catalog, &bundle, |_| Ok(None))
+                .await
+                .expect("can observe the established client window");
+            assert_eq!(reusable.frontiers[&id], Timestamp::from(100));
+            (Timestamp::MIN, Timestamp::from(40))
+        } else {
+            (Timestamp::from(50), Timestamp::from(50))
+        };
         let snapshot = old_snapshot.unwrap_or_else(|| catalog.clone());
         let read = client.acquire_read_holds_and_upper(&snapshot, &bundle, |upper| {
             assert_eq!(upper, &frontier(80));
-            Ok(Some(Timestamp::from(50)))
+            Ok(Some(requested_time))
         });
         tokio::pin!(read);
         let command = tokio::select! {
@@ -2347,7 +2363,7 @@ mod tests {
         assert_eq!(requested_incarnation, incarnation);
         assert_eq!(requested_bundle.storage_ids, bundle.storage_ids);
         assert_eq!(requested_bundle.compute_ids, bundle.compute_ids);
-        assert_eq!(read_ts, Some(Timestamp::from(50)));
+        assert_eq!(read_ts, Some(requested_time));
 
         // Service the miss with a real catalog commit, without controller workers.
         // The writer re-observes readability and permission, not the cached G=100.
@@ -2364,7 +2380,7 @@ mod tests {
             .prepare_read(&catalog, &requested_bundle, |_| Ok(read_ts))
             .await
             .expect("can prepare historical acquisition");
-        assert_eq!(prepared.frontiers[&id], Timestamp::from(50));
+        assert_eq!(prepared.frontiers[&id], historical_floor);
         assert_eq!(prepared.upper, frontier(90));
         let requirements = client
             .protection
@@ -2401,7 +2417,7 @@ mod tests {
         tx.send(Ok((holds, prepared.upper)))
             .expect("read still awaits publication");
         let (holds, upper) = read.await.expect("historical acquisition succeeds");
-        assert_eq!(holds.since(&id), frontier(50));
+        assert_eq!(holds.since(&id), Antichain::from_elem(historical_floor));
         assert_eq!(upper, frontier(80));
         drop(holds);
 
@@ -2437,7 +2453,7 @@ mod tests {
                 },
             }
         };
-        assert_eq!(holds.since(&id), frontier(50));
+        assert_eq!(holds.since(&id), Antichain::from_elem(historical_floor));
         assert_eq!(upper, frontier(90));
         assert!(matches!(
             commands.try_recv(),
@@ -2455,11 +2471,11 @@ mod tests {
         );
         assert_eq!(
             catalog.state().client_read_requirements()[&(incarnation, id)],
-            Timestamp::from(50)
+            historical_floor
         );
         assert_eq!(
             client.protection.granted_frontier(id),
-            Some(Timestamp::from(50))
+            Some(historical_floor)
         );
         // Pending advancement must retain its acquisition barrier.
         assert!(

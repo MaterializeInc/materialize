@@ -816,7 +816,7 @@ impl crate::coord::Coordinator {
                     storage_ids: BTreeSet::new(),
                     compute_ids: BTreeMap::from([(compute_instance, BTreeSet::from([idx_id]))]),
                 };
-                let holds = self.acquire_query_read_holds(&bundle).await?;
+                let holds = self.acquire_query_read_holds(&bundle, None).await?;
                 if !holds.least_valid_read().less_equal(&timestamp) {
                     return Err(AdapterError::CollectionUnreadable {
                         id: idx_id.to_string(),
@@ -855,7 +855,7 @@ impl crate::coord::Coordinator {
                     storage_ids: BTreeSet::from([coll_id]),
                     compute_ids: BTreeMap::new(),
                 };
-                let holds = self.acquire_query_read_holds(&bundle).await?;
+                let holds = self.acquire_query_read_holds(&bundle, None).await?;
                 if !holds.least_valid_read().less_equal(&timestamp) {
                     return Err(AdapterError::CollectionUnreadable {
                         id: coll_id.to_string(),
@@ -917,7 +917,7 @@ impl crate::coord::Coordinator {
                         dataflow.index_imports.keys().copied().collect(),
                     )]),
                 };
-                let creation_holds = self.acquire_query_read_holds(&imports).await?;
+                let creation_holds = self.acquire_query_read_holds(&imports, None).await?;
                 let as_of = dataflow.as_of.as_ref().ok_or_else(|| {
                     AdapterError::Internal("slow-path peek requires as_of".into())
                 })?;
@@ -1520,7 +1520,7 @@ impl crate::coord::Coordinator {
                 .into_iter()
                 .collect(),
             };
-            match self.acquire_query_read_holds(&imports).await {
+            match self.acquire_query_read_holds(&imports, None).await {
                 Ok(holds) => self.start_query_sink(
                     Arc::clone(&catalog),
                     df_desc,
