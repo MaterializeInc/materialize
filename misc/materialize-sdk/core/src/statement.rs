@@ -191,7 +191,7 @@ impl Subscribe {
 
 /// `DECLARE cursor CURSOR FOR subscribe`. A cursor lives inside a
 /// transaction, so the transport runs `BEGIN` first.
-pub fn declare_sql(cursor: &str, subscribe: &str) -> String {
+pub(crate) fn declare_sql(cursor: &str, subscribe: &str) -> String {
     format!("DECLARE {} CURSOR FOR {subscribe}", quote_ident(cursor))
 }
 
