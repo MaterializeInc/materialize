@@ -1297,3 +1297,75 @@ async fn pin_records_builtins_inlined_into_imported_index_keys() {
     })
     .await
 }
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+async fn pin_follows_pending_replacements() {
+    const TARGET: u64 = 2;
+    const REPLACEMENT: u64 = 3;
+    const SINK: u64 = 4;
+    // A metric sink may read a pending replacement, which other items may not.
+    let gauge = |from: &str| {
+        format!(
+            "SELECT 'n'::text AS metric_name, 'gauge'::text AS metric_type, \
+             NULL::map[text=>text] AS labels, count(*)::double AS value, 'h'::text AS help \
+             FROM {from}"
+        )
+    };
+    Catalog::with_debug(|mut catalog| async move {
+        for flag in [
+            "enable_replacement_materialized_views",
+            "enable_metric_sink",
+        ] {
+            catalog
+                .system_config_mut()
+                .set(flag, VarInput::Flat("on"))
+                .expect("flag exists");
+        }
+        create_tables(&mut catalog).await;
+        create_item(
+            &mut catalog,
+            TARGET,
+            "t",
+            &format!(
+                "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"t\" \
+                 IN CLUSTER \"quickstart\" AS {}",
+                gauge("\"materialize\".\"public\".\"tables\"")
+            ),
+        )
+        .await;
+        catalog
+            .register_collection_shard(GlobalId::User(TARGET))
+            .await
+            .expect("registers the target's shard");
+        create_item(
+            &mut catalog,
+            REPLACEMENT,
+            "r",
+            &format!(
+                "CREATE REPLACEMENT MATERIALIZED VIEW \"materialize\".\"public\".\"r\" \
+                 FOR \"materialize\".\"public\".\"t\" IN CLUSTER \"quickstart\" AS {}",
+                gauge("\"mz_catalog\".\"mz_timezone_names\"")
+            ),
+        )
+        .await;
+        create_item(
+            &mut catalog,
+            SINK,
+            "ms",
+            "CREATE METRIC SINK \"materialize\".\"public\".\"ms\" IN CLUSTER \"quickstart\" \
+             FROM \"materialize\".\"public\".\"r\" WITH (PREFIX = 'mz_metric_sink_ms_')",
+        )
+        .await;
+        let export = GlobalId::User(SINK);
+        assert_eq!(
+            catalog.state().inlined_builtins(export),
+            Err(PinError::BuiltinRelation {
+                export,
+                relation: "mz_catalog.mz_timezone_names".to_string(),
+            }),
+            "planning inlines a pending replacement's definition"
+        );
+    })
+    .await
+}

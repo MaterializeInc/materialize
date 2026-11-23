@@ -128,8 +128,15 @@ impl PinningContext for CatalogState {
                 continue;
             }
             let entry = self.get_entry(&item_id);
+            // Mirrors `DataflowBuilder::import_into_dataflow`, which inlines
+            // user views and pending replacements, whose collections cannot
+            // be read yet, and imports everything else.
             let inlined = item_id == exported.id()
-                || (!item_id.is_system() && matches!(entry.item(), CatalogItem::View(_)));
+                || match entry.item() {
+                    CatalogItem::View(_) => !item_id.is_system(),
+                    CatalogItem::MaterializedView(mv) => mv.replacement_target.is_some(),
+                    _ => false,
+                };
             if inlined {
                 todo.extend(entry.uses());
                 self.inlined_function_bodies(id, entry, &mut builtins)?;
@@ -142,8 +149,6 @@ impl PinningContext for CatalogState {
                     relation: self.full_name(entry),
                 });
             }
-            // Anything else, including another index or materialized view, is
-            // an import with its own plan, so the walk stops here.
         }
         Ok(builtins)
     }
