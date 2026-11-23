@@ -780,8 +780,11 @@ impl Session {
     ///
     /// Returns whether a statement previously existed.
     pub fn remove_prepared_statement(&mut self, name: &str) -> bool {
-        self.state_revision += 1;
-        self.prepared_statements.remove(name).is_some()
+        let removed = self.prepared_statements.remove(name).is_some();
+        if removed {
+            self.state_revision += 1;
+        }
+        removed
     }
 
     /// Removes all prepared statements.
