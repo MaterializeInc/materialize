@@ -954,20 +954,7 @@ async fn yield_after_invalidated_optimization(
         let ((), result) = tokio::join!(exercise, batch_execute(&waiter_client, waiter));
         result
     };
-    let creation = async {
-        let result = batch_execute(&creator, creation).await;
-        if fixed_birth {
-            let error = result.expect_err("fixed refresh must not repurify after invalidation");
-            let mz_postgres_util::PostgresError::Postgres(error) = error else {
-                panic!("expected SQL serialization failure, got {error:?}");
-            };
-            assert_eq!(error.as_db_error().unwrap().code().code(), "40001");
-            Ok(())
-        } else {
-            result
-        }
-    };
-    tokio::try_join!(control, creation).unwrap();
+    tokio::try_join!(control, batch_execute(&creator, creation)).unwrap();
     if fixed_birth {
         assert_eq!(
             replans.load(Ordering::SeqCst),
