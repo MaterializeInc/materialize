@@ -1196,10 +1196,15 @@ impl<'w> Worker<'w> {
                     }
                 }
             }
-            for (&id, frontier) in &old_compaction {
-                let frontier = frontier.clone();
-                todo_commands.insert(0, ComputeCommand::AllowCompaction { id, frontier });
-            }
+            todo_commands.splice(
+                0..0,
+                old_compaction.iter().rev().map(|(&id, frontier)| {
+                    ComputeCommand::AllowCompaction {
+                        id,
+                        frontier: frontier.clone(),
+                    }
+                }),
+            );
 
             // Clean up worker-local state.
             //
