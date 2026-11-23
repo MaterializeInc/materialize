@@ -14,13 +14,12 @@ use mz_repr::{Diff, GlobalId, Timestamp};
 use timely::order::PartialOrder;
 use tracing::error;
 
-use crate::arrangement::manager::PaddedTrace;
+use crate::arrangement::manager::ErrsTrace;
 use crate::compute_state::{PeekRowIterationTracker, peek_result_iterator};
-use crate::typedefs::ErrAgent;
 
 /// The error trace of an index, as
 /// [`TraceBundle::errs_mut`](crate::arrangement::manager::TraceBundle::errs_mut) hands it out.
-pub(super) type ErrsHandle = PaddedTrace<ErrAgent<Timestamp, Diff>>;
+pub(super) type ErrsHandle = ErrsTrace;
 
 /// A walk over an index peek's error trace, suspendable between cursor positions.
 ///
