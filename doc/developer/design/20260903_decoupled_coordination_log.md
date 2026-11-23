@@ -6,9 +6,9 @@ Finish native-only M3 under the [prompt](20260903_decoupled_coordination_prompt.
 Preserve compatible full writers, explicit retirement, durable protection,
 adapter-owned policy, shared query transport and required formats. Keep the PR draft.
 
-**Next action:** follow CI after the verified test-lint correction. Measure the controller's
-current cold-open stages before choosing a startup change. Run final-head
-acceptance once after the remaining repairs, not per change.
+**Next action:** run final-head native acceptance with uninstrumented binaries.
+CI runtime jobs need the pubsubd image repository made public by team-testing.
+Keep the measured startup optimization proposals separate from acceptance.
 
 ## Decisions in force
 
@@ -30,18 +30,19 @@ acceptance once after the remaining repairs, not per change.
 
 ## Outstanding work
 
-- **CI.** [Build 144487](https://buildkite.com/materialize/test/builds/144487)
-  found formatting and Clippy errors in the sink-status test. Both reproduced
-  locally, and the correction passes `bin/fmt --check` and workspace Clippy.
-  Broad runtime verification remains pending. The unsupported upgrade job is
-  now skipped before its wrapper runs. Merge skew remains an accepted failure
-  on the pinned base. Evidence: `ci-144487/`.
-- **Controller cold startup.** About 18 s of the roughly 20 s is builtin view
-  reconstruction, from older captures. Re-measure on current code before
-  choosing a change. The replica metadata shortcut cannot supply exact published
-  column metadata. Adapter-cache reuse alone cannot remove empty-cache startup
-  work. See `controller-cold-start-attribution.md` and
-  `controller-cold-start-options.md`. No cache-contract change is approved.
+- **CI.** [Build 144489](https://buildkite.com/materialize/test/builds/144489)
+  passes formatting and Clippy. The x86 build fails because `materialize/pubsubd`
+  is not public on Docker Hub, leaving dependent runtime jobs unrun. Aljoscha
+  has been asked to arrange registry provisioning. Do not bypass the check or
+  change registry visibility without approval. The unsupported upgrade job is
+  skipped. Merge skew remains an accepted pinned-base failure. Evidence:
+  `ci-144489/`.
+- **Startup proposal.** Current debug cold startup reaches controller HTTP in
+  19.81 s and SQL in 48.96 s. Ordinary builtin optimization costs about 15 CPU-s,
+  mostly logical optimization. Exact metadata rules out simply enabling replica
+  deferral on the controller. Paired cache publication could avoid duplicate
+  adapter work, but needs compatibility and startup-order decisions. No such
+  change is approved. See `current-controller-startup-outcome.md`.
 - **Final-head acceptance** after the above: lifecycle, DDL and combined
   ingestion, adapter loss, subscriptions, 60s four-index, scheduled-MV suites
   and the version-pair walkthrough.
@@ -97,8 +98,12 @@ scheduled for 2026-11-23 19:02:53 UTC. Recheck access and extend it.
 
 Scratch worktrees:
 
-- `/home/ubuntu/materialize-m3-final-head`: clean checkout of `788ede24` plus
-  the verified sink-status assertion correction. Workspace Clippy passes here.
+- `/home/ubuntu/materialize-m3-final-head`: clean checkout of `c1b310c5`.
+  The profiling overlay is restored and its runtimes and containers removed.
+  Uninstrumented current-head binaries are in
+  `current-controller-baseline/artifacts/` under the evidence root. The shared
+  Cargo target contains diagnostic binaries until rebuilt. Do not use those
+  for acceptance.
 - `/home/ubuntu/materialize-m3-controller-followups`: main worktree, based on
   `8ef1fc1b` with recorded runtime source overlays.
 - `/home/ubuntu/materialize-m3-fixture-checks`: test worktree with the decoder,
