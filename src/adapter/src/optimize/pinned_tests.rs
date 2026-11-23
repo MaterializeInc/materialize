@@ -1192,9 +1192,9 @@ async fn pin_rejects_unstable_dependencies() {
 
 /// `has_role` is SQL-defined, and its body calls `pg_has_role`, whose body
 /// returns NULL for NULL arguments before reading catalog tables and calling
-/// the unstable `mz_role_oid_memberships`. Constant folding removes all of
-/// that, and the plan imports nothing. Only the function body references
-/// show the unstable call.
+/// the unstable `mz_validate_role_privilege` and `mz_role_oid_memberships`.
+/// Constant folding removes all of that, and the plan imports nothing. Only
+/// the function body references show the unstable calls.
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
 async fn pin_rejects_unstable_functions_in_folded_function_bodies() {
@@ -1231,13 +1231,22 @@ async fn pin_rejects_unstable_functions_in_folded_function_bodies() {
             df_desc.source_imports.is_empty() && df_desc.index_imports.is_empty(),
             "folding removed every read"
         );
+        // Either unstable call refuses the pin. Which one the walk meets
+        // first depends on how the builtins' ids sort.
         let export = GlobalId::User(MV);
-        assert_eq!(
-            PinnedDataflow::pin(df_desc, catalog.state()),
-            Err(PinError::UnstableDependency {
-                export,
-                dependency: "mz_internal.mz_role_oid_memberships".to_string(),
-            })
+        let result = PinnedDataflow::pin(df_desc, catalog.state());
+        assert!(
+            matches!(
+                &result,
+                Err(PinError::UnstableDependency { export: e, dependency })
+                    if *e == export
+                        && [
+                            "mz_internal.mz_validate_role_privilege",
+                            "mz_internal.mz_role_oid_memberships",
+                        ]
+                        .contains(&dependency.as_str())
+            ),
+            "an unstable call in pg_has_role's body refuses the pin: {result:?}"
         );
     })
     .await

@@ -1467,8 +1467,8 @@ pub struct View {
     /// Other catalog objects that are referenced by this view, determined at name resolution.
     pub resolved_ids: ResolvedIds,
     /// Catalog objects resolved inside the bodies of the SQL-defined functions
-    /// this item calls, transitively. Set when the catalog parses `create_sql`,
-    /// which is how every stored item enters it. See
+    /// and casts this item calls, transitively. Set when the catalog parses
+    /// `create_sql`, which is how every stored item enters it. See
     /// [`CatalogItem::function_body_references`].
     pub function_body_ids: ResolvedIds,
     /// All of the catalog objects that are referenced by this view.
@@ -1498,8 +1498,8 @@ pub struct MaterializedView {
     /// Other catalog items that this materialized view references, determined at name resolution.
     pub resolved_ids: ResolvedIds,
     /// Catalog objects resolved inside the bodies of the SQL-defined functions
-    /// this item calls, transitively. Set when the catalog parses `create_sql`,
-    /// which is how every stored item enters it. See
+    /// and casts this item calls, transitively. Set when the catalog parses
+    /// `create_sql`, which is how every stored item enters it. See
     /// [`CatalogItem::function_body_references`].
     pub function_body_ids: ResolvedIds,
     /// All of the catalog objects that are referenced by this view.
@@ -1660,8 +1660,8 @@ pub struct Index {
     /// Other catalog objects referenced by this index, e.g. the object we're indexing.
     pub resolved_ids: ResolvedIds,
     /// Catalog objects resolved inside the bodies of the SQL-defined functions
-    /// this item calls, transitively. Set when the catalog parses `create_sql`,
-    /// which is how every stored item enters it. See
+    /// and casts this item calls, transitively. Set when the catalog parses
+    /// `create_sql`, which is how every stored item enters it. See
     /// [`CatalogItem::function_body_references`].
     pub function_body_ids: ResolvedIds,
     /// Cluster this index is installed on.
@@ -2134,7 +2134,7 @@ impl CatalogItem {
     }
 
     /// Collects the identifiers of the objects resolved inside the bodies of the
-    /// SQL-defined functions this item calls, transitively.
+    /// SQL-defined functions and casts this item calls, transitively.
     ///
     /// These are not dependencies, and [`CatalogItem::uses`] leaves them out:
     /// the body of a builtin function may reference objects, including

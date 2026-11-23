@@ -247,8 +247,9 @@ pub enum PinnedSinkKind {
 /// What [`PinnedDataflow::pin`] needs from its environment.
 pub trait PinningContext {
     /// The builtins planning may have inlined into the catalog item exported
-    /// under `id`, found through its dependencies, the user views among them,
-    /// and the bodies of the SQL-defined functions they call.
+    /// under `id`, found through its dependencies, the user views and pending
+    /// replacements among them, and the bodies of the SQL-defined functions
+    /// they call.
     ///
     /// Fails with [`PinError::UnknownItem`] when no catalog item is exported
     /// under `id`, with [`PinError::BuiltinRelation`] when any of those
@@ -262,8 +263,10 @@ pub trait PinningContext {
     /// A plan that reads an index copies its key expression into the import,
     /// but not the indexed relation's definition, so only the key matters.
     /// Fails with [`PinError::UnknownItem`] when no index exists under `id`,
-    /// and with [`PinError::UnstableDependency`] when the key references an
-    /// unstable builtin.
+    /// with [`PinError::BuiltinRelation`] when the body of a SQL-defined
+    /// function in the key references a builtin relation, and with
+    /// [`PinError::UnstableDependency`] when the key, or such a body,
+    /// references an unstable builtin.
     fn index_key_builtins(&self, id: GlobalId) -> Result<BTreeSet<InlinedBuiltin>, PinError>;
 }
 
@@ -288,19 +291,19 @@ pub enum PinError {
     BuiltinCollection(GlobalId),
     /// The pinning context knows no catalog item under this id.
     UnknownItem(GlobalId),
-    /// The exported item, or a user view it reads, references a builtin
-    /// relation.
+    /// Something the plan inlines references a builtin relation, see
+    /// [`PinningContext`].
     BuiltinRelation {
-        /// The export whose item has the dependency.
+        /// The export, or imported index, whose item has the dependency.
         export: GlobalId,
         /// The builtin relation's full name.
         relation: String,
     },
-    /// The exported item, or a user view it reads, references an unstable
-    /// builtin. The builtin registry does not track unstable builtins, so a
-    /// change to one would not be flagged as affecting the pin.
+    /// Something the plan inlines references an unstable builtin, see
+    /// [`PinningContext`]. The builtin registry does not track unstable
+    /// builtins, so a change to one would not be flagged as affecting the pin.
     UnstableDependency {
-        /// The export whose item has the dependency.
+        /// The export, or imported index, whose item has the dependency.
         export: GlobalId,
         /// The unstable builtin's full name.
         dependency: String,
