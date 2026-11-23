@@ -129,10 +129,20 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64 + Sync> DataSnapshot<T> {
                     data_write.expire().await;
                     break;
                 }
-                Err(new_data_upper) => {
-                    data_upper = new_data_upper;
-                    continue;
-                }
+                Err(new_data_upper) => match new_data_upper.into_option() {
+                    Some(new_data_upper) => data_upper = new_data_upper,
+                    // The shard was finalized after `shared_upper` was read
+                    // above, for example by the leader environmentd dropping
+                    // the collection while this process still runs a dataflow
+                    // over it. Same as the early return above.
+                    None => {
+                        debug!(
+                            "CaA data snapshot {:.9} shard finalized",
+                            self.data_id.to_string(),
+                        );
+                        return;
+                    }
+                },
             }
         }
     }
@@ -872,7 +882,49 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::WaitTs;
+    use mz_persist_client::PersistLocation;
+    use mz_persist_client::cache::PersistClientCache;
+    use timely::progress::Antichain;
+
+    use crate::tests::writer;
+    use crate::txns::TxnsHandle;
+
+    use super::{DataSnapshot, WaitTs};
+
+    /// A reader whose cached upper predates the data shard's finalization
+    /// discovers the empty upper only from its own CaA.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn unblock_read_data_shard_finalized_concurrently() {
+        let mut cache = PersistClientCache::new_no_metrics();
+        let client = cache.open(PersistLocation::new_in_mem()).await.unwrap();
+        let mut txns = TxnsHandle::expect_open(client.clone()).await;
+        let d0 = txns.expect_register(1).await;
+
+        // A second state cache over the same blob and consensus stands in for
+        // a clusterd process that never hears about the finalization.
+        cache.clear_state_cache();
+        let reader_client = cache.open(PersistLocation::new_in_mem()).await.unwrap();
+        let stale_write = writer(&reader_client, d0).await;
+        assert_eq!(stale_write.shared_upper(), Antichain::from_elem(2));
+
+        txns.forget(3, [d0]).await.unwrap();
+        let mut d0_write = writer(&client, d0).await;
+        d0_write
+            .compare_and_append_batch(&mut [], d0_write.shared_upper(), Antichain::new(), true)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stale_write.shared_upper(), Antichain::from_elem(2));
+
+        let snapshot = DataSnapshot {
+            data_id: d0,
+            latest_write: None,
+            as_of: 2,
+            empty_to: 3,
+        };
+        snapshot.unblock_read(stale_write).await;
+    }
 
     #[mz_ore::test]
     fn wait_ts_ord() {

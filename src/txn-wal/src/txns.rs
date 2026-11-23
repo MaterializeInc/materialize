@@ -293,7 +293,9 @@ where
                     }
                     Err(new_txns_upper) => {
                         self.metrics.register.retry_count.inc();
-                        txns_upper = new_txns_upper;
+                        txns_upper = new_txns_upper
+                            .into_option()
+                            .expect("txns shard should not be closed");
                         continue;
                     }
                 }
@@ -456,7 +458,9 @@ where
                     }
                     Err(new_txns_upper) => {
                         self.metrics.forget.retry_count.inc();
-                        txns_upper = new_txns_upper;
+                        txns_upper = new_txns_upper
+                            .into_option()
+                            .expect("txns shard should not be closed");
                         continue;
                     }
                 }
@@ -554,7 +558,9 @@ where
                     }
                     Err(new_txns_upper) => {
                         self.metrics.forget_all.retry_count.inc();
-                        txns_upper = new_txns_upper;
+                        txns_upper = new_txns_upper
+                            .into_option()
+                            .expect("txns shard should not be closed");
                         continue;
                     }
                 }
@@ -1476,7 +1482,11 @@ mod tests {
                         self.log.record((data_id, key, self.ts, 1));
                         return Ok(());
                     }
-                    Err(new_current) => current = new_current,
+                    Err(new_current) => {
+                        current = new_current
+                            .into_option()
+                            .expect("data shard should not be closed")
+                    }
                 }
             }
         }

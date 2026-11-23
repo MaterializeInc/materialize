@@ -313,6 +313,9 @@ where
                         });
                     }
                     Err(new_txns_upper) => {
+                        let new_txns_upper = new_txns_upper
+                            .into_option()
+                            .expect("txns shard should not be closed");
                         handle.metrics.commit.retry_count.inc();
                         assert!(txns_upper < new_txns_upper);
                         txns_upper = new_txns_upper;
