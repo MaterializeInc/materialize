@@ -43,7 +43,7 @@ from materialize.cloudtest.util.wait import wait
 LOGGER = logging.getLogger(__name__)
 
 # renovate: datasource=github-releases depName=kubernetes-sigs/metrics-server extractVersion=^metrics-server-helm-chart-(?<version>\d+\.\d+\.\d+)$
-METRICS_SERVER_CHART_VERSION = "3.8.2"
+METRICS_SERVER_CHART_VERSION = "3.14.0"
 
 
 class MaterializeApplication(CloudtestApplicationBase):
