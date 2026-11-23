@@ -1153,6 +1153,7 @@ mod tests {
     use crate::batch::BLOB_TARGET_SIZE;
     use crate::internal::trace::SpineId;
     use crate::tests::{all_ok, expect_fetch_part, new_test_client_cache};
+    use crate::write::WriteHandle;
 
     use super::*;
 
@@ -1233,6 +1234,246 @@ mod tests {
         .await;
         assert_eq!(part.desc, res.output.desc);
         assert_eq!(updates, all_ok(&data, 10));
+    }
+
+    /// Few distinct keys and values at times 0 to 5, pushed out of order, with duplicates and
+    /// retractions that cancel across parts and batches.
+    fn unsorted_user_updates() -> Vec<((String, String), u64, i64)> {
+        let mut data = vec![];
+        let mut x = 7u64;
+        for i in 0..600u64 {
+            x = x
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let key = format!("key-{:02}", (x >> 33) % 23);
+            let val = format!("val-{}", (x >> 40) % 3);
+            let t = i / 100;
+            let d = if (x >> 50) % 4 == 0 { -1 } else { 1 };
+            data.push(((key, val), t, d));
+        }
+        data
+    }
+
+    fn string_schemas() -> Schemas<String, String> {
+        Schemas {
+            id: None,
+            key: Arc::new(StringSchema),
+            val: Arc::new(StringSchema),
+        }
+    }
+
+    async fn compact_batches(
+        write: &WriteHandle<String, String, u64, i64>,
+        inputs: Vec<HollowBatch<u64>>,
+        since: u64,
+    ) -> HollowBatch<u64> {
+        let req = CompactReq {
+            shard_id: write.machine.shard_id(),
+            desc: Description::new(
+                inputs[0].desc.lower().clone(),
+                inputs[inputs.len() - 1].desc.upper().clone(),
+                Antichain::from_elem(since),
+            ),
+            inputs: inputs
+                .into_iter()
+                .enumerate()
+                .map(|(i, batch)| IdHollowBatch {
+                    batch: Arc::new(batch),
+                    id: SpineId(i, i + 1),
+                })
+                .collect(),
+        };
+        Compactor::<String, String, u64, i64>::compact(
+            CompactConfig::new(&write.cfg, write.shard_id()),
+            Arc::clone(&write.blob),
+            Arc::clone(&write.metrics),
+            write.metrics.shards.shard(&write.machine.shard_id(), ""),
+            Arc::new(IsolatedRuntime::new_for_tests()),
+            req,
+            string_schemas(),
+        )
+        .await
+        .expect("compaction failed")
+        .output
+    }
+
+    async fn read_hollow_part(
+        write: &WriteHandle<String, String, u64, i64>,
+        part: &RunPart<u64>,
+    ) -> Vec<((String, String), u64, i64)> {
+        let part = part.expect_hollow_part();
+        let (_, updates) = expect_fetch_part::<String, String, u64, i64>(
+            write.blob.as_ref(),
+            &part.key.complete(&write.machine.shard_id()),
+            &write.metrics,
+            &string_schemas(),
+        )
+        .await;
+        updates
+    }
+
+    /// Reads the updates of `batch`, which must have only hollow parts, in part order.
+    async fn read_hollow_batch(
+        write: &WriteHandle<String, String, u64, i64>,
+        batch: &HollowBatch<u64>,
+    ) -> Vec<((String, String), u64, i64)> {
+        let mut updates = vec![];
+        for part in &batch.parts {
+            updates.extend(read_hollow_part(write, part).await);
+        }
+        updates
+    }
+
+    fn is_sorted(updates: &[((String, String), u64, i64)]) -> bool {
+        updates.is_sorted_by_key(|((k, v), t, _)| (k.clone(), v.clone(), *t))
+    }
+
+    /// Compacts unsorted user batches, then the compacted output with another user batch, with
+    /// and without sorting user parts on write. Parts are small and hollow so that batches span
+    /// many single-part runs.
+    #[mz_persist_proc::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn compact_sorted_user_parts(dyncfgs: ConfigUpdates) {
+        use crate::batch::{INLINE_WRITES_SINGLE_MAX_BYTES, SORT_UNORDERED_PARTS};
+
+        let data = unsorted_user_updates();
+        for sort_parts in [false, true] {
+            let cache = new_test_client_cache(&dyncfgs);
+            cache.cfg.set_config(&BLOB_TARGET_SIZE, 1000);
+            cache.cfg.set_config(&INLINE_WRITES_SINGLE_MAX_BYTES, 0);
+            cache.cfg.set_config(&SORT_UNORDERED_PARTS, sort_parts);
+            let (mut write, _) = cache
+                .open(PersistLocation::new_in_mem())
+                .await
+                .expect("client construction failed")
+                .expect_open::<String, String, u64, i64>(ShardId::new())
+                .await;
+
+            let mut batches = vec![];
+            for (lower, upper) in [(0, 2), (2, 4), (4, 6)] {
+                let updates: Vec<_> = data
+                    .iter()
+                    .filter(|(_, t, _)| lower <= *t && *t < upper)
+                    .cloned()
+                    .collect();
+                let batch = write
+                    .expect_batch(&updates, lower, upper)
+                    .await
+                    .into_hollow_batch();
+                assert!(batch.run_meta.len() > 1, "expected many single-part runs");
+                let expected_order = if sort_parts {
+                    RunOrder::Structured
+                } else {
+                    RunOrder::Unordered
+                };
+                assert!(
+                    batch
+                        .run_meta
+                        .iter()
+                        .all(|m| m.order == Some(expected_order)),
+                    "unexpected run order"
+                );
+                if sort_parts {
+                    for part in &batch.parts {
+                        assert!(
+                            is_sorted(&read_hollow_part(&write, part).await),
+                            "part not sorted"
+                        );
+                    }
+                }
+                batches.push(batch);
+            }
+
+            let b2 = batches.pop().expect("three batches");
+            let first = compact_batches(&write, batches, 3).await;
+            assert_eq!(first.run_meta.len(), 1);
+            let first_data: Vec<_> = data.iter().filter(|(_, t, _)| *t < 4).collect();
+            assert_eq!(
+                read_hollow_batch(&write, &first).await,
+                all_ok(first_data, 3),
+                "sort_parts={sort_parts}"
+            );
+
+            let second = compact_batches(&write, vec![first, b2], 5).await;
+            assert_eq!(
+                read_hollow_batch(&write, &second).await,
+                all_ok(&data, 5),
+                "sort_parts={sort_parts}"
+            );
+        }
+    }
+
+    /// Writes two user batches of one inline part each with sorting on, flushes one of them to
+    /// blob, and compacts both.
+    #[mz_persist_proc::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn compact_sorted_inline_user_parts(dyncfgs: ConfigUpdates) {
+        use crate::batch::{INLINE_WRITES_SINGLE_MAX_BYTES, SORT_UNORDERED_PARTS};
+
+        let data = unsorted_user_updates();
+        let cache = new_test_client_cache(&dyncfgs);
+        cache.cfg.set_config(&BLOB_TARGET_SIZE, 1 << 20);
+        cache
+            .cfg
+            .set_config(&INLINE_WRITES_SINGLE_MAX_BYTES, 1 << 20);
+        cache.cfg.set_config(&SORT_UNORDERED_PARTS, true);
+        let (mut write, _) = cache
+            .open(PersistLocation::new_in_mem())
+            .await
+            .expect("client construction failed")
+            .expect_open::<String, String, u64, i64>(ShardId::new())
+            .await;
+
+        let mut batches = vec![];
+        for (lower, upper) in [(0, 3), (3, 6)] {
+            let updates: Vec<_> = data
+                .iter()
+                .filter(|(_, t, _)| lower <= *t && *t < upper)
+                .cloned()
+                .collect();
+            let batch = write.expect_batch(&updates, lower, upper).await;
+            assert!(
+                batch.batch.parts.len() == 1 && batch.batch.parts[0].is_inline(),
+                "expected a single inline part"
+            );
+            assert!(
+                batch
+                    .batch
+                    .run_meta
+                    .iter()
+                    .all(|m| m.order == Some(RunOrder::Structured)),
+                "unexpected run order"
+            );
+            batches.push(batch);
+        }
+
+        // Flushing writes the inline updates as they are, so the hollow part shows whether the
+        // inline part was sorted.
+        batches[0]
+            .flush_to_blob(
+                &BatchBuilderConfig::new(&write.cfg, write.shard_id()),
+                &write.metrics.user,
+                &write.isolated_runtime,
+                &write.write_schemas,
+            )
+            .await;
+        let flushed = &batches[0].batch;
+        assert!(flushed.parts.iter().all(|p| !p.is_inline()));
+        assert!(
+            flushed
+                .run_meta
+                .iter()
+                .all(|m| m.order == Some(RunOrder::Structured)),
+            "unexpected run order after flush"
+        );
+        assert!(
+            is_sorted(&read_hollow_batch(&write, flushed).await),
+            "flushed part not sorted"
+        );
+
+        let inputs = batches.into_iter().map(|b| b.into_hollow_batch()).collect();
+        let output = compact_batches(&write, inputs, 6).await;
+        assert_eq!(read_hollow_batch(&write, &output).await, all_ok(&data, 6));
     }
 
     #[mz_persist_proc::test(tokio::test)]

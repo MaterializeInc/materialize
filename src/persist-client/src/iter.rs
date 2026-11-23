@@ -60,6 +60,21 @@ pub(crate) struct FetchData<T> {
     structured_lower: Option<ArrayBound>,
 }
 
+/// Returns `part` with its updates sorted in the order the consolidator expects of a
+/// structured-order run, see [`StructuredUpdates::sorted_indices`].
+pub(crate) fn sort_part<T: Codec64 + Ord>(part: &Part) -> Part {
+    let updates = StructuredUpdates::new(part.clone());
+    let indices = updates.sorted_indices::<T>();
+    // Diffs are only reordered, so they pass through as their raw encoding.
+    interleave_updates::<T, i64>(
+        &[&updates.data],
+        indices.into_iter().map(|i| {
+            let (_kv, t, d) = updates.get::<T, i64>(i).expect("index in bounds");
+            ((0, i), t, d)
+        }),
+    )
+}
+
 pub(crate) trait RowSort<T, D> {
     fn updates_from_blob(&self, updates: BlobTraceUpdates) -> StructuredUpdates;
 
@@ -109,6 +124,25 @@ pub struct StructuredUpdates {
 }
 
 impl StructuredUpdates {
+    fn new(data: Part) -> Self {
+        let key_ord = ArrayOrd::new(data.key.as_ref());
+        let val_ord = ArrayOrd::new(data.val.as_ref());
+        StructuredUpdates {
+            key_ord,
+            val_ord,
+            data,
+        }
+    }
+
+    /// The indices of all updates, sorted by key, value, and time. A structured-order run is
+    /// sorted in this order, and the consolidator relies on it.
+    fn sorted_indices<T: Codec64 + Ord>(&self) -> Vec<usize> {
+        let mut indices: Vec<_> = (0..self.len()).collect();
+        // The diff is not part of the order, so it decodes as its raw encoding.
+        indices.sort_by_key(|i| self.get::<T, i64>(*i).map(|(kv, t, _d)| (kv, t)));
+        indices
+    }
+
     fn len(&self) -> usize {
         self.data.len()
     }
@@ -292,14 +326,9 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64> ConsolidationPart<T, D> {
         let updates = part.normalize(metrics);
         let updates: StructuredUpdates = sort.updates_from_blob(updates);
         let cursor = if reconsolidate {
-            let len = updates.len();
-            let mut indices: Vec<_> = (0..len).collect();
-
-            indices.sort_by_key(|i| updates.get::<T, D>(*i).map(|(kv, t, _d)| (kv, t)));
-
             PartIndices {
-                sorted_indices: indices.into(),
-                next_index: len,
+                sorted_indices: updates.sorted_indices::<T>().into(),
+                next_index: updates.len(),
             }
         } else {
             PartIndices::default()
