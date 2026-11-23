@@ -7,7 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-export type MimeType = "text/plain" | "text/csv";
+export type MimeType =
+  "text/plain" | "text/csv" | "application/json" | "image/svg+xml";
 export type DownloadFileOptions = {
   mimeType: MimeType;
 };

@@ -35,6 +35,13 @@ export interface CanvasProps {
   rightOffset?: number;
   /** Z-index for the zoom controls. Defaults to 1. */
   controlsZIndex?: number;
+  /**
+   * Zoom to fit the whole graph whenever its size changes and no node is
+   * selected, and make the frame button fit instead of resetting the zoom.
+   */
+  fitToContent?: boolean;
+  /** Fits the whole graph each time this changes, selection or not. */
+  fitRequest?: number;
 }
 
 /**
@@ -52,6 +59,8 @@ export const Canvas = ({
   selectedNode,
   rightOffset = 0,
   controlsZIndex = 1,
+  fitToContent = false,
+  fitRequest,
   children,
 }: React.PropsWithChildren<CanvasProps>) => {
   const {
@@ -61,6 +70,7 @@ export const Canvas = ({
     panBy,
     panTo,
     resetZoom,
+    fitTo,
     cssTransform,
     zoomIn,
     zoomOut,
@@ -100,6 +110,22 @@ export const Canvas = ({
     panToSelectedNode();
   }, [panToSelectedNode]);
 
+  // Fits once per graph size and viewport width, so closing a selection does
+  // not throw away the reader's zoom.
+  const hasSelectionRef = React.useRef(selectedNode !== null);
+  hasSelectionRef.current = selectedNode !== null;
+  React.useEffect(() => {
+    if (!fitToContent || hasSelectionRef.current || !width || !height) return;
+    fitTo(width, height);
+  }, [fitToContent, fitTo, width, height, viewportWidth]);
+
+  React.useEffect(() => {
+    if (fitRequest === undefined || !width || !height) return;
+    fitTo(width, height);
+    // Only a new request fits, not a resize.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fitRequest]);
+
   return (
     <>
       <HStack
@@ -122,6 +148,10 @@ export const Canvas = ({
           aria-label="Reset zoom"
           icon={<FrameSelectionIcon />}
           onClick={() => {
+            if (fitToContent && width && height) {
+              fitTo(width, height);
+              return;
+            }
             panToSelectedNode();
             resetZoom();
           }}
