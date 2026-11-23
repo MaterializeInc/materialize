@@ -666,7 +666,9 @@ impl<R: ConnectionResolver> IntoInlineConnection<AwsConnectionReference, R>
 /// connections. See [`AwsConnection::load_rds_iam_auth`].
 ///
 /// An entry that has not been looked up for an hour is dropped the next time
-/// an entry is inserted.
+/// an entry is inserted. That bounds how long an unused entry lives, not how
+/// many entries there are: connections created within the same hour all stay
+/// until they age out.
 #[derive(Debug, Clone, Default)]
 pub struct AwsCredentialsCache {
     entries: Arc<Mutex<BTreeMap<AwsCredentialsCacheKey, AwsCredentialsCacheEntry>>>,
@@ -741,6 +743,10 @@ const CREDENTIAL_CACHE_MIN_REUSE: Duration = Duration::from_mins(5);
 /// The fetch holds the cache's lock, and the AWS SDK bounds only the connect
 /// phase of an `AssumeRole` call. A call that connects and then stalls would
 /// otherwise block every user of the connection.
+///
+/// TODO: This wraps the whole provider call from outside. Setting an
+/// operation timeout on the STS client would bound each attempt and let the
+/// SDK retry, which this cannot.
 const CREDENTIAL_CACHE_FETCH_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// An [`AwsCredentialsCache`] entry that has not been looked up for this long
@@ -793,6 +799,10 @@ impl LazyCredentialCache {
     /// Call this when a service rejects a request signed with those
     /// credentials. AWS can stop honoring credentials before they expire, for
     /// example when the role's active sessions are revoked.
+    ///
+    /// NOTE: Until this is called and takes effect, the rejected credentials
+    /// keep being served. With the floor above, a revocation can therefore
+    /// fail connections for up to [`CREDENTIAL_CACHE_MIN_REUSE`].
     fn invalidate(&self, access_key_id: &str) {
         // A held lock means a fetch is in flight, and that fetch replaces the
         // credentials.

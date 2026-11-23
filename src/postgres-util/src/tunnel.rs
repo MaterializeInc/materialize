@@ -377,10 +377,13 @@ impl Config {
     }
 }
 
-/// Reports whether the server refused the connection's credentials.
+/// Reports whether the server refused the connection's credentials, which is
+/// SQLSTATE class 28.
 ///
-/// These are the SQLSTATE class 28 errors. Amazon RDS reports a rejected IAM
-/// authentication token as one of them.
+/// NOTE: Amazon RDS was observed to answer a refused IAM connection with
+/// `28P01`. That was with IAM authentication disabled for replication. A
+/// token signed by a revoked role session has not been tried, so that case
+/// producing a class 28 error is an assumption.
 fn is_authentication_failure(error: &PostgresError) -> bool {
     match error {
         PostgresError::Postgres(e) => {

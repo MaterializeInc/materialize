@@ -461,6 +461,10 @@ impl Config {
 const ER_ACCESS_DENIED_ERROR: u16 = 1045;
 
 /// Reports whether the server refused the connection's credentials.
+///
+/// NOTE: That Amazon RDS answers a rejected IAM authentication token with
+/// `ER_ACCESS_DENIED_ERROR` is an assumption. It has not been tried against
+/// RDS for MySQL.
 fn is_authentication_failure(error: &MySqlError) -> bool {
     match error {
         MySqlError::MySql(mysql_async::Error::Server(e)) => e.code == ER_ACCESS_DENIED_ERROR,
