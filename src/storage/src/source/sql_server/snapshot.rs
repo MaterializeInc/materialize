@@ -25,6 +25,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
 use mz_repr::{Diff, GlobalId, Row, RowArena};
 use mz_sql_server_util::cdc::{Lsn, SnapshotFence, SnapshotTransaction};
+use mz_storage_types::dyncfgs::STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SqlServerSourceConnection;
 use mz_storage_types::sources::sql_server::{
@@ -32,8 +33,8 @@ use mz_storage_types::sources::sql_server::{
 };
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::operators::Concat;
 use timely::dataflow::operators::vec::Map;
+use timely::dataflow::operators::{CapabilitySet, Concat};
 use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Timestamp;
 
@@ -77,6 +78,14 @@ pub(crate) fn render<'scope>(
     let (rewinds_handle, rewinds) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
     let (definite_error_handle, definite_errors) =
         builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
+
+    // Read at render time, matching the value the persist sink reads in the same dataflow build.
+    // A read in the async body can observe an `UpdateConfiguration` sequenced after this dataflow's
+    // creation and disagree with the sink because the `ConfigSet` is updated in place.
+    // A nonzero lookahead is the switch, see `STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD`.
+    let concurrent_replication = !STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD
+        .get(config.config.config_set())
+        .is_zero();
 
     let (button, transient_errors) = builder.build_fallible(move |caps| {
         let busy_signal = Arc::clone(&config.busy_signal);
@@ -227,6 +236,23 @@ pub(crate) fn render<'scope>(
                 });
             }
 
+            let emit_rewinds =
+                |requests: Vec<RewindRequest>, rewind_cap_set: &mut CapabilitySet<Lsn>| {
+                    for request in requests {
+                        rewinds_handle.give(&rewind_cap_set[0], request);
+                    }
+                    *rewind_cap_set = CapabilitySet::new();
+                };
+
+            // The rewind requests unblock the replication operator. With concurrent replication
+            // they go out now, before any table is read. The replication operator then reads the
+            // CDC stream while the snapshot runs and stages its data in the dataflow until the
+            // snapshot completes. Without concurrent replication they go out after the snapshot.
+            // That keeps the two phases serial and avoids the staging cost.
+            if concurrent_replication {
+                emit_rewinds(std::mem::take(&mut rewind_requests), rewind_cap_set);
+            }
+
             let mut snapshot_txn = SnapshotTransaction::begin(&mut client).await?;
             fence.release().await?;
 
@@ -309,8 +335,8 @@ pub(crate) fn render<'scope>(
             }
             snapshot_txn.rollback().await?;
 
-            for request in rewind_requests {
-                rewinds_handle.give(&rewind_cap_set[0], request);
+            if !concurrent_replication {
+                emit_rewinds(rewind_requests, rewind_cap_set);
             }
 
             Ok(())
