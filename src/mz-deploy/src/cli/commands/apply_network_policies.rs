@@ -38,9 +38,17 @@ pub async fn plan(
         });
     }
 
+    let names: Vec<&str> = definitions.iter().map(|def| def.name.as_str()).collect();
+    let existing = client
+        .introspection()
+        .existing_network_policies(&names)
+        .await
+        .map_err(CliError::Connection)?;
+
     let mut object_results = Vec::new();
     for def in &definitions {
-        let obj_result = plan_network_policy(client, executor, def).await?;
+        let obj_result =
+            plan_network_policy(client, executor, def, existing.contains(&def.name)).await?;
         object_results.push(obj_result);
     }
 
@@ -71,18 +79,12 @@ async fn plan_network_policy(
     client: &Client,
     executor: &DeploymentExecutor<'_>,
     def: &NetworkPolicyDefinition,
+    exists: bool,
 ) -> Result<ObjectResult, CliError> {
     let policy_name = &def.name;
 
     // Drain any prior statements
     executor.take_statements();
-
-    // Check if network policy already exists
-    let exists = client
-        .introspection()
-        .network_policy_exists(policy_name)
-        .await
-        .map_err(CliError::Connection)?;
 
     let action = if exists {
         // ALTER NETWORK POLICY to converge rules

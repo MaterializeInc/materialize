@@ -40,11 +40,25 @@ pub async fn plan(
         });
     }
 
+    let names: Vec<&str> = definitions.iter().map(|def| def.name.as_str()).collect();
+    let introspection = client.introspection();
+    let (existing, members, parameters) = futures::try_join!(
+        introspection.existing_roles(&names),
+        introspection.get_role_members(&names),
+        introspection.get_role_parameters(&names),
+    )
+    .map_err(CliError::Connection)?;
+
     // Pass 1: Create all roles so inter-role GRANT ROLE dependencies are satisfied.
     let mut actions = Vec::new();
     for def in &definitions {
         executor.take_statements();
-        let action = create_role(client, executor, def).await?;
+        let action = if existing.contains(&def.name) {
+            ObjectAction::UpToDate
+        } else {
+            executor.execute_sql(&def.create_stmt).await?;
+            ObjectAction::Created
+        };
         actions.push((action, executor.take_statements()));
     }
 
@@ -52,7 +66,13 @@ pub async fn plan(
     let mut object_results = Vec::new();
     for (def, (action, create_stmts)) in definitions.iter().zip_eq(actions) {
         executor.take_statements();
-        configure_role(client, executor, def).await?;
+        configure_role(
+            executor,
+            def,
+            members.get(&def.name).map_or(&[], Vec::as_slice),
+            parameters.get(&def.name).map_or(&[], Vec::as_slice),
+        )
+        .await?;
         let mut statements = create_stmts;
         statements.extend(executor.take_statements());
         object_results.push(ObjectResult {
@@ -86,31 +106,12 @@ pub async fn run(settings: &Settings, dry_run: bool) -> Result<ApplyPlan, CliErr
     Ok(plan_result)
 }
 
-/// Create a role if it doesn't already exist.
-async fn create_role(
-    client: &Client,
-    executor: &DeploymentExecutor<'_>,
-    def: &RoleDefinition,
-) -> Result<ObjectAction, CliError> {
-    let exists = client
-        .introspection()
-        .role_exists(&def.name)
-        .await
-        .map_err(CliError::Connection)?;
-
-    if exists {
-        Ok(ObjectAction::UpToDate)
-    } else {
-        executor.execute_sql(&def.create_stmt).await?;
-        Ok(ObjectAction::Created)
-    }
-}
-
 /// Configure a role: ALTER, GRANT, COMMENT statements and reconcile stale grants/params.
 async fn configure_role(
-    client: &Client,
     executor: &DeploymentExecutor<'_>,
     def: &RoleDefinition,
+    current_members: &[String],
+    current_params: &[String],
 ) -> Result<(), CliError> {
     let role_name = &def.name;
 
@@ -130,19 +131,13 @@ async fn configure_role(
     }
 
     // Revoke stale grants
-    let current_members = client
-        .introspection()
-        .get_role_members(role_name)
-        .await
-        .map_err(CliError::Connection)?;
-
     let desired_members: BTreeSet<String> = def
         .grants
         .iter()
         .flat_map(|g| g.member_names.iter().map(|m| m.as_str().to_lowercase()))
         .collect();
 
-    for member in &current_members {
+    for member in current_members {
         if !desired_members.contains(&member.to_lowercase()) {
             let sql = format!(
                 "REVOKE {} FROM {}",
@@ -154,12 +149,6 @@ async fn configure_role(
     }
 
     // Reset stale session defaults
-    let current_params = client
-        .introspection()
-        .get_role_parameters(role_name)
-        .await
-        .map_err(CliError::Connection)?;
-
     let desired_params: BTreeSet<String> = def
         .alter_stmts
         .iter()
@@ -171,7 +160,7 @@ async fn configure_role(
         })
         .collect();
 
-    for param in &current_params {
+    for param in current_params {
         if !desired_params.contains(&param.to_lowercase()) {
             let sql = format!(
                 "ALTER ROLE {} RESET {}",
