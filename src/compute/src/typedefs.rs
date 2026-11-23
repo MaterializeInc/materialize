@@ -13,12 +13,12 @@
 
 use columnar::{Container, Ref};
 use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
 use differential_dataflow::trace::wrappers::enter::TraceEnter;
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use mz_repr::{Diff, Row};
 use mz_row_spine::{RowRowBuilder, RowRowColPagedBuilder, RowValBuilder};
+use mz_timely_util::arrange_agent::TraceAgent;
 use mz_timely_util::columnar::batcher::{Chunker, ColumnChunker};
 use mz_timely_util::columnar::chunk::{AccountedChunkBatcher, ComputeSpill, UnchunkBuilder};
 use mz_timely_util::columnar::{Col2ValBatcher, Col2ValColBatcher};
