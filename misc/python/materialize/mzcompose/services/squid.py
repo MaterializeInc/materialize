@@ -23,7 +23,7 @@ class Squid(Service):
         self,
         name: str = "squid",
         # renovate: datasource=docker depName=sameersbn/squid versioning=docker
-        image: str = "sameersbn/squid:3.5.27-2",
+        image: str = "sameersbn/squid:3.5.27-2@sha256:e98299069f0c6e3d9b9188903518e2f44ac36b1fa5007e879af518e1c0a234af",
         port: int = 3128,
         volumes: list[str] = ["./squid.conf:/etc/squid/squid.conf"],
     ) -> None:

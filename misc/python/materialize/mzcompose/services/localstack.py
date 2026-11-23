@@ -18,7 +18,7 @@ class Localstack(Service):
         self,
         name: str = "localstack",
         # renovate: datasource=docker depName=localstack/localstack versioning=docker
-        image: str = "localstack/localstack:4.14.0",
+        image: str = "localstack/localstack:4.14.0@sha256:3ebc37595918b8accb852f8048fef2aff047d465167edd655528065b07bc364a",
         port: int = 4566,
         environment: list[str] = ["LOCALSTACK_HOST=localstack"],
         volumes: list[str] = ["/var/run/docker.sock:/var/run/docker.sock"],

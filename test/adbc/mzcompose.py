@@ -22,7 +22,7 @@ SERVICES = [
         name="adbc",
         config={
             # renovate: datasource=docker depName=python versioning=docker
-            "image": "python:3.14.7-trixie",
+            "image": "python:3.14.7-trixie@sha256:0876e54cf728d89fd9d0fdaf5837b9ee879ea5fbbd6fd0cddbe5eb0cce3f5f9e",
             "volumes": [
                 "../../:/workdir",
             ],

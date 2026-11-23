@@ -30,7 +30,7 @@ from materialize.cloudtest.util.common import retry
 from materialize.mzcompose.services.redpanda import REDPANDA_VERSION
 
 # renovate: datasource=docker depName=jauderho/toxiproxy versioning=docker
-TOXIPROXY_IMAGE = "jauderho/toxiproxy:v2.8.0"
+TOXIPROXY_IMAGE = "jauderho/toxiproxy:v2.8.0@sha256:475a4b128d72e21259006159777a33fadf2f2f740b321bc0fd0d4aded9de555c"
 
 TOXIPROXY_ADMIN_PORT = 8474
 TOXIPROXY_PROXY_PORT = 9092

@@ -75,7 +75,7 @@ SERVICES = [
         name="hydration-flags",
         config={
             # renovate: datasource=docker depName=python versioning=docker
-            "image": "python:3.12-slim",
+            "image": "python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b",
             "volumes": ["./mock_hydration_flags.py:/app/server.py"],
             "command": ["python3", "-u", "/app/server.py"],
             "healthcheck": {
