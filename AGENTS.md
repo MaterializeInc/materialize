@@ -30,8 +30,8 @@ authors to squash on merge or to keep every intermediate commit green.
   flag it to the user and workshop an alternative together rather than silently
   downgrading the design.
 * Before reporting success on a code change, run the cheap formatters and
-  checkers. For Rust, these are `bin/fmt` and `cargo check`. Before committing,
-  run the pre-commit checklist in the `mz-commit` skill.
+  checkers. For Rust, these are `bin/fmt` and `cargo check`. Before pushing
+  for review, run the pre-push checklist in the `mz-commit` skill.
 * When debugging CI or lint failures, start by reproducing the exact failing
   command locally and reading its output. Do not run generic checks (clippy,
   fmt, grep) in a shotgun approach.
