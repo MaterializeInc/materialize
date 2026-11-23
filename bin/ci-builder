@@ -278,6 +278,14 @@ case "$cmd" in
             --env BUILDKITE_BRANCH
             --env BUILDKITE_ORGANIZATION_SLUG
             --env BUILDKITE_PULL_REQUEST
+            # Agents that route egress through a proxy set these. Elsewhere
+            # they are unset, and `--env VAR` skips unset variables.
+            --env HTTP_PROXY
+            --env HTTPS_PROXY
+            --env NO_PROXY
+            --env http_proxy
+            --env https_proxy
+            --env no_proxy
         )
 
         if [[ $secrets == "true" ]]; then
