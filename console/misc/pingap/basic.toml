@@ -1,0 +1,17 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Shared by every directory under /etc/pingap. PINGAP_CONF picks one
+# directory, and pingap merges the .toml files in it.
+
+[basic]
+name = "console"
+log_level = "info"
+pid_file = "/tmp/pingap.pid"
+upgrade_sock = "/tmp/pingap_upgrade.sock"

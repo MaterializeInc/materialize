@@ -1,0 +1,18 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Re-resolved every 10s, so a balancerd service whose address changes is
+# followed without a restart. The certificate is not verified, as with
+# nginx's proxy_pass to an https backend.
+[upstreams.environmentd]
+addrs = ["$ENV:MZ_CONSOLE_BACKEND_ADDR"]
+discovery = "dns"
+update_frequency = "10s"
+sni = "$ENV:MZ_CONSOLE_BACKEND_SNI"
+verify_cert = false

@@ -295,21 +295,41 @@ impl Context {
             }
         });
 
-        let scheme = match console.spec.balancerd.scheme {
+        let backend_scheme = match console.spec.balancerd.scheme {
             HttpConnectionScheme::Http => "http",
             HttpConnectionScheme::Https => "https",
         };
-        let mut env = vec![EnvVar {
-            name: "MZ_ENDPOINT".to_string(),
-            value: Some(format!(
-                "{}://{}.{}.svc.cluster.local:{}",
-                scheme,
-                console.spec.balancerd.service_name,
-                console.spec.balancerd.namespace,
-                self.config.balancerd_http_port,
-            )),
+        let backend_host = format!(
+            "{}.{}.svc.cluster.local",
+            console.spec.balancerd.service_name, console.spec.balancerd.namespace,
+        );
+        let backend_addr = format!("{backend_host}:{}", self.config.balancerd_http_port);
+        let console_port = self.config.console_http_port;
+        let metrics_port = self.config.console_internal_http_port;
+        // Both the nginx (`MZ_ENDPOINT`, `MZ_NGINX_*`) and the pingap variables
+        // are set, so this works with console images from either side of the
+        // switch. Each image ignores the other's variables.
+        let mut env: Vec<EnvVar> = [
+            ("MZ_ENDPOINT", format!("{backend_scheme}://{backend_addr}")),
+            ("MZ_CONSOLE_BACKEND_ADDR", backend_addr),
+            ("MZ_CONSOLE_BACKEND_SNI", backend_host),
+            ("MZ_CONSOLE_LISTEN_ADDR", format!("0.0.0.0:{console_port}")),
+            (
+                "MZ_CONSOLE_LOOPBACK_ADDR",
+                format!("127.0.0.1:{console_port}"),
+            ),
+            (
+                "MZ_CONSOLE_METRICS_LISTEN_ADDR",
+                format!("0.0.0.0:{metrics_port}"),
+            ),
+        ]
+        .into_iter()
+        .map(|(name, value)| EnvVar {
+            name: name.to_string(),
+            value: Some(value),
             ..Default::default()
-        }];
+        })
+        .collect();
         // Plain HTTP whether or not the console itself serves TLS.
         env.push(EnvVar {
             name: "MZ_NGINX_METRICS_LISTENER_CONFIG".to_string(),
@@ -378,6 +398,17 @@ ssl_certificate_key /nginx/tls/tls.key;",
             });
             Some("HTTP".to_owned())
         };
+        // One directory per listener and backend scheme, see console/Dockerfile.
+        let listener_scheme = if scheme.as_deref() == Some("HTTPS") {
+            "https"
+        } else {
+            "http"
+        };
+        env.push(EnvVar {
+            name: "PINGAP_CONF".to_string(),
+            value: Some(format!("/etc/pingap/{listener_scheme}-{backend_scheme}")),
+            ..Default::default()
+        });
 
         let probe = Probe {
             http_get: Some(HTTPGetAction {
@@ -793,6 +824,19 @@ mod tests {
                 .find(|var| var.name == "MZ_NGINX_METRICS_LISTENER_CONFIG")
                 .expect("nginx is told where to listen");
             assert_eq!(listener.value.as_deref(), Some("listen 8081;"));
+            let env = |name: &str| {
+                container
+                    .env
+                    .iter()
+                    .flatten()
+                    .find(|var| var.name == name)
+                    .and_then(|var| var.value.clone())
+            };
+            assert_eq!(
+                env("MZ_CONSOLE_METRICS_LISTEN_ADDR").as_deref(),
+                Some("0.0.0.0:8081")
+            );
+            assert_eq!(env("PINGAP_CONF").as_deref(), Some("/etc/pingap/http-http"));
 
             let scrape_port = template
                 .metadata
