@@ -64,21 +64,23 @@ the current `LIR_VERSION` has shipped (see below), bump it first so the old
 `lir_v{N}.json` stays in place for migration tooling and the rewrite targets
 a fresh file.
 
-### Scalar function changes: regenerate the builtin registry
+### Function changes: regenerate the builtin registry
 
 The schema registry sees a plan's shape, not what its functions compute.
-`builtin_registry` covers that gap for `UnaryFunc`, `BinaryFunc`, and
-`VariadicFunc`. Run it whenever the diff touches
-`src/expr/src/scalar/func.rs` or `src/expr/src/scalar/func/` (including
-`impls/` and `#[sqlfunc]` bodies):
+`builtin_registry` covers that gap for `UnaryFunc`, `BinaryFunc`,
+`VariadicFunc`, `AggregateFunc`, and `TableFunc`. Run it whenever the diff
+touches `src/expr/src/scalar/func.rs`, `src/expr/src/scalar/func/`
+(including `impls/` and `#[sqlfunc]` bodies),
+`src/expr/src/relation/func.rs`, or `src/compute-types/src/plan/reduce.rs`
+(which records each aggregate's reduction type):
 
 ```
 cargo test -p mz-catalog --test builtin_registry
 ```
 
 * It fails when a function is added, removed, or has a changed property
-  (nullability, error behavior, monotonicity, output type, sqlfunc
-  signature) or a changed `#[sqlfunc]` body. If the failure names removed or
+  (any field recorded in `builtin_registry.json`) or a changed `#[sqlfunc]`
+  body. If the failure names removed or
   changed functions, or a body change that alters results, settle the
   `LIR_VERSION` question below **before** regenerating. A rewrite at the old
   version overwrites that version's entry in `builtin_registry_digests.json`
@@ -96,8 +98,8 @@ cargo test -p mz-catalog --test builtin_registry
 * **New function with a payload** (any variant that carries data, e.g. a
   target type, a regex, a scale): the registry build panics naming the
   variant. Add a representative `Sample` to `unary_samples()`,
-  `binary_samples()`, or `variadic_samples()` in
-  `src/expr/src/scalar/func/registry.rs`. If a property depends on the
+  `binary_samples()`, `variadic_samples()`, `aggregate_samples()`, or
+  `table_samples()` in `src/expr/src/scalar/func/registry.rs`. If a property depends on the
   payload (e.g. a cast only errors when it has a scale), add a second sample
   with `.labeled("...")` covering the other branch. Payload-free variants and
   plain `#[sqlfunc]` functions need no sample.

@@ -2090,7 +2090,7 @@ impl AggregateFunc {
     /// Such aggregates can ignore the `diff` of each input, evaluating over the
     /// distinct datums rather than expanding by count. This keeps idempotent
     /// reductions linear in the number of distinct inputs.
-    fn ignores_multiplicity(&self) -> bool {
+    pub(crate) fn ignores_multiplicity(&self) -> bool {
         use AggregateFunc::*;
         matches!(
             self,

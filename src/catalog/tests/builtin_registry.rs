@@ -15,12 +15,12 @@
 //! canonical name, and splits each record into a properties half and a source
 //! half.
 //!
-//! The scalar functions come from [`FuncRegistry::build`], which records every
-//! `UnaryFunc`, `BinaryFunc` and `VariadicFunc` variant, see `Record` in the
-//! registry module. It lives in `mz-expr` behind its `func-registry` feature,
-//! which this crate's dev-dependency enables. The LIR schema snapshot in
-//! `mz-compute-types` complements it: that pins the serialized shape of the
-//! function enums but not what the variants mean.
+//! The functions come from [`FuncRegistry::build`], which records every
+//! `UnaryFunc`, `BinaryFunc`, `VariadicFunc`, `AggregateFunc` and `TableFunc`
+//! variant, see `Record` in the registry module. It lives in `mz-expr` behind
+//! its `func-registry` feature, which this crate's dev-dependency enables. The
+//! LIR schema snapshot in `mz-compute-types` complements it: that pins the
+//! serialized shape of the function enums but not what the variants mean.
 //!
 //! TODO(mgree): follow-up PRs will handle SQL-defined builtin functions and
 //! builtin views.
@@ -47,6 +47,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use mz_compute_types::plan::reduce::reduction_type;
 use mz_compute_types::plan::{LIR_VERSION, LIR_VERSION_POLICY};
 use mz_expr::func::registry::{FuncRegistry, Record};
 use serde::Serialize;
@@ -70,11 +71,11 @@ type Records = BTreeMap<String, BTreeMap<String, serde_json::Value>>;
 /// Builds the properties and source halves of every builtin the snapshot
 /// tracks.
 fn build() -> (Records, Records) {
-    fn split_into<P: Serialize>(
+    fn split_into<F, P: Serialize>(
         properties: &mut Records,
         sources: &mut Records,
         kind: &str,
-        map: &BTreeMap<String, Record<P>>,
+        map: &BTreeMap<String, Record<F, P>>,
     ) {
         for (name, record) in map {
             properties
@@ -102,6 +103,31 @@ fn build() -> (Records, Records) {
         "VariadicFunc",
         &registry.variadic,
     );
+    split_into(
+        &mut properties,
+        &mut sources,
+        "AggregateFunc",
+        &registry.aggregate,
+    );
+    // Lowering stores each aggregate's reduction type in the plan, and
+    // rendering dispatches on the function within that type, panicking on a
+    // function it does not expect there (see `get_monoid` in `mz-compute`'s
+    // `render/reduce.rs`). `mz-expr` cannot see the classification, so it is
+    // recorded here.
+    let aggregates = properties
+        .get_mut("AggregateFunc")
+        .expect("aggregates recorded");
+    for (name, record) in &registry.aggregate {
+        let serde_json::Value::Object(fields) = aggregates.get_mut(name).expect("recorded above")
+        else {
+            panic!("aggregate properties serialize as an object");
+        };
+        fields.insert(
+            "reduction_type".to_string(),
+            to_value(&reduction_type(&record.func)),
+        );
+    }
+    split_into(&mut properties, &mut sources, "TableFunc", &registry.table);
     (properties, sources)
 }
 
