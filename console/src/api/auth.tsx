@@ -81,7 +81,6 @@ export function hasInvoiceReadPermission(
   return hasPermission(user, "materialize.invoice.read");
 }
 
-/** Held by Organization Admins and Billing Admins. */
 export function hasBillingWritePermission(user: User | null): boolean {
   return hasPermission(user, "materialize.billing.write");
 }

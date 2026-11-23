@@ -55,7 +55,7 @@ const billingAdminUser: User = {
   ],
 };
 
-const memberUser: User = {
+const noBillingWriteUser: User = {
   ...dummyValidUser,
   permissions: [
     { key: "materialize.environment.write" } as ITeamUserPermission,
@@ -148,7 +148,7 @@ describe("UsageRoutes", () => {
       buildCloudOrganizationsResponse({ payload: buildOrganization() }),
       buildInvoicesResponse({ invoices: oneInvoice }),
     );
-    await renderAt("/usage/overview", memberUser);
+    await renderAt("/usage/overview", noBillingWriteUser);
 
     expect(await screen.findByRole("link", { name: "Overview" })).toBeVisible();
     expect(screen.queryByRole("link", { name: "Billing" })).toBeNull();
