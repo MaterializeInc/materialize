@@ -148,6 +148,17 @@ unsafe = true
     startLevel = 2
     endLevel = 4
 
+# Hugo does not read files through a symlink that leaves the project, so the
+# lexer's keyword list is mounted instead. Declaring any assets mount drops the
+# default one, so it is restated.
+[[module.mounts]]
+source = "assets"
+target = "assets"
+
+[[module.mounts]]
+source = "../../src/sql-lexer/src/keywords.txt"
+target = "assets/sql-keywords.txt"
+
 # hugo deploy sets each file's Content-Type from the first Hugo media type with
 # its suffix, and for ".xml" that is RSS, so the sitemap was served as
 # application/rss+xml. Matchers are tried in order; the first match wins.

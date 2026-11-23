@@ -30,6 +30,15 @@ disable = true
   target = "static"
   files = ["! **", "! *"]
 
+# This list replaces the one in config.toml, so its mounts are repeated.
+[[module.mounts]]
+  source = "assets"
+  target = "assets"
+
+[[module.mounts]]
+  source = "../../src/sql-lexer/src/keywords.txt"
+  target = "assets/sql-keywords.txt"
+
 # Skill-specific parameters
 [params]
   # Sections to exclude from skill generation
