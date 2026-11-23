@@ -150,7 +150,9 @@ Persist leases, statement deadlines or the 60s publication default, weaken safet
 checks, or invent scheduling guarantees to turn an unexplained failure green.
 Judge publication behavior at that default. Workflows that shorten the interval
 are stress tests, not acceptance gates or optimization targets.
-Keep the upstream base pinned unless Aljoscha authorizes integration.
+M3 completes on the pinned upstream base. Do not merge or rebase onto main.
+The merge-skew CI check stays red and is accepted. Do not work on it. State
+this in the PR description, next to any job marked unsupported.
 
 Debugging and verification
 
