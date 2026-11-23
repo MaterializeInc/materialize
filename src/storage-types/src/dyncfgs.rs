@@ -137,6 +137,17 @@ pub const KAFKA_LOW_WATERMARK_CHECK: Config<bool> = Config::new(
     ParameterScope::Environment,
 );
 
+/// Whether the Kafka clients of a source emit librdkafka statistics, which the source exports as
+/// the `mz_source_rdkafka_*` metrics. A running source picks up a change when its dataflow is
+/// next rendered.
+pub const KAFKA_SOURCE_RDKAFKA_METRICS: Config<bool> = Config::new(
+    "kafka_source_rdkafka_metrics",
+    false,
+    "Whether Kafka sources export librdkafka statistics as metrics. A running source picks up a \
+    change when its dataflow is next rendered.",
+    ParameterScope::Replica,
+);
+
 pub const KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM: Config<&'static str> =
     Config::new(
         "kafka_default_aws_privatelink_endpoint_identification_algorithm",
@@ -586,6 +597,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&KAFKA_SINK_BATCH_SIZE)
         .add(&KAFKA_SINK_BATCH_NUM_MESSAGES)
         .add(&KAFKA_SINK_EMIT_SINK_ID_HEADER)
+        .add(&KAFKA_SOURCE_RDKAFKA_METRICS)
         .add(&MYSQL_REPLICATION_HEARTBEAT_INTERVAL)
         .add(&MYSQL_SOURCE_SNAPSHOT_EXACT_COUNT_MAX_ROWS)
         .add(&MYSQL_SOURCE_SNAPSHOT_PARALLELISM)

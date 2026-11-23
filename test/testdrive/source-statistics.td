@@ -272,6 +272,7 @@ upsert_tbl true "${updates-committed}" "${updates-committed}" true 2 true
 # per-worker metrics must survive that.
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET compute_prometheus_introspection_scrape_interval = '1s'
+ALTER SYSTEM SET kafka_source_rdkafka_metrics = false
 
 > CREATE CLUSTER rerender_cluster SIZE 'scale=1,workers=1'
 
@@ -297,6 +298,15 @@ SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '${rerender
 mz_source_row_inserts
 mz_storage_upsert_inserts_total
 
+# Kafka clients created while `kafka_source_rdkafka_metrics` is off export no
+# librdkafka statistics. The re-render below creates new clients.
+> SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name LIKE 'mz_source_rdkafka_%'
+0
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET kafka_source_rdkafka_metrics = true
+
 > CREATE TABLE rerender_tbl2 FROM SOURCE rerender_source (REFERENCE "testdrive-upsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
@@ -310,3 +320,22 @@ $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=5s
   OR (metric_name = 'mz_storage_upsert_inserts_total' AND labels->'source_id' = '${rerender-tbl-id}')
 mz_source_row_inserts
 mz_storage_upsert_inserts_total
+
+# Both of the source's Kafka clients export librdkafka statistics, including
+# the round-trip time of the brokers that have responded to them.
+$ set-from-sql var=rerender-source-id
+SELECT id FROM mz_sources WHERE name = 'rerender_source'
+
+> SELECT DISTINCT metric_name, labels->'client' FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name IN ('mz_source_rdkafka_rx', 'mz_source_rdkafka_broker_rtt_requests_total')
+  AND labels->'source_id' = '${rerender-source-id}' AND value > 0
+mz_source_rdkafka_broker_rtt_requests_total metadata
+mz_source_rdkafka_broker_rtt_requests_total reader
+mz_source_rdkafka_rx metadata
+mz_source_rdkafka_rx reader
+
+> DROP SOURCE rerender_source CASCADE
+
+> SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name LIKE 'mz_source_rdkafka_%' AND labels->'source_id' = '${rerender-source-id}'
+0

@@ -850,6 +850,16 @@ where
     }
 }
 
+/// Serves the callbacks queued on `client`'s main queue, such as statistics and errors, without
+/// blocking.
+///
+/// A consumer's messages and group events are on a separate queue, which this does not serve.
+pub fn poll_callbacks<C: ClientContext>(client: &Client<C>) {
+    // SAFETY: The handle is valid for as long as `client` is, and librdkafka handles are
+    // thread-safe.
+    unsafe { rdkafka_sys::rd_kafka_poll(client.native_ptr(), 0) };
+}
+
 /// Id of a partition in a topic.
 pub type PartitionId = i32;
 
