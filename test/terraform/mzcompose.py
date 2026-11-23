@@ -32,7 +32,14 @@ import psycopg
 import requests
 import yaml
 
-from materialize import MZ_ROOT, ci_util, gcp_oidc, spawn
+from materialize import (
+    MZ_ROOT,
+    buildkite,
+    ci_util,
+    gcp_oidc,
+    spawn,
+    terraform_aws_cleanup,
+)
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import (
     Composition,
@@ -829,7 +836,7 @@ class AWS(State):
             "Environment": "dev",
             "Terraform": "true",
             "owner": os.getenv("BUILDKITE_BUILD_CREATOR_EMAIL") or getpass.getuser(),
-            "reason": "materialize test/terraform CI run",
+            "reason": terraform_aws_cleanup.REASON,
             "team": "qa",
             "deleteAfter": delete_after,
         }
@@ -843,6 +850,14 @@ class AWS(State):
             "-var",
             f"environmentd_version={tag}",
         ]
+
+        # Only one CI job per prefix runs at a time (its step's concurrency
+        # group), so a VPC with this prefix that exists before the first apply
+        # was leaked by an earlier attempt. The EKS cluster in it would fail
+        # every apply from now on with "Cluster already exists".
+        if buildkite.is_in_buildkite() and prefix != PREFIX_AWS_PERSISTENT:
+            print("--- Deleting leftovers of earlier attempts")
+            terraform_aws_cleanup.delete_vpcs_named(f"{prefix}-dev-vpc")
 
         print("--- Setup")
         spawn.runv(

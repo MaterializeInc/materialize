@@ -14,7 +14,9 @@ priority: -50
 
 steps:
   - command: bin/ci-builder run stable bin/pyactivate -m ci.cleanup.aws
-    timeout_in_minutes: 10
+    # Deleting leaked test/terraform VPCs waits up to 20 minutes for an EKS
+    # cluster's deletion, 10 for a NAT gateway's and 15 for the ENIs to go.
+    timeout_in_minutes: 45
     agents:
       queue: linux-x86_64
     env:

@@ -14,7 +14,7 @@ from urllib.parse import unquote, urlparse
 
 import boto3
 
-from materialize import scratch
+from materialize import scratch, terraform_aws_cleanup
 
 MAX_AGE = timedelta(hours=1)
 
@@ -123,6 +123,11 @@ def clean_up_iam() -> None:
             print(f"Skipping role {role_name}")
 
 
+def clean_up_terraform_tests() -> None:
+    print("Deleting test/terraform resources past their deleteAfter tag")
+    terraform_aws_cleanup.delete_expired()
+
+
 def get_testdrive_roles(client: Any) -> list[Any]:
     roles = []
 
@@ -141,6 +146,7 @@ def main() -> None:
     clean_up_sqs()
     clean_up_ec2()
     clean_up_iam()
+    clean_up_terraform_tests()
 
 
 if __name__ == "__main__":
