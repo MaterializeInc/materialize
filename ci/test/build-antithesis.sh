@@ -29,7 +29,27 @@ tag=$version--antithesis.g$(git rev-parse --short=12 HEAD)
 # Writes the manifests to $1/manifests.
 render() {
     mkdir -p "$1/manifests"
-    cp misc/helm-charts/testing/{postgres,minio,redpanda}.yaml "$1/manifests"
+    # Antithesis stops pods and Kubernetes replaces them. For a Deployment the
+    # replacement starts while the old pod still shuts down, and two Postgres
+    # servers on one volume lost acknowledged writes. An emptyDir starts empty
+    # in the replacement. A StatefulSet waits for the old pod and keeps its
+    # volumes. Redpanda v23.3.5 does not start under Antithesis
+    # (`GLIBC_ABI_DT_RELR not found`).
+    bin/pyactivate -c 'import sys, yaml
+docs = [d for path in sys.argv[2:] for d in yaml.safe_load_all(open(path)) if d]
+for d in docs:
+    if d["kind"] == "Deployment":
+        spec, pod = d["spec"], d["spec"]["template"]["spec"]
+        d["kind"], spec["serviceName"] = "StatefulSet", d["metadata"]["name"]
+        claim = {"accessModes": ["ReadWriteOnce"], "resources": {"requests": {"storage": "5Gi"}}}
+        spec["volumeClaimTemplates"] = [
+            {"metadata": {"name": v["name"]}, "spec": claim} for v in pod.pop("volumes")
+        ]
+        if d["metadata"]["name"] == "redpanda":
+            pod["containers"][0]["image"] = "docker.io/redpandadata/redpanda:v26.1.8"
+kept = [d for d in docs if d["kind"] != "PersistentVolumeClaim"]
+yaml.safe_dump_all(kept, open(sys.argv[1], "w"))' \
+        "$1/manifests/dependencies.yaml" misc/helm-charts/testing/{postgres,minio,redpanda}.yaml
     helm template operator misc/helm-charts/operator --namespace materialize \
         --values test/antithesis/operator-values.yaml \
         --set "operator.image.repository=$registry/orchestratord,operator.image.tag=$tag" \
