@@ -64,7 +64,7 @@ the current `LIR_VERSION` has shipped (see below), bump it first so the old
 `lir_v{N}.json` stays in place for migration tooling and the rewrite targets
 a fresh file.
 
-### Scalar function changes: regenerate the function registry
+### Scalar function changes: regenerate the builtin registry
 
 The schema registry sees a plan's shape, not what its functions compute.
 `builtin_registry` covers that gap for `UnaryFunc`, `BinaryFunc`, and

@@ -57,9 +57,11 @@ JSON diff. Never edit those files by hand. A new variant whose payload carries
 data needs a `Sample` in `src/expr/src/scalar/func/registry.rs`, and the panic
 names the function to add it to.
 
-The sibling `--test lir_schema` snapshots the serde schema of the whole LIR
-plan into `lir_v{LIR_VERSION}.json` and fails on shape changes anywhere under
-`src/compute-types/src/plan`, including `*Func` payloads. Regenerate with
+`cargo test -p mz-compute-types --test lir_schema` snapshots the serde schema
+of the whole LIR plan into
+`src/compute-types/tests/snapshots/lir_v{LIR_VERSION}.json` and fails on shape
+changes anywhere under `src/compute-types/src/plan`, including `*Func`
+payloads. Regenerate with
 `REWRITE=1 cargo test -p mz-compute-types --test lir_schema`.
 
 Some tests require access to a metadata store.

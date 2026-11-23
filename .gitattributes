@@ -1,2 +1,3 @@
 **/*.svg linguist-generated=true
 src/compute-types/tests/snapshots/*.json linguist-generated=true
+src/catalog/tests/snapshots/builtin_registry*.json linguist-generated=true

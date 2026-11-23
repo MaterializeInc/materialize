@@ -310,7 +310,7 @@ fn builtin_registry_snapshot() {
 /// silently absent source would make the snapshot blind to implementation
 /// changes without failing anything.
 #[mz_ore::test]
-fn func_registry_records_sqlfunc_sources() {
+fn builtin_registry_records_sqlfunc_sources() {
     let registry = FuncRegistry::build();
     // The exact rendering is pinned by the unit tests in mz-expr-derive-impl.
     let abs = &registry.unary["abs_int16"];
