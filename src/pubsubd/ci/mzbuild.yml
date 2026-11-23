@@ -8,6 +8,9 @@
 # by the Apache License, Version 2.0.
 
 name: pubsubd
+# Native test deployments run the relay from the materialized multi-call image.
+# Keep standalone builds available without requiring a public pubsubd repository.
+publish: false
 pre-image:
   - type: cargo-build
     bin: pubsubd

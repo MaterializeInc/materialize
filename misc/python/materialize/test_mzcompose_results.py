@@ -26,6 +26,7 @@ from materialize import MZ_ROOT, mzbuild
 from materialize.cli.mzcompose import RunCommand
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.pubsub import Pubsub
 from materialize.mzcompose.test_result import FailedTestExecutionError
 from materialize.ui import CommandFailureCausedUIError, UIError
 
@@ -93,6 +94,18 @@ def test_native_deployment_overrides_keep_the_external_relay(image):
     assert relay["entrypoint"] == ["tini", "--", "pubsubd"]
     assert "ports" not in relay
     assert "volumes" not in relay
+
+
+def test_native_relay_needs_no_standalone_published_image():
+    repo = mzbuild.Repository(MZ_ROOT)
+    published = {
+        image.name
+        for image in repo.resolve_dependencies(image for image in repo if image.publish)
+    }
+    relay = Pubsub().config
+    assert relay["mzbuild"] == "materialized"
+    assert relay["mzbuild"] in published
+    assert "pubsubd" not in published
 
 
 @pytest.mark.parametrize("failure", ["lifecycle", "interrupt", "setup"])

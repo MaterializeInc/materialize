@@ -6,9 +6,10 @@ Finish native-only M3 under the [prompt](20260903_decoupled_coordination_prompt.
 Preserve compatible full writers, explicit retirement, durable protection,
 adapter-owned policy, shared query transport and required formats. Keep the PR draft.
 
-**Next action:** resolve the private pubsubd image path, then rerun relevant CI.
-It cannot be made public for this prototype. Preserve public-image checks for
-other images and native runtime coverage. The scoped ALTER SINK repair now has
+**Next action:** revalidate image delivery and the broad parallel Iceberg case
+in fresh CI. The unused standalone pubsubd image is now non-publishable. Native
+tests retain their existing materialized multi-call image and separate relay
+process, with public-image checks unchanged. The scoped ALTER SINK repair has
 a failing-before, passing-after Iceberg witness. Its role in the original broad
 CI timeout remains unverified. Keep startup optimization proposals separate.
 
@@ -32,13 +33,15 @@ CI timeout remains unverified. Keep startup optimization proposals separate.
 
 ## Outstanding work
 
-- **CI.** [Build 144502](https://buildkite.com/materialize/test/builds/144502)
-  again reports pubsubd as non-public on Docker Hub. Build 144492 ran runtime
+- **CI.** [Build 144536](https://buildkite.com/materialize/test/builds/144536)
+  reports pubsubd as non-public on Docker Hub. Build 144492 ran runtime
   integration but skipped the normal x86 image-build step. That did not prove
-  registry provisioning was resolved. A scoped private-image path is still
-  required. The stale Rust expectation and ALTER read-floor repair are verified
-  locally, with fresh CI still required. See `ci-144492/triage.md`,
-  `alter-sink-overlap/outcome.md` and `ci-144502/`. Merge skew remains accepted.
+  registry provisioning was resolved. The publication repair passes the real
+  dependency-graph regression and native launcher/composition checks locally.
+  Fresh CI is still required. The production Console E2E job also timed out
+  filling its API-key modal. Its cause is not established. See
+  `pubsub-image-publication/`, `ci-144492/triage.md` and
+  `alter-sink-overlap/outcome.md`. Merge skew remains accepted.
 - **Startup proposal.** Current debug cold startup reaches controller HTTP in
   19.81 s and SQL in 48.96 s. Ordinary builtin optimization costs about 15 CPU-s,
   mostly logical optimization. Exact metadata rules out simply enabling replica
