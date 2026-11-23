@@ -40,9 +40,6 @@ SERVICES = [
                 "KAFKA_BROKER=redpanda:9092",
                 "REPLICA_SIZES=scale=1,workers=1;scale=1,workers=2",
                 "ANTITHESIS_SDK_LOCAL_OUTPUT=/tmp/assertions.jsonl",
-                # A table added to a running Postgres source is ahead of the
-                # source's other tables for a moment, a known bug.
-                "SKIP_RULES=pg_export",
                 "DURATION",
             ],
         },

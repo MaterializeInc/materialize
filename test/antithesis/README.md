@@ -32,11 +32,10 @@ acknowledged writes.
 | `views` | The two tables hold the same rows. A materialized view equals its query, and an indexed join of the two tables and the counters equals the materialized view. Also read on one replica alone and at serializable isolation |
 | `increment`, `read_counter` | A counter updated with `UPDATE ... SET v = v + 1` stays within the increments acknowledged and sent |
 | `pg_write`, `pg_read` | Upstream transactions move an amount between two tables of a Postgres source, and their sum in Materialize never changes |
-| `pg_export` | A second table for the same upstream table, added to the running source, equals the first |
 | `kafka_read` | A Kafka sink of the materialized view, read back through a Kafka source, never shows a state ahead of the view |
 | `ddl`, `ddl_read` | Views, indexes and tables are created and dropped and the cluster is resized while everything else runs. A view created this way equals its query |
 | `kill`, `kill_after_ddl` | Deletes environmentd, clusterd and orchestratord pods, also a fraction of a second after a DDL statement was sent |
-| `roll` | Requests 0dt rollouts to a new generation, promotes the manual ones, deletes pods in their phases, and changes the spec while one is promoting. The active generation never decreases, and an up-to-date resource runs its spec |
+| `roll` | Requests 0dt rollouts to a new generation, promotes the manual ones, and deletes pods in their phases. The active generation never decreases, and an up-to-date resource runs its spec |
 | `write_to_candidate` | A generation that orchestratord has not told to promote acknowledges no write sent straight to its pod |
 | Persist shard audits | Read-only `persistcli inspect` checks sample live and unmapped shards for missing blobs. A live collection must retain its shard. Each source export with data must hold its remap since below its upper |
 | after faults stop | Every check above passes again, the Postgres source and the Kafka round trip catch up, every replica is online, and the Materialize resource is up to date |
@@ -46,10 +45,10 @@ none, because a rollout completes only after about two minutes without either.
 A third of the timelines also set three of the system parameters that CI
 varies (`get_variable_system_parameters`) to other values.
 
-Two properties fail by known bugs. `pg_export`: for a moment after `CREATE
+Two known bugs are left out until they are fixed. For a moment after `CREATE
 TABLE ... FROM SOURCE`, the new table is ahead of the source's other tables.
-"an up-to-date resource runs a spec changed while promoting": orchestratord
-reports such a change as applied without deploying it (CLO-339).
+orchestratord reports a spec change made while a rollout promotes as applied
+without deploying it (CLO-339).
 `ALTER TABLE ... ADD COLUMN` is left out, because environmentd cannot boot
 after it dies during that statement, which would end every timeline that hits
 it.

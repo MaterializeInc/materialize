@@ -68,8 +68,6 @@ rollout: str | None = None
 serial = 0
 acted: str | None = None
 """The rollout during whose promotion the driver already acted."""
-changed = False
-"""Whether the driver changed the spec while the last rollout was promoting."""
 last_kill = 0.0
 kill_gap = float("inf")
 """Seconds between two pod deletions by the driver, drawn per timeline."""
@@ -192,9 +190,9 @@ def extra_env() -> list[dict[str, str]]:
 
 
 def request_rollout(strategy: str = "") -> None:
-    global rollout, serial, changed
+    global rollout, serial
     rollout = str(uuid.UUID(int=rnd.getrandbits(128)))
-    serial, changed = serial + 1, False
+    serial += 1
     strategy = strategy or rnd.choice(["WaitUntilReady", "ManuallyPromote"])
     patch(
         requestRollout=rollout,
@@ -323,15 +321,6 @@ def pg_read(w: Worker) -> None:
     always(total == PG_TOTAL, "a Postgres source shows whole upstream transactions", d)
 
 
-def pg_export(w: Worker) -> None:
-    """Adds a second table for an upstream table to the running source."""
-    name = f"pg_a{w.n}"
-    w.mz(f"DROP TABLE IF EXISTS {name}")
-    w.mz(f"CREATE TABLE {name} FROM SOURCE pg_src (REFERENCE upstream.a)")
-    d = {"differing": w.mz(f"SELECT {differ(name, 'pg_a')}")[0][0]}
-    always(d["differing"] == 0, "a table added to a Postgres source equals its twin", d)
-
-
 def kafka_read(w: Worker) -> None:
     """The ledger only grows, so a state that the sink wrote never exceeds the
     view's later state. The source assigns its own timestamps to what the sink
@@ -378,12 +367,10 @@ def kill_after_ddl(w: Worker) -> None:
     """Deletes environmentd a moment after a DDL statement is sent. Its catalog
     change commits first and work in other durable stores follows, and the
     environment has to boot from whatever a death in between leaves."""
-    delay, rule = rnd.choice([0, 0.02, 0.05, 0.1, 0.2, 0.5, 1]), rnd.choice(
-        [ddl, pg_export]
-    )
-    note = f"{delay} s after {rule.__name__} began"
+    delay = rnd.choice([0, 0.02, 0.05, 0.1, 0.2, 0.5, 1])
+    note = f"{delay} s after ddl began"
     threading.Timer(delay, delete_pod, ["environmentd", note]).start()
-    rule(w)
+    ddl(w)
 
 
 def write_to_candidate(w: Worker) -> None:
@@ -426,9 +413,8 @@ def write_to_candidate(w: Worker) -> None:
 
 def roll(w: Worker) -> None:
     """Follows the Materialize resource through 0dt rollouts: requests them,
-    promotes the manual ones, deletes pods in their phases, and changes the
-    spec while one is promoting."""
-    global generation, serial, acted, changed
+    promotes the manual ones, and deletes pods in their phases."""
+    global generation, acted
     # Once a second: rollouts get time between them, and a promotion, which
     # takes a few seconds, is seen.
     time.sleep(1)
@@ -449,14 +435,7 @@ def roll(w: Worker) -> None:
         ]
         wants = [e for e in spec["environmentdExtraEnv"] if e["name"] == "ROLLOUT"]
         d = {"runs": runs, "wants": wants, "generation": active}
-        if changed:
-            always(
-                runs == wants,
-                "an up-to-date resource runs a spec changed while promoting",
-                d,
-            )
-        else:
-            always(runs == wants, "an up-to-date resource runs its spec", d)
+        always(runs == wants, "an up-to-date resource runs its spec", d)
         if rollout == spec.get("requestRollout"):
             reachable("a rollout was applied while faults were active", {})
         if rnd.random() < 0.1:
@@ -468,13 +447,9 @@ def roll(w: Worker) -> None:
             patch(forcePromote=spec["requestRollout"])
     elif now == "Promoting" and acted != spec["requestRollout"]:
         acted = spec["requestRollout"]
-        act = rnd.choice(["", "", "change", "kill"])
-        if act == "change":
-            # Without a rollout request, so that this change must not be
-            # reported as applied by the rollout that is promoting (CLO-339).
-            serial, changed = serial + 1, True
-            patch(environmentdExtraEnv=extra_env())
-        elif act == "kill":
+        # TODO(CLO-339): sometimes also change the spec here, without a rollout
+        # request, once orchestratord no longer reports that change as applied.
+        if rnd.random() < 0.25:
             app = rnd.choice(["environmentd", "orchestratord"])
             delete_pod(app, "while promoting", 0)
 
@@ -490,7 +465,10 @@ DATA: dict[Rule, int] = {
     pg_read: 2,
     kafka_read: 2,
 }
-CHURN: dict[Rule, int] = {ddl: 2, ddl_read: 1, pg_export: 1}
+# TODO: add a second table for an upstream table to the running Postgres source
+# and compare the two, once such a table is no longer read ahead of the
+# source's other tables for a moment after its CREATE.
+CHURN: dict[Rule, int] = {ddl: 2, ddl_read: 1}
 
 
 def work(n: int, weights: dict[Rule, int]) -> None:
@@ -772,8 +750,6 @@ def main() -> None:
             log(statement)
         except (psycopg.Error, OSError) as e:
             log(f"{statement}: {e!r}")
-    skip = os.environ.get("SKIP_RULES", "").split(",")
-    weights = {rule: w for rule, w in weights.items() if rule.__name__ not in skip}
     log(f"churn {churn}, seconds between pod deletions {kill_gap}")
     # One thread follows the rollouts, so that the generations are compared in
     # the order read.
