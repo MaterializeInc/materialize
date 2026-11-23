@@ -154,6 +154,19 @@
       "enabled": false
     },
     {
+      // async-compression 0.4.45 requires compression-codecs 0.4.40, which
+      // uses zstd 0.14. Parquet still requires zstd 0.13.
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["async-compression"],
+      "allowedVersions": "<0.4.45"
+    },
+    {
+      // Held back in Cargo.toml
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["kube"],
+      "allowedVersions": "<5.1"
+    },
+    {
       // Held back in Cargo.toml
       "matchManagers": ["cargo"],
       "matchPackageNames": ["lgalloc"],
