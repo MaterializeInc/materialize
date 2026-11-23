@@ -422,9 +422,14 @@ pub fn twos_complement_be_to_numeric(
     scale: u8,
 ) -> Result<Numeric, anyhow::Error> {
     let mut cx = cx_datum();
-    if input.len() <= 17 {
+    if input.len() <= Numeric::TWOS_COMPLEMENT_BYTE_WIDTH {
+        // The inner decode negates a negative input in place, so a failed narrow
+        // attempt on `input` would leave the wide retry a positive magnitude.
+        let mut narrow = [0u8; Numeric::TWOS_COMPLEMENT_BYTE_WIDTH];
+        let narrow = &mut narrow[..input.len()];
+        narrow.copy_from_slice(input);
         if let Ok(mut n) =
-            twos_complement_be_to_numeric_inner::<Numeric, NUMERIC_DATUM_WIDTH_USIZE>(input)
+            twos_complement_be_to_numeric_inner::<Numeric, NUMERIC_DATUM_WIDTH_USIZE>(narrow)
         {
             n.set_exponent(-i32::from(scale));
             return Ok(n);
