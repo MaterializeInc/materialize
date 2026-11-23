@@ -2403,6 +2403,21 @@
     }
   },
   "Initcap": "UNITSTRUCT",
+  "InlinedBuiltin": {
+    "STRUCT": {
+      "kind": {
+        "TYPENAME": "InlinedBuiltinKind"
+      },
+      "name": "STR",
+      "schema": "STR"
+    }
+  },
+  "InlinedBuiltinKind": {
+    "ENUM": {
+      "Func": "UNIT",
+      "View": "UNIT"
+    }
+  },
   "IsFalse": "UNITSTRUCT",
   "IsLikeMatch": {
     "NEWTYPESTRUCT": {
@@ -3129,6 +3144,11 @@
           "VALUE": {
             "TYPENAME": "PinnedIndexImport"
           }
+        }
+      },
+      "inlined_builtins": {
+        "SEQ": {
+          "TYPENAME": "InlinedBuiltin"
         }
       },
       "objects_to_build": {

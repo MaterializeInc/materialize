@@ -72,7 +72,11 @@ The schema registry sees a plan's shape, not what its functions compute.
 touches `src/expr/src/scalar/func.rs`, `src/expr/src/scalar/func/`
 (including `impls/` and `#[sqlfunc]` bodies),
 `src/expr/src/relation/func.rs`, or `src/compute-types/src/plan/reduce.rs`
-(which records each aggregate's reduction type):
+(which records each aggregate's reduction type). It also records the SQL of
+SQL-defined builtin functions (`sql_impl_func` in `src/sql/src/func.rs`) and
+of constant builtin views (`BUILTINS::constant_views`), so run it when those
+change too, including on a `chrono-tz` bump, which regenerates the time zone
+views:
 
 ```
 cargo test -p mz-catalog --test builtin_registry

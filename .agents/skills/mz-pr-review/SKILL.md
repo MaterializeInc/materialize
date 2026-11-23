@@ -54,8 +54,14 @@ in `mz-expr` or `mz-repr`.
 Applies when the diff touches `UnaryFunc`, `BinaryFunc`, `VariadicFunc`,
 `AggregateFunc`, or `TableFunc` (`src/expr/src/scalar/func.rs`,
 `src/expr/src/scalar/func/**`, `#[sqlfunc]` bodies,
-`src/expr/src/relation/func.rs`), or an aggregate's reduction type in
-`src/compute-types/src/plan/reduce.rs`.
+`src/expr/src/relation/func.rs`), an aggregate's reduction type in
+`src/compute-types/src/plan/reduce.rs`, a SQL-defined builtin function body,
+or a constant builtin view (`BUILTINS::constant_views`, including the time
+zone views a `chrono-tz` bump regenerates).
+- A changed SQL-defined function body or constant view moves
+  `builtin_registry_source.json` only. The PR description states whether pins
+  made before the change must pick it up, which means bumping `LIR_VERSION`
+  and migrating the pins whose `inlined_builtins` list it.
 - The registry snapshots under `src/catalog/tests/snapshots/` are
   regenerated in the same PR. A property change moves `builtin_registry.json`
   and the current version's entry in `builtin_registry_digests.json`, a

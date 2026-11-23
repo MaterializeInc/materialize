@@ -11,9 +11,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
+use mz_catalog::builtin::BUILTINS;
 use mz_catalog::memory::objects::{CatalogItem, Index, MaterializedView};
 use mz_compute_types::plan::join::JoinPlan;
-use mz_compute_types::plan::pinned::{InstantiateError, PinError, PinnedDataflow};
+use mz_compute_types::plan::pinned::{
+    InlinedBuiltin, InlinedBuiltinKind, InstantiateError, PinError, PinnedDataflow, PinningContext,
+};
 use mz_compute_types::plan::reduce::ReducePlan;
 use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_compute_types::plan::top_k::TopKPlan;
@@ -22,12 +25,19 @@ use mz_controller_types::ClusterId;
 use mz_expr::MfpPlan;
 use mz_ore::metrics::MetricsRegistry;
 use mz_repr::global_id::TransientIdGen;
-use mz_repr::{CatalogItemId, GlobalId};
+use mz_repr::namespaces::UNSTABLE_SCHEMAS;
+use mz_repr::{CatalogItemId, GlobalId, SqlRelationType, SqlScalarType};
+use mz_sql::catalog::SessionCatalog;
+use mz_sql::func::{Func, FuncImpl};
 use mz_sql::names::{
     DatabaseId, ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, SchemaId,
     SchemaSpecifier,
 };
 use mz_sql::optimizer_metrics::OptimizerMetrics;
+use mz_sql::plan::{
+    CoercibleScalarExpr, ExprContext, HirScalarExpr, PlanContext, QueryContext, QueryLifetime,
+    Scope, StatementContext,
+};
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql::session::vars::VarInput;
 
@@ -51,7 +61,7 @@ fn assert_round_trips(catalog: &Catalog, original: LirDataflowDescription) -> Pi
         catalog: catalog.state(),
         transient_ids: &TransientIdGen::new(),
     };
-    let pinned = PinnedDataflow::try_from(original.clone()).expect("pinnable");
+    let pinned = PinnedDataflow::pin(original.clone(), catalog.state()).expect("pinnable");
     let rebuilt = pinned
         .clone()
         .instantiate(&ctx, original.debug_name.clone())
@@ -61,7 +71,7 @@ fn assert_round_trips(catalog: &Catalog, original: LirDataflowDescription) -> Pi
         "pin then instantiate is the identity for {}",
         original.debug_name
     );
-    let repinned = PinnedDataflow::try_from(rebuilt).expect("pinnable");
+    let repinned = PinnedDataflow::pin(rebuilt, catalog.state()).expect("pinnable");
     assert_eq!(
         repinned, pinned,
         "instantiate then pin is the identity for {}",
@@ -731,7 +741,7 @@ async fn builtin_items_refuse_to_pin() {
         let assert_refused = |df_desc: LirDataflowDescription, name: &str| {
             assert!(
                 matches!(
-                    PinnedDataflow::try_from(df_desc),
+                    PinnedDataflow::pin(df_desc, catalog.state()),
                     Err(PinError::BuiltinCollection(_))
                 ),
                 "{name} refuses to pin"
@@ -994,6 +1004,330 @@ async fn user_items_cover_every_operator() {
         ]);
         let missing: Vec<_> = expected.difference(&seen).collect();
         assert!(missing.is_empty(), "no plan contains {missing:?}");
+    })
+    .await
+}
+
+fn inlined(kind: InlinedBuiltinKind, schema: &str, name: &str) -> InlinedBuiltin {
+    InlinedBuiltin {
+        kind,
+        schema: schema.to_string(),
+        name: name.to_string(),
+    }
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+async fn pin_records_builtins_inlined_through_views() {
+    const ZONES: u64 = 2;
+    const MV: u64 = 3;
+    const MV_ON_TABLE: u64 = 4;
+    const MV_ON_MV: u64 = 5;
+    const UNKNOWN: u64 = 99;
+    Catalog::with_debug(|mut catalog| async move {
+        create_tables(&mut catalog).await;
+        create_item(
+            &mut catalog,
+            ZONES,
+            "zones",
+            "CREATE VIEW \"materialize\".\"public\".\"zones\" AS \
+             SELECT \"name\" FROM \"mz_catalog\".\"mz_timezone_names\"",
+        )
+        .await;
+        let CatalogItem::MaterializedView(mv) = create_item(
+            &mut catalog,
+            MV,
+            "mv",
+            "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"mv\" \
+             IN CLUSTER \"quickstart\" AS \
+             SELECT \"pg_catalog\".\"regexp_split_to_table\"(\"name\", '/') AS \"part\" \
+             FROM \"materialize\".\"public\".\"zones\"",
+        )
+        .await
+        else {
+            panic!("expected a materialized view");
+        };
+        create_item(
+            &mut catalog,
+            MV_ON_TABLE,
+            "mv_on_table",
+            "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"mv_on_table\" \
+             IN CLUSTER \"quickstart\" AS \
+             SELECT \"id\" FROM \"materialize\".\"public\".\"tables\"",
+        )
+        .await;
+        create_item(
+            &mut catalog,
+            MV_ON_MV,
+            "mv_on_mv",
+            "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"mv_on_mv\" \
+             IN CLUSTER \"quickstart\" AS \
+             SELECT \"part\" FROM \"materialize\".\"public\".\"mv\"",
+        )
+        .await;
+        let catalog = Arc::new(catalog);
+
+        let expected = BTreeSet::from([
+            inlined(InlinedBuiltinKind::View, "mz_catalog", "mz_timezone_names"),
+            inlined(
+                InlinedBuiltinKind::Func,
+                "pg_catalog",
+                "regexp_split_to_table",
+            ),
+        ]);
+        let df_desc = optimize_materialized_view(&catalog, &mv, "mv".to_string(), BTreeSet::new());
+        let pinned = assert_round_trips(&catalog, df_desc);
+        assert_eq!(pinned.inlined_builtins, expected);
+
+        let state = catalog.state();
+        assert_eq!(
+            state.inlined_builtins(GlobalId::User(MV_ON_TABLE)),
+            Ok(BTreeSet::new()),
+            "a table is an import, not inlined"
+        );
+        assert_eq!(
+            state.inlined_builtins(GlobalId::User(MV_ON_MV)),
+            Ok(BTreeSet::new()),
+            "another materialized view is an import, not inlined"
+        );
+        assert_eq!(
+            state.inlined_builtins(GlobalId::User(UNKNOWN)),
+            Err(PinError::UnknownExport(GlobalId::User(UNKNOWN)))
+        );
+    })
+    .await
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+async fn pin_rejects_unstable_dependencies() {
+    const DIRECT: u64 = 2;
+    const THROUGH_VIEW: u64 = 3;
+    Catalog::with_debug(|mut catalog| async move {
+        catalog
+            .system_config_mut()
+            .set("unsafe_enable_unstable_dependencies", VarInput::Flat("on"))
+            .expect("flag exists");
+        create_item(
+            &mut catalog,
+            DIRECT,
+            "direct",
+            "CREATE VIEW \"materialize\".\"public\".\"direct\" AS \
+             SELECT \"mz_internal\".\"mz_connection_oid\"('c') AS \"oid\"",
+        )
+        .await;
+        create_item(
+            &mut catalog,
+            THROUGH_VIEW,
+            "through_view",
+            "CREATE VIEW \"materialize\".\"public\".\"through_view\" AS \
+             SELECT \"oid\" FROM \"materialize\".\"public\".\"direct\"",
+        )
+        .await;
+        let state = catalog.state();
+        for id in [GlobalId::User(DIRECT), GlobalId::User(THROUGH_VIEW)] {
+            assert_eq!(
+                state.inlined_builtins(id),
+                Err(PinError::UnstableDependency {
+                    export: id,
+                    dependency: "mz_internal.mz_connection_oid".to_string(),
+                }),
+            );
+        }
+    })
+    .await
+}
+
+/// The views `id` reads, directly or through other views, including `id`
+/// itself, or `None` if any of them reads a collection.
+fn constant_view_closure(catalog: &Catalog, id: CatalogItemId) -> Option<BTreeSet<CatalogItemId>> {
+    let mut views = BTreeSet::new();
+    let mut todo = vec![id];
+    while let Some(id) = todo.pop() {
+        let entry = catalog.get_entry(&id);
+        match entry.item() {
+            CatalogItem::View(_) => {
+                if views.insert(id) {
+                    todo.extend(entry.uses());
+                }
+            }
+            CatalogItem::Func(_) | CatalogItem::Type(_) => {}
+            _ => return None,
+        }
+    }
+    Some(views)
+}
+
+/// Ensures that the set of known-constant views does not change out from under us.
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+async fn constant_builtin_views() {
+    const ZONES: u64 = 2;
+    const ZONES_AND_TABLES: u64 = 3;
+    Catalog::with_debug(|mut catalog| async move {
+        create_tables(&mut catalog).await;
+        // Roots are stable views only, see `BUILTINS::constant_views`.
+        let mut constant = BTreeSet::new();
+        for entry in catalog.entries() {
+            let stable = !catalog
+                .state()
+                .is_unstable_schema_specifier(entry.name().qualifiers.schema_spec);
+            if entry.id().is_system() && stable && matches!(entry.item(), CatalogItem::View(_)) {
+                if let Some(views) = constant_view_closure(&catalog, entry.id()) {
+                    constant.extend(views);
+                }
+            }
+        }
+        let constant: BTreeSet<String> = constant
+            .into_iter()
+            .map(|id| {
+                let entry = catalog.get_entry(&id);
+                catalog.resolve_full_name(entry.name(), None).to_string()
+            })
+            .collect();
+        let listed: BTreeSet<String> = mz_catalog::builtin::BUILTINS::constant_views()
+            .map(|view| format!("{}.{}", view.schema, view.name))
+            .collect();
+        assert_eq!(
+            constant, listed,
+            "BUILTINS::constant_views in src/catalog/src/builtin.rs must list exactly the \
+             constant builtin views a user plan can inline"
+        );
+
+        // A collection read anywhere below a view makes it non-constant.
+        create_item(
+            &mut catalog,
+            ZONES,
+            "zones",
+            "CREATE VIEW \"materialize\".\"public\".\"zones\" AS \
+             SELECT \"name\" FROM \"mz_catalog\".\"mz_timezone_names\"",
+        )
+        .await;
+        create_item(
+            &mut catalog,
+            ZONES_AND_TABLES,
+            "zones_and_tables",
+            "CREATE VIEW \"materialize\".\"public\".\"zones_and_tables\" AS \
+             SELECT \"z\".\"name\" FROM \"materialize\".\"public\".\"zones\" AS \"z\", \
+             \"materialize\".\"public\".\"tables\" AS \"t\"",
+        )
+        .await;
+        assert!(constant_view_closure(&catalog, CatalogItemId::User(ZONES)).is_some());
+        assert!(constant_view_closure(&catalog, CatalogItemId::User(ZONES_AND_TABLES)).is_none());
+    })
+    .await
+}
+
+/// The catalog items planning resolves inside the SQL body of `imp`, called
+/// with typed NULL arguments. An `anyarray` parameter is bound to `int4[]`.
+fn sql_body_items<R>(catalog: &Catalog, imp: &FuncImpl<R>) -> BTreeSet<CatalogItemId> {
+    let conn_catalog = catalog.for_system_session();
+    let pcx = PlanContext::zero();
+    let scx = StatementContext::new(Some(&pcx), &conn_catalog);
+    let qcx = QueryContext::root(&scx, QueryLifetime::OneShot);
+    let ecx = ExprContext {
+        qcx: &qcx,
+        name: "sql_body_items",
+        scope: &Scope::empty(),
+        relation_type: &SqlRelationType::empty(),
+        allow_aggregates: false,
+        allow_subqueries: true,
+        allow_parameters: false,
+        allow_windows: false,
+    };
+    let details = imp.details();
+    let args = details
+        .arg_typs
+        .iter()
+        .map(|name| {
+            let typ = if *name == "anyarray" {
+                SqlScalarType::Array(Box::new(SqlScalarType::Int32))
+            } else {
+                let oid = conn_catalog.get_system_type(name).oid();
+                let pg = mz_pgrepr::Type::from_oid(oid).unwrap_or_else(|_| {
+                    panic!("no concrete type to bind parameter type {name} to")
+                });
+                SqlScalarType::try_from(&pg).expect("pg types map to SQL types")
+            };
+            CoercibleScalarExpr::Coerced(HirScalarExpr::literal_null(typ))
+        })
+        .collect();
+    if let Err(err) = (imp.op.build)(&ecx, args, &imp.params, vec![]) {
+        panic!("planning SQL-defined builtin {} failed: {err}", details.oid);
+    }
+    let items = scx
+        .sql_impl_resolved_ids
+        .lock()
+        .expect("not poisoned")
+        .items()
+        .copied()
+        .collect();
+    items
+}
+
+/// A pin records only the builtins its exports reference through views, not
+/// what a SQL-defined function's body references. So a SQL body that inlines a
+/// SQL-defined function or a view must also read a collection, which makes
+/// every plan calling it unpinnable.
+///
+/// NOTE: If this fails because a body legitimately inlines another builtin,
+/// make `CatalogState::inlined_builtins` follow SQL bodies instead: resolve
+/// each `imp.sql` with `names::resolve` (types are not needed) and push the
+/// resolved ids onto the walk. Builtins in unstable schemas reached that way
+/// would then also need recording in the builtin registry.
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+async fn sql_bodies_that_inline_builtins_read_a_collection() {
+    Catalog::with_debug(|mut catalog| async move {
+        catalog
+            .system_config_mut()
+            .set("enable_date_bin_hopping", VarInput::Flat("on"))
+            .expect("flag exists");
+        let is_inlined = |id: &CatalogItemId| match catalog.get_entry(id).item() {
+            CatalogItem::Func(func) => func.inner.func_impls().iter().any(|imp| imp.sql.is_some()),
+            CatalogItem::View(_) => true,
+            _ => false,
+        };
+        let reads_collection = |id: &CatalogItemId| match catalog.get_entry(id).item() {
+            CatalogItem::Func(_) | CatalogItem::Type(_) => false,
+            CatalogItem::View(_) => constant_view_closure(&catalog, *id).is_none(),
+            _ => true,
+        };
+        let check = |name: String, items: BTreeSet<CatalogItemId>| -> bool {
+            let inlines = items.iter().any(is_inlined);
+            assert!(
+                !inlines || items.iter().any(reads_collection),
+                "{name} inlines a SQL-defined function or view but reads no collection, \
+                 so a plan calling it can be pinned without recording what it inlines"
+            );
+            inlines
+        };
+
+        let mut inlining = 0;
+        for func in BUILTINS::funcs().filter(|func| !UNSTABLE_SCHEMAS.contains(&func.schema)) {
+            let name = |oid| format!("{}.{} (oid {oid})", func.schema, func.name);
+            let reaches = match func.inner {
+                Func::Scalar(impls) => impls
+                    .iter()
+                    .filter(|imp| imp.details().sql.is_some())
+                    .map(|imp| check(name(imp.oid), sql_body_items(&catalog, imp)))
+                    .filter(|reaches| *reaches)
+                    .count(),
+                Func::Table(impls) => impls
+                    .iter()
+                    .filter(|imp| imp.details().sql.is_some())
+                    .map(|imp| check(name(imp.oid), sql_body_items(&catalog, imp)))
+                    .filter(|reaches| *reaches)
+                    .count(),
+                Func::Aggregate(_) | Func::ScalarWindow(_) | Func::ValueWindow(_) => 0,
+            };
+            inlining += reaches;
+        }
+        assert!(
+            inlining > 0,
+            "no stable SQL body inlines a SQL-defined function or view, so this test \
+             no longer exercises the case it guards"
+        );
     })
     .await
 }
