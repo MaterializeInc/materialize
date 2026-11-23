@@ -1336,6 +1336,28 @@ mod tests {
         assert_eq!(remaining_ranges(0, 10), vec![0..10]);
     }
 
+    /// S3 rejects uploads to buckets with Object Lock retention unless they carry
+    /// a checksum. Persist relies on the SDK sending one when neither
+    /// `AWS_REQUEST_CHECKSUM_CALCULATION` nor the profile says otherwise.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_method` on OS `linux`
+    async fn s3_upload_checksums_on_by_default() {
+        use aws_sdk_s3::config::RequestChecksumCalculation;
+        use aws_types::os_shim_internal::{Env, Fs};
+
+        let sdk_config = mz_aws_util::defaults()
+            .env(Env::from_slice(&[]))
+            .fs(Fs::from_slice(&[]))
+            .region(Region::new("us-east-1"))
+            .load()
+            .await;
+        let client = mz_aws_util::s3::new_client(&sdk_config);
+        assert_eq!(
+            client.config().request_checksum_calculation(),
+            Some(&RequestChecksumCalculation::WhenSupported),
+        );
+    }
+
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
     #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/database-issues/issues/5586
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_method` on OS `linux`
