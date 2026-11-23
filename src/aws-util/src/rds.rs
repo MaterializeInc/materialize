@@ -21,6 +21,7 @@ use aws_sigv4::http_request::{
 };
 use aws_sigv4::sign::v4::SigningParams;
 use aws_sigv4::sign::v4::signing_params::BuildError;
+use mz_ore::secure::SecureString;
 use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
@@ -71,14 +72,15 @@ pub async fn rds_auth_token(
     aws_config: &SdkConfig,
 ) -> Result<String, RdsTokenError> {
     let token = sign_rds_auth_token(host, port, username, aws_config).await?;
-    Ok(token.token)
+    Ok(token.token.unsecure().to_owned())
 }
 
 /// An RDS IAM authentication token.
 #[derive(Debug, Clone)]
 pub struct RdsAuthToken {
-    /// The token, to use as the database password.
-    pub token: String,
+    /// The token, to use as the database password. It is a credential for as
+    /// long as it is valid, so it is redacted in `Debug` output.
+    pub token: SecureString,
     /// The access key ID of the credentials that signed the token.
     pub access_key_id: String,
 }
@@ -193,7 +195,7 @@ async fn sign_rds_auth_token(
     }
 
     Ok(RdsAuthToken {
-        token: url.as_str()["https://".len()..].to_owned(),
+        token: SecureString::from(&url.as_str()["https://".len()..]),
         access_key_id,
     })
 }

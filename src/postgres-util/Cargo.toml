@@ -31,6 +31,11 @@ tokio.workspace = true
 tokio-postgres.workspace = true
 tracing.workspace = true
 
+[dev-dependencies]
+aws-credential-types.workspace = true
+aws-types.workspace = true
+mz-ore = { path = "../ore", default-features = false, features = ["test"] }
+
 [features]
 default = ["mz-build-tools/default", "replication", "schemas", "tunnel"]
 replication = ["tunnel"]

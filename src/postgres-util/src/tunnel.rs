@@ -215,7 +215,7 @@ impl Config {
                     bail_generic!("AWS IAM authentication requires a user");
                 };
                 let token = iam_auth.token(host, port, user).await?;
-                postgres_config.password(&token.token);
+                postgres_config.password(token.token.unsecure());
                 Some(token)
             }
         };
@@ -392,5 +392,97 @@ fn is_authentication_failure(error: &PostgresError) -> bool {
                 || code == Some(&SqlState::INVALID_AUTHORIZATION_SPECIFICATION)
         }
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use aws_credential_types::Credentials;
+    use aws_credential_types::provider::SharedCredentialsProvider;
+    use aws_types::SdkConfig;
+
+    use super::*;
+
+    /// Returns a config that authenticates `inner` with an IAM token, and the
+    /// access key IDs of the tokens that were reported as rejected.
+    fn iam_config(inner: tokio_postgres::Config) -> (Config, Arc<Mutex<Vec<String>>>) {
+        let rejected = Arc::new(Mutex::new(Vec::new()));
+        let credentials = Credentials::new("akid-test", "secret", None, None, "test");
+        let aws_config = SdkConfig::builder()
+            .credentials_provider(SharedCredentialsProvider::new(credentials))
+            .build();
+        let iam_auth = RdsIamAuth::new(aws_config).on_token_rejected({
+            let rejected = Arc::clone(&rejected);
+            move |access_key_id: &str| {
+                let mut rejected = rejected.lock().expect("lock poisoned");
+                rejected.push(access_key_id.to_owned());
+            }
+        });
+        let config = Config::new(
+            inner,
+            TunnelConfig::Direct { resolved_ips: None },
+            SshTimeoutConfig::default(),
+            InTask::No,
+            Some(iam_auth),
+        )
+        .expect("valid config");
+        (config, rejected)
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `getauxval` on OS `linux`
+    async fn refused_login_reports_the_token() {
+        let Ok(url) = std::env::var("POSTGRES_URL") else {
+            return;
+        };
+        let mut inner: tokio_postgres::Config = url.parse().expect("valid POSTGRES_URL");
+        // No such role exists, so the server refuses the login whichever
+        // authentication method it uses for the connection.
+        inner
+            .user("mz_iam_auth_test_no_such_role")
+            .dbname("postgres");
+        let (config, rejected) = iam_config(inner);
+
+        let error = config
+            .connect("test", &SshTunnelManager::default())
+            .await
+            .err()
+            .expect("the server must refuse the login");
+        assert!(
+            is_authentication_failure(&error),
+            "expected an authentication failure, got: {error}"
+        );
+        assert_eq!(
+            *rejected.lock().expect("lock poisoned"),
+            vec!["akid-test".to_owned()]
+        );
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `getauxval` on OS `linux`
+    async fn unreachable_server_does_not_report_the_token() {
+        let mut inner = tokio_postgres::Config::new();
+        // Nothing listens on this port, so the connection fails before the
+        // server sees the token.
+        inner
+            .host("localhost")
+            .port(1)
+            .user("postgres")
+            .dbname("postgres")
+            .connect_timeout(Duration::from_secs(10));
+        let (config, rejected) = iam_config(inner);
+
+        let error = config
+            .connect("test", &SshTunnelManager::default())
+            .await
+            .err()
+            .expect("nothing listens on the port");
+        assert!(
+            !is_authentication_failure(&error),
+            "expected a connection failure, got: {error}"
+        );
+        assert!(rejected.lock().expect("lock poisoned").is_empty());
     }
 }

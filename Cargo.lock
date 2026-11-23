@@ -8267,6 +8267,8 @@ name = "mz-postgres-util"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "aws-credential-types",
+ "aws-types",
  "mz-aws-util",
  "mz-build-tools",
  "mz-cloud-resources",
