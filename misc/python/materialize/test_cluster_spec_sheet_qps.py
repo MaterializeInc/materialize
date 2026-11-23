@@ -442,3 +442,76 @@ def test_logging_variants_are_uploaded_separately(monkeypatch, tmp_path):
             200,
         ),
     ]
+
+
+@pytest.mark.parametrize(
+    "version,expected",
+    [(None, "current-version"), ("baseline-version", "baseline-version")],
+)
+def test_staging_runtime_selection_preserves_harness(
+    monkeypatch, tmp_path, version, expected
+):
+    from materialize.mzcompose import loader
+
+    monkeypatch.setattr(loader, "composition_path", tmp_path)
+    module = composition_module()
+    calls = []
+    composition = SimpleNamespace(run=lambda *args, **kwargs: calls.append(args))
+    target = module.CloudTarget(composition, "user", "", "aws/us-east-1", True, version)
+    monkeypatch.setattr(module, "staging_version", lambda: "current-version")
+    module.enable_region(target, 2)
+    assert calls[0][calls[0].index("--version") + 1] == expected
+    with pytest.raises(module.UIError, match="requires --target=cloud-staging"):
+        module.make_target(composition, "cloud-production", "baseline-version")
+    with pytest.raises(module.UIError, match="must not be empty"):
+        module.make_target(composition, "cloud-staging", "")
+
+
+def test_ddl_configuration_detects_drift_without_recording_values(
+    monkeypatch, tmp_path
+):
+    from materialize.mzcompose import loader
+
+    monkeypatch.setattr(loader, "composition_path", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "test/cluster-spec-sheet").mkdir(parents=True)
+    module = composition_module()
+    monkeypatch.setattr(module.buildkite, "is_in_buildkite", lambda: False)
+
+    class Runner:
+        value = "private-setting-value"
+        version = "baseline-version"
+
+        def run_query(self, query, **kwargs):
+            if query == "SELECT mz_version()":
+                return [(self.version,)]
+            if query == "SHOW ALL":
+                return [
+                    ("flag", self.value, "description"),
+                    ("mz_version", self.version, "runtime identity"),
+                ]
+            if "mz_replica_system_parameters" in query:
+                return [("c", "r1", "flag", self.value)]
+            if "mz_cluster_system_parameters" in query:
+                return [("c", "flag", self.value)]
+            return [("flag", self.value)]
+
+    runner = Runner()
+    baseline = module.DdlCatalogScalingScenario("mixed", [1], 1, 1)
+    baseline.record_configuration(runner, 5000, "before-padding")
+    runner.version = "candidate-version"
+    candidate = module.DdlCatalogScalingScenario(
+        "mixed", [1], 1, 1, baseline.configuration
+    )
+    candidate.record_configuration(runner, 5000, "before-measurement")
+    assert candidate.configuration == baseline.configuration
+    runner.value = "changed-private-setting-value"
+    with pytest.raises(RuntimeError, match="configuration mismatch"):
+        candidate.record_configuration(runner, 5000, "after-measurement")
+    mismatched = module.DdlCatalogScalingScenario(
+        "mixed", [1], 1, 1, baseline.configuration
+    )
+    with pytest.raises(RuntimeError, match="configuration mismatch"):
+        mismatched.record_configuration(runner, 10000, "before-padding")
+    for path in (tmp_path / "test/cluster-spec-sheet").glob("*.json"):
+        assert "private-setting-value" not in path.read_text()
