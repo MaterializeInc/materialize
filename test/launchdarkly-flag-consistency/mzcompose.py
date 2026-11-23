@@ -595,6 +595,7 @@ KNOWN_CROSS_ENV_DIVERGENCES: set[str] = set("""
     persist_claim_compaction_min_version
     persist_claim_unclaimed_compactions
     persist_fetch_semaphore_permit_adjustment
+    persist_gc_remove_finalized_rollups
     persist_txns_data_shard_retryer_initial_backoff
     persist_validate_part_bounds_on_read
     statement_logging_max_data_credit
