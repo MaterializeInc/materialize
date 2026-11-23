@@ -1644,43 +1644,6 @@ pub mod BUILTINS {
         })
     }
 
-    /// The builtin views a user plan can inline that read no collection,
-    /// directly or through other views. A plan reading one inlines its rows
-    /// and can still be pinned. Views in unstable schemas are listed only when
-    /// a stable view reads them, see the module docs of `mz-catalog`'s
-    /// `builtin_registry` test. The `constant_builtin_views` test in
-    /// `mz-adapter` checks this list against the catalog.
-    pub fn constant_views() -> impl Iterator<Item = &'static BuiltinView> {
-        [
-            &*INFORMATION_SCHEMA_CHARACTER_SETS,
-            &*INFORMATION_SCHEMA_KEY_COLUMN_USAGE,
-            &*INFORMATION_SCHEMA_REFERENTIAL_CONSTRAINTS,
-            &*INFORMATION_SCHEMA_TABLE_CONSTRAINTS,
-            &*INFORMATION_SCHEMA_TRIGGERS,
-            &*MZ_TIMEZONE_ABBREVIATIONS,
-            &*MZ_TIMEZONE_NAMES,
-            &*PG_ACCESS_METHODS,
-            &*PG_COLLATION,
-            &*PG_CONSTRAINT,
-            &*PG_ENUM,
-            &*PG_EVENT_TRIGGER,
-            &*PG_EXTENSION,
-            &*PG_INHERITS,
-            &*PG_LANGUAGE,
-            &*PG_LOCKS,
-            &*PG_POLICY,
-            &*PG_RANGE,
-            &*PG_REWRITE,
-            &*PG_SETTINGS,
-            &*PG_SHDESCRIPTION,
-            &*PG_TABLESPACE,
-            &*PG_TIMEZONE_ABBREVS,
-            &*PG_TIMEZONE_NAMES,
-            &*PG_TRIGGER,
-        ]
-        .into_iter()
-    }
-
     pub fn materialized_views() -> impl Iterator<Item = &'static BuiltinMaterializedView> {
         BUILTINS_STATIC.iter().filter_map(|b| match b {
             Builtin::MaterializedView(mv) => Some(*mv),

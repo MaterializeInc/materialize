@@ -792,10 +792,10 @@ impl PinningContext for Builtins {
     }
 }
 
-fn builtin_view(name: &str) -> InlinedBuiltin {
+fn builtin_func(name: &str) -> InlinedBuiltin {
     InlinedBuiltin {
-        kind: InlinedBuiltinKind::View,
-        schema: "mz_catalog".to_string(),
+        kind: InlinedBuiltinKind::Func,
+        schema: "pg_catalog".to_string(),
         name: name.to_string(),
     }
 }
@@ -809,12 +809,12 @@ fn pin_records_inlined_builtins_of_every_export() {
     };
     let ctx = Builtins(BTreeMap::from([(
         MV_SINK,
-        BTreeSet::from([builtin_view("mz_timezone_names"), regexp_split.clone()]),
+        BTreeSet::from([builtin_func("date_bin_hopping"), regexp_split.clone()]),
     )]));
     let pinned = PinnedDataflow::pin(materialized_view_dataflow(), &ctx).unwrap();
     assert_eq!(
         pinned.inlined_builtins,
-        BTreeSet::from([builtin_view("mz_timezone_names"), regexp_split])
+        BTreeSet::from([builtin_func("date_bin_hopping"), regexp_split])
     );
     let json = serde_json::to_string(&pinned).expect("serializes as JSON");
     let parsed: PinnedDataflow = serde_json::from_str(&json).expect("parses back");
@@ -822,11 +822,11 @@ fn pin_records_inlined_builtins_of_every_export() {
 
     let ctx = Builtins(BTreeMap::from([(
         INDEX,
-        BTreeSet::from([builtin_view("mz_timezone_abbreviations")]),
+        BTreeSet::from([builtin_func("pg_encoding_to_char")]),
     )]));
     let pinned = PinnedDataflow::pin(index_dataflow(), &ctx).unwrap();
     assert_eq!(
         pinned.inlined_builtins,
-        BTreeSet::from([builtin_view("mz_timezone_abbreviations")])
+        BTreeSet::from([builtin_func("pg_encoding_to_char")])
     );
 }

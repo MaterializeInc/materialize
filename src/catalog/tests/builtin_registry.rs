@@ -22,18 +22,19 @@
 //! LIR schema snapshot in `mz-compute-types` complements it: that pins the
 //! serialized shape of the function enums but not what the variants mean.
 //!
-//! SQL-defined builtin functions and constant builtin views (see
-//! `BUILTINS::constant_views`) are recorded in the source half only. Planning
-//! inlines them, so a change reaches only plans pinned afterwards, and whether
-//! existing pins must be replanned is a judgment. Each pin lists the builtins
-//! it may have inlined, so a migration can replan just those.
+//! SQL-defined builtin functions are recorded in the source half only.
+//! Planning inlines them, so a change reaches only plans pinned afterwards,
+//! and whether existing pins must be replanned is a judgment. Each pin lists
+//! the SQL-defined builtins it may have inlined, so a migration can replan
+//! just those.
 //!
-//! Builtins in unstable schemas are left out. Pinning rejects a user item that
-//! references one directly, see `PinError::UnstableDependency`. A pin does not
-//! record what a SQL body calls, so `mz-adapter`'s
+//! Builtin views are not recorded: pinning rejects a user item that depends on
+//! any builtin relation, see `PinError::BuiltinRelation`. Builtins in unstable
+//! schemas are left out too, and pinning rejects a user item that references
+//! one, see `PinError::UnstableDependency`. A pin does not record what a SQL
+//! body calls, so `mz-adapter`'s
 //! `sql_bodies_that_inline_builtins_read_a_collection` test checks that no
-//! pinnable plan can reach a builtin through one. Unstable constant views are
-//! recorded when a stable view reads them, see `BUILTINS::constant_views`.
+//! pinnable plan can reach a builtin through one.
 //!
 //! Three files in `tests/snapshots` hold the state, each with one compact
 //! JSON object per record so a changed builtin is a one-line diff:
@@ -164,13 +165,6 @@ fn build() -> (Records, Records) {
             assert!(previous.is_none(), "two overloads render as `{key}`");
         }
     }
-    let constant_views = sources.entry("ConstantView".to_string()).or_default();
-    for view in BUILTINS::constant_views() {
-        constant_views.insert(
-            format!("{}.{}", view.schema, view.name),
-            json!({ "sql": view.sql }),
-        );
-    }
     (properties, sources)
 }
 
@@ -276,9 +270,8 @@ fn describe(diff: &Diff) -> String {
 }
 
 /// The lines added to and removed from the `sql` field of each record present
-/// in both files. A constant view's rows are one per line, so this names the
-/// rows that changed. Lines are compared as sets, so a change that only
-/// reorders or duplicates lines names the record with no lines under it.
+/// in both files. Lines are compared as sets, so a change that only reorders
+/// or duplicates lines names the record with no lines under it.
 fn sql_changes(expected: &str, actual: &str) -> String {
     let expected: Records = serde_json::from_str(expected).expect("snapshot is a record file");
     let actual: Records = serde_json::from_str(actual).expect("rendered records are JSON");
@@ -398,7 +391,7 @@ fn builtin_registry_snapshot() {
         let sql = sql_changes(&expected_source, &source);
         if !sql.is_empty() {
             informational.push(format!(
-                "Changed SQL of SQL-defined functions and constant views:\n{sql}\n\n\
+                "Changed SQL of SQL-defined functions:\n{sql}\n\n\
                  Plans pinned before this change keep the old definition. If they must\n\
                  pick up the new one, bump LIR_VERSION and migrate the pins whose\n\
                  inlined_builtins list the builtin."
@@ -491,17 +484,17 @@ fn render_is_one_line_per_record_and_valid_json() {
 
 #[mz_ore::test]
 fn sql_changes_names_changed_lines() {
-    let render_view = |sql: &str| {
+    let render_func = |sql: &str| {
         render(&Records::from([(
-            "ConstantView".to_string(),
-            BTreeMap::from([("pg_catalog.zones".to_string(), json!({ "sql": sql }))]),
+            "SqlFunction".to_string(),
+            BTreeMap::from([("pg_catalog.f(int4)".to_string(), json!({ "sql": sql }))]),
         )]))
     };
-    let old = render_view("VALUES\n('Pacific/Fiji'),\n('UTC')");
-    let new = render_view("VALUES\n('Pacific/Kanton'),\n('UTC')");
+    let old = render_func("SELECT\n$1 + 1,\n$1");
+    let new = render_func("SELECT\n$1 + 2,\n$1");
     assert_eq!(
         sql_changes(&old, &new),
-        "  ConstantView `pg_catalog.zones`:\n    - ('Pacific/Fiji'),\n    + ('Pacific/Kanton'),"
+        "  SqlFunction `pg_catalog.f(int4)`:\n    - $1 + 1,\n    + $1 + 2,"
     );
     assert_eq!(sql_changes(&old, &old), "");
 }

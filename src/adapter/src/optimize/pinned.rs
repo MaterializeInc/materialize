@@ -21,16 +21,14 @@
 
 use std::collections::BTreeSet;
 
-use mz_catalog::memory::objects::CatalogItem;
+use mz_catalog::memory::objects::{CatalogEntry, CatalogItem};
 use mz_compute_types::plan::pinned::{
     IndexInfo, InlinedBuiltin, InlinedBuiltinKind, InstantiationContext, MaterializedViewInfo,
     MetricSinkInfo, PinError, PinningContext,
 };
 use mz_expr::MirRelationExpr;
 use mz_repr::global_id::TransientIdGen;
-use mz_repr::{
-    CatalogItemId, GlobalId, RelationVersionSelector, ReprRelationType, SqlRelationType,
-};
+use mz_repr::{GlobalId, RelationVersionSelector, ReprRelationType, SqlRelationType};
 
 use crate::catalog::CatalogState;
 use crate::optimize::metric_sink::shape_metric_sink_source;
@@ -119,57 +117,49 @@ impl PinningContext for CatalogState {
         let exported = self
             .try_get_entry_by_global_id(&id)
             .ok_or(PinError::UnknownExport(id))?;
+        let full_name = |entry: &CatalogEntry| self.resolve_full_name(entry.name(), None);
         let mut builtins = BTreeSet::new();
         let mut seen = BTreeSet::new();
-        // Each item to visit, with whether a user item references it.
-        let mut todo: Vec<(CatalogItemId, bool)> = exported
-            .uses()
-            .into_iter()
-            .map(|use_id| (use_id, true))
-            .collect();
-        while let Some((item_id, user_referenced)) = todo.pop() {
+        // Every item visited is referenced by the export or by a user view it
+        // reads, since the walk recurses only through user views.
+        let mut todo = exported.uses().into_iter().collect::<Vec<_>>();
+        while let Some(item_id) = todo.pop() {
+            if !seen.insert(item_id) {
+                continue;
+            }
             let entry = self.get_entry(&item_id);
             // The builtin registry leaves out unstable builtins, see its module
             // docs. A user item can reference one only with
             // `unsafe_enable_unstable_dependencies`, see
             // `CatalogState::check_unstable_dependencies`.
-            if user_referenced
-                && self.is_unstable_schema_specifier(entry.name().qualifiers.schema_spec)
-            {
+            if self.is_unstable_schema_specifier(entry.name().qualifiers.schema_spec) {
                 return Err(PinError::UnstableDependency {
                     export: id,
-                    dependency: self.resolve_full_name(entry.name(), None).to_string(),
+                    dependency: full_name(entry).to_string(),
                 });
             }
-            // Must happen after unstable check: an earlier system dependency
-            // should not mask a later user one.
-            if !seen.insert(item_id) {
-                continue;
-            }
-            // Planning inlines the views a plan reads and the functions it
-            // calls. Anything else it reads, including another index or
-            // materialized view, is an import with its own plan, so the walk
-            // stops there.
-            let kind = match entry.item() {
-                CatalogItem::View(_) => {
-                    let user = !item_id.is_system();
-                    todo.extend(entry.uses().into_iter().map(|use_id| (use_id, user)));
-                    InlinedBuiltinKind::View
-                }
-                CatalogItem::Func(func)
-                    if func.inner.func_impls().iter().any(|imp| imp.sql.is_some()) =>
-                {
-                    InlinedBuiltinKind::Func
-                }
-                _ => continue,
-            };
             if item_id.is_system() {
-                let name = self.resolve_full_name(entry.name(), None);
-                builtins.insert(InlinedBuiltin {
-                    kind,
-                    schema: name.schema,
-                    name: name.item,
-                });
+                if entry.is_relation() {
+                    return Err(PinError::BuiltinRelation {
+                        export: id,
+                        relation: full_name(entry).to_string(),
+                    });
+                }
+                if let CatalogItem::Func(func) = entry.item() {
+                    if func.inner.func_impls().iter().any(|imp| imp.sql.is_some()) {
+                        let name = full_name(entry);
+                        builtins.insert(InlinedBuiltin {
+                            kind: InlinedBuiltinKind::Func,
+                            schema: name.schema,
+                            name: name.item,
+                        });
+                    }
+                }
+            } else if let CatalogItem::View(_) = entry.item() {
+                // Planning inlines the views a plan reads. Anything else it
+                // reads, including another index or materialized view, is an
+                // import with its own plan, so the walk stops there.
+                todo.extend(entry.uses());
             }
         }
         Ok(builtins)

@@ -2414,8 +2414,7 @@
   },
   "InlinedBuiltinKind": {
     "ENUM": {
-      "Func": "UNIT",
-      "View": "UNIT"
+      "Func": "UNIT"
     }
   },
   "IsFalse": "UNITSTRUCT",

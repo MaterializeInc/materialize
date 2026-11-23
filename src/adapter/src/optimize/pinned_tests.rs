@@ -1018,8 +1018,8 @@ fn inlined(kind: InlinedBuiltinKind, schema: &str, name: &str) -> InlinedBuiltin
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
-async fn pin_records_builtins_inlined_through_views() {
-    const ZONES: u64 = 2;
+async fn pin_records_sql_functions_inlined_through_views() {
+    const PARTS: u64 = 2;
     const MV: u64 = 3;
     const MV_ON_TABLE: u64 = 4;
     const MV_ON_MV: u64 = 5;
@@ -1028,10 +1028,11 @@ async fn pin_records_builtins_inlined_through_views() {
         create_tables(&mut catalog).await;
         create_item(
             &mut catalog,
-            ZONES,
-            "zones",
-            "CREATE VIEW \"materialize\".\"public\".\"zones\" AS \
-             SELECT \"name\" FROM \"mz_catalog\".\"mz_timezone_names\"",
+            PARTS,
+            "parts",
+            "CREATE VIEW \"materialize\".\"public\".\"parts\" AS \
+             SELECT \"pg_catalog\".\"regexp_split_to_table\"(\"name\", '/') AS \"part\" \
+             FROM \"materialize\".\"public\".\"tables\"",
         )
         .await;
         let CatalogItem::MaterializedView(mv) = create_item(
@@ -1040,8 +1041,7 @@ async fn pin_records_builtins_inlined_through_views() {
             "mv",
             "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"mv\" \
              IN CLUSTER \"quickstart\" AS \
-             SELECT \"pg_catalog\".\"regexp_split_to_table\"(\"name\", '/') AS \"part\" \
-             FROM \"materialize\".\"public\".\"zones\"",
+             SELECT \"part\" FROM \"materialize\".\"public\".\"parts\"",
         )
         .await
         else {
@@ -1067,14 +1067,11 @@ async fn pin_records_builtins_inlined_through_views() {
         .await;
         let catalog = Arc::new(catalog);
 
-        let expected = BTreeSet::from([
-            inlined(InlinedBuiltinKind::View, "mz_catalog", "mz_timezone_names"),
-            inlined(
-                InlinedBuiltinKind::Func,
-                "pg_catalog",
-                "regexp_split_to_table",
-            ),
-        ]);
+        let expected = BTreeSet::from([inlined(
+            InlinedBuiltinKind::Func,
+            "pg_catalog",
+            "regexp_split_to_table",
+        )]);
         let df_desc = optimize_materialized_view(&catalog, &mv, "mv".to_string(), BTreeSet::new());
         let pinned = assert_round_trips(&catalog, df_desc);
         assert_eq!(pinned.inlined_builtins, expected);
@@ -1100,6 +1097,69 @@ async fn pin_records_builtins_inlined_through_views() {
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+async fn pin_rejects_builtin_relations() {
+    const DIRECT: u64 = 2;
+    const ZONES: u64 = 3;
+    const THROUGH_VIEW: u64 = 4;
+    const BUILTIN_TABLE: u64 = 5;
+    Catalog::with_debug(|mut catalog| async move {
+        // `mz_timezone_names` reads no collection, so no import betrays it.
+        create_item(
+            &mut catalog,
+            DIRECT,
+            "direct",
+            "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"direct\" \
+             IN CLUSTER \"quickstart\" AS \
+             SELECT \"name\" FROM \"mz_catalog\".\"mz_timezone_names\"",
+        )
+        .await;
+        create_item(
+            &mut catalog,
+            ZONES,
+            "zones",
+            "CREATE VIEW \"materialize\".\"public\".\"zones\" AS \
+             SELECT \"name\" FROM \"mz_catalog\".\"mz_timezone_names\"",
+        )
+        .await;
+        create_item(
+            &mut catalog,
+            THROUGH_VIEW,
+            "through_view",
+            "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"through_view\" \
+             IN CLUSTER \"quickstart\" AS \
+             SELECT \"name\" FROM \"materialize\".\"public\".\"zones\"",
+        )
+        .await;
+        create_item(
+            &mut catalog,
+            BUILTIN_TABLE,
+            "builtin_table",
+            "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"builtin_table\" \
+             IN CLUSTER \"quickstart\" AS \
+             SELECT \"name\" FROM \"mz_catalog\".\"mz_tables\"",
+        )
+        .await;
+        let state = catalog.state();
+        for (id, relation) in [
+            (DIRECT, "mz_catalog.mz_timezone_names"),
+            (THROUGH_VIEW, "mz_catalog.mz_timezone_names"),
+            (BUILTIN_TABLE, "mz_catalog.mz_tables"),
+        ] {
+            let export = GlobalId::User(id);
+            assert_eq!(
+                state.inlined_builtins(export),
+                Err(PinError::BuiltinRelation {
+                    export,
+                    relation: relation.to_string(),
+                }),
+            );
+        }
+    })
+    .await
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
 async fn pin_rejects_unstable_dependencies() {
     const DIRECT: u64 = 2;
     const THROUGH_VIEW: u64 = 3;
@@ -1113,7 +1173,7 @@ async fn pin_rejects_unstable_dependencies() {
             DIRECT,
             "direct",
             "CREATE VIEW \"materialize\".\"public\".\"direct\" AS \
-             SELECT \"mz_internal\".\"mz_connection_oid\"('c') AS \"oid\"",
+             SELECT \"mz_internal\".\"mz_render_typmod\"(23, -1) AS \"typmod\"",
         )
         .await;
         create_item(
@@ -1121,7 +1181,7 @@ async fn pin_rejects_unstable_dependencies() {
             THROUGH_VIEW,
             "through_view",
             "CREATE VIEW \"materialize\".\"public\".\"through_view\" AS \
-             SELECT \"oid\" FROM \"materialize\".\"public\".\"direct\"",
+             SELECT \"typmod\" FROM \"materialize\".\"public\".\"direct\"",
         )
         .await;
         let state = catalog.state();
@@ -1130,7 +1190,7 @@ async fn pin_rejects_unstable_dependencies() {
                 state.inlined_builtins(id),
                 Err(PinError::UnstableDependency {
                     export: id,
-                    dependency: "mz_internal.mz_connection_oid".to_string(),
+                    dependency: "mz_internal.mz_render_typmod".to_string(),
                 }),
             );
         }
@@ -1156,66 +1216,6 @@ fn constant_view_closure(catalog: &Catalog, id: CatalogItemId) -> Option<BTreeSe
         }
     }
     Some(views)
-}
-
-/// Ensures that the set of known-constant views does not change out from under us.
-#[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
-async fn constant_builtin_views() {
-    const ZONES: u64 = 2;
-    const ZONES_AND_TABLES: u64 = 3;
-    Catalog::with_debug(|mut catalog| async move {
-        create_tables(&mut catalog).await;
-        // Roots are stable views only, see `BUILTINS::constant_views`.
-        let mut constant = BTreeSet::new();
-        for entry in catalog.entries() {
-            let stable = !catalog
-                .state()
-                .is_unstable_schema_specifier(entry.name().qualifiers.schema_spec);
-            if entry.id().is_system() && stable && matches!(entry.item(), CatalogItem::View(_)) {
-                if let Some(views) = constant_view_closure(&catalog, entry.id()) {
-                    constant.extend(views);
-                }
-            }
-        }
-        let constant: BTreeSet<String> = constant
-            .into_iter()
-            .map(|id| {
-                let entry = catalog.get_entry(&id);
-                catalog.resolve_full_name(entry.name(), None).to_string()
-            })
-            .collect();
-        let listed: BTreeSet<String> = mz_catalog::builtin::BUILTINS::constant_views()
-            .map(|view| format!("{}.{}", view.schema, view.name))
-            .collect();
-        assert_eq!(
-            constant, listed,
-            "BUILTINS::constant_views in src/catalog/src/builtin.rs must list exactly the \
-             constant builtin views a user plan can inline"
-        );
-
-        // A collection read anywhere below a view makes it non-constant.
-        create_item(
-            &mut catalog,
-            ZONES,
-            "zones",
-            "CREATE VIEW \"materialize\".\"public\".\"zones\" AS \
-             SELECT \"name\" FROM \"mz_catalog\".\"mz_timezone_names\"",
-        )
-        .await;
-        create_item(
-            &mut catalog,
-            ZONES_AND_TABLES,
-            "zones_and_tables",
-            "CREATE VIEW \"materialize\".\"public\".\"zones_and_tables\" AS \
-             SELECT \"z\".\"name\" FROM \"materialize\".\"public\".\"zones\" AS \"z\", \
-             \"materialize\".\"public\".\"tables\" AS \"t\"",
-        )
-        .await;
-        assert!(constant_view_closure(&catalog, CatalogItemId::User(ZONES)).is_some());
-        assert!(constant_view_closure(&catalog, CatalogItemId::User(ZONES_AND_TABLES)).is_none());
-    })
-    .await
 }
 
 /// The catalog items planning resolves inside the SQL body of `imp`, called

@@ -27,12 +27,15 @@
 //! sink) and a dataflow that exports nothing.
 //!
 //! [`PinnedDataflow::pin`] also rejects a dataflow that imports or exports a
-//! builtin collection. Builtins keep their ids across releases while their
-//! schemas and definitions change.
+//! builtin collection, and its [`PinningContext`] rejects one whose exports
+//! depend on any builtin relation. Builtins keep their ids across releases
+//! while their schemas and definitions change. A builtin view that reads no
+//! collection leaves no import behind once inlined, so only the catalog can
+//! tell that a plan depends on it.
 //!
-//! Planning inlines the bodies of builtin views and SQL-defined builtin
-//! functions, and the plan keeps no trace of where an inlined expression came
-//! from. A pin therefore records the builtins its exports depend on, as a
+//! Planning also inlines the bodies of SQL-defined builtin functions, and the
+//! plan keeps no trace of where an inlined expression came from. A pin
+//! therefore records the SQL-defined builtins its exports call, as the
 //! [`PinningContext`] reports them, so that a later change to one of them can
 //! be traced to the pins that may have inlined it.
 //!
@@ -103,7 +106,8 @@ pub struct InlinedBuiltin {
     pub name: String,
 }
 
-/// The kinds of builtin whose definitions planning inlines.
+/// The kinds of builtin whose definitions planning inlines into a pinnable
+/// plan.
 #[derive(
     Clone,
     Copy,
@@ -116,8 +120,6 @@ pub struct InlinedBuiltin {
     Deserialize
 )]
 pub enum InlinedBuiltinKind {
-    /// A builtin view.
-    View,
     /// A builtin function with at least one implementation defined in SQL.
     /// Name resolution happens before an overload is chosen, so this covers
     /// every overload.
@@ -248,7 +250,9 @@ pub trait PinningContext {
     /// under `id`, found through its dependencies and the views among them.
     ///
     /// Fails with [`PinError::UnknownExport`] when no catalog item is exported
-    /// under `id`, and with [`PinError::UnstableDependency`] when the item, or
+    /// under `id`, with [`PinError::BuiltinRelation`] when the item, or a
+    /// user view it reads, depends on a builtin relation, and with
+    /// [`PinError::UnstableDependency`] when the item, or
     /// a user view it reads, references an unstable builtin.
     fn inlined_builtins(&self, id: GlobalId) -> Result<BTreeSet<InlinedBuiltin>, PinError>;
 }
@@ -274,6 +278,14 @@ pub enum PinError {
     BuiltinCollection(GlobalId),
     /// The pinning context knows no catalog item exported under this id.
     UnknownExport(GlobalId),
+    /// The exported item, or a user view it reads, references a builtin
+    /// relation.
+    BuiltinRelation {
+        /// The export whose item has the dependency.
+        export: GlobalId,
+        /// The builtin relation's full name.
+        relation: String,
+    },
     /// The exported item, or a user view it reads, references an unstable
     /// builtin. The builtin registry does not track unstable builtins, so a
     /// change to one would not be flagged as affecting the pin.
@@ -312,6 +324,12 @@ impl fmt::Display for PinError {
             }
             PinError::UnknownExport(id) => {
                 write!(f, "no catalog item is exported under {id}")
+            }
+            PinError::BuiltinRelation { export, relation } => {
+                write!(
+                    f,
+                    "{export} depends on builtin relation {relation}, so it cannot be pinned"
+                )
             }
             PinError::UnstableDependency { export, dependency } => {
                 write!(
@@ -592,11 +610,10 @@ impl PinnedDataflow {
     /// or if the catalog disagrees with the plan about what it is. Only the
     /// first problem found is reported.
     ///
-    /// NOTE: The plan also contains the bodies of the views it inlines, and
-    /// of SQL-defined builtin functions, and nothing here verifies those.
-    /// Pinning refuses builtin collections, which keeps out builtin views
-    /// that read one, but not a builtin view that reads no collection or a
-    /// SQL-defined function.
+    /// NOTE: The plan also contains the bodies of the user views and
+    /// SQL-defined builtin functions it inlines, and nothing here verifies
+    /// those. A changed SQL-defined builtin is traced through
+    /// `inlined_builtins` instead.
     // TODO(mgree): the import and export checks are independent, so
     // collecting every problem into a list instead of returning at the first
     // one would be easy.
