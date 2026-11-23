@@ -1141,7 +1141,7 @@ async fn pin_rejects_builtin_relations() {
             assert_eq!(
                 state.inlined_builtins(export),
                 Err(PinError::BuiltinRelation {
-                    export,
+                    item: export,
                     relation: relation.to_string(),
                 }),
             );
@@ -1181,7 +1181,7 @@ async fn pin_rejects_unstable_dependencies() {
             assert_eq!(
                 state.inlined_builtins(id),
                 Err(PinError::UnstableDependency {
-                    export: id,
+                    item: id,
                     dependency: "mz_internal.mz_render_typmod".to_string(),
                 }),
             );
@@ -1238,7 +1238,7 @@ async fn pin_rejects_unstable_functions_in_folded_function_bodies() {
         assert!(
             matches!(
                 &result,
-                Err(PinError::UnstableDependency { export: e, dependency })
+                Err(PinError::UnstableDependency { item: e, dependency })
                     if *e == export
                         && [
                             "mz_internal.mz_validate_role_privilege",
@@ -1370,7 +1370,7 @@ async fn pin_follows_pending_replacements() {
         assert_eq!(
             catalog.state().inlined_builtins(export),
             Err(PinError::BuiltinRelation {
-                export,
+                item: export,
                 relation: "mz_catalog.mz_timezone_names".to_string(),
             }),
             "planning inlines a pending replacement's definition"

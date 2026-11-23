@@ -145,7 +145,7 @@ impl PinningContext for CatalogState {
             self.check_referenced_builtin(id, entry, &mut builtins)?;
             if item_id.is_system() && entry.is_relation() {
                 return Err(PinError::BuiltinRelation {
-                    export: id,
+                    item: id,
                     relation: self.full_name(entry),
                 });
             }
@@ -182,7 +182,7 @@ impl CatalogState {
     /// SQL-defined builtin function.
     fn check_referenced_builtin(
         &self,
-        export: GlobalId,
+        item: GlobalId,
         referenced: &CatalogEntry,
         builtins: &mut BTreeSet<InlinedBuiltin>,
     ) -> Result<(), PinError> {
@@ -193,7 +193,7 @@ impl CatalogState {
         // reference one regardless.
         if self.is_unstable_schema_specifier(referenced.name().qualifiers.schema_spec) {
             return Err(PinError::UnstableDependency {
-                export,
+                item,
                 dependency: self.full_name(referenced),
             });
         }
@@ -216,13 +216,13 @@ impl CatalogState {
     /// functions `entry` calls, transitively.
     fn inlined_function_bodies(
         &self,
-        export: GlobalId,
+        item: GlobalId,
         entry: &CatalogEntry,
         builtins: &mut BTreeSet<InlinedBuiltin>,
     ) -> Result<(), PinError> {
         for item_id in entry.item().function_body_references().items() {
             let referenced = self.get_entry(item_id);
-            self.check_referenced_builtin(export, referenced, builtins)?;
+            self.check_referenced_builtin(item, referenced, builtins)?;
             // A builtin relation read in a body usually makes the plan import
             // it, and `PinnedDataflow::pin` refuses builtin imports anyway.
             // Constant folding can remove the read, though, so refuse on the
@@ -230,7 +230,7 @@ impl CatalogState {
             // builtin relation is pinned.
             if referenced.is_relation() {
                 return Err(PinError::BuiltinRelation {
-                    export,
+                    item,
                     relation: self.full_name(referenced),
                 });
             }

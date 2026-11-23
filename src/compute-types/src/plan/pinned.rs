@@ -294,8 +294,9 @@ pub enum PinError {
     /// Something the plan inlines references a builtin relation, see
     /// [`PinningContext`].
     BuiltinRelation {
-        /// The export, or imported index, whose item has the dependency.
-        export: GlobalId,
+        /// The export, or imported index, whose catalog item has the
+        /// dependency.
+        item: GlobalId,
         /// The builtin relation's full name.
         relation: String,
     },
@@ -303,8 +304,9 @@ pub enum PinError {
     /// [`PinningContext`]. The builtin registry does not track unstable
     /// builtins, so a change to one would not be flagged as affecting the pin.
     UnstableDependency {
-        /// The export, or imported index, whose item has the dependency.
-        export: GlobalId,
+        /// The export, or imported index, whose catalog item has the
+        /// dependency.
+        item: GlobalId,
         /// The unstable builtin's full name.
         dependency: String,
     },
@@ -338,16 +340,16 @@ impl fmt::Display for PinError {
             PinError::UnknownItem(id) => {
                 write!(f, "no catalog item exists under {id}")
             }
-            PinError::BuiltinRelation { export, relation } => {
+            PinError::BuiltinRelation { item, relation } => {
                 write!(
                     f,
-                    "{export} depends on builtin relation {relation}, so it cannot be pinned"
+                    "{item} depends on builtin relation {relation}, so it cannot be pinned"
                 )
             }
-            PinError::UnstableDependency { export, dependency } => {
+            PinError::UnstableDependency { item, dependency } => {
                 write!(
                     f,
-                    "{export} depends on unstable builtin {dependency}, so it cannot be pinned"
+                    "{item} depends on unstable builtin {dependency}, so it cannot be pinned"
                 )
             }
         }
