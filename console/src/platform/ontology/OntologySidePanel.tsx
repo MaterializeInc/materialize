@@ -249,6 +249,7 @@ const NodeDetails = ({
               height="8px"
               borderRadius="full"
               background={freshnessColor(freshness, colors)}
+              transition="background 0.5s ease"
             />
             <Text textStyle="text-small" color={colors.foreground.secondary}>
               {freshness.state === "hydrating" ||

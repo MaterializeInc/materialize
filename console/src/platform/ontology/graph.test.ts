@@ -11,7 +11,14 @@ import { describe, expect, it } from "vitest";
 
 import { buildCatalogGraph } from "./catalogGraph";
 import { filterGraph, matchesSearch, neighborhood } from "./filterGraph";
-import { formatLag, freshnessOf } from "./freshness";
+import {
+  flowSpeeds,
+  formatLag,
+  Freshness,
+  freshnessOf,
+  LAGGING_HOLD_MS,
+  steadyFreshness,
+} from "./freshness";
 import { buildJoinSql } from "./joinSql";
 import {
   cardHeight,
@@ -283,6 +290,21 @@ describe("freshnessOf", () => {
     expect(freshnessOf(undefined, "table", now).state).toBe("unknown");
   });
 
+  it("reads as fresh until a relation stays lagging for the hold", () => {
+    const since = new Map<string, number>();
+    const lagging: Freshness = { state: "lagging", lagMs: 2_500 };
+    const fresh: Freshness = { state: "fresh", lagMs: 500 };
+    expect(steadyFreshness(lagging, "u1", now, since).state).toBe("fresh");
+    expect(
+      steadyFreshness(lagging, "u1", now + LAGGING_HOLD_MS, since).state,
+    ).toBe("lagging");
+    // Catching up restarts the hold.
+    steadyFreshness(fresh, "u1", now + LAGGING_HOLD_MS + 1, since);
+    expect(
+      steadyFreshness(lagging, "u1", now + LAGGING_HOLD_MS + 2, since).state,
+    ).toBe("fresh");
+  });
+
   it("formats lag compactly", () => {
     expect(formatLag(420)).toBe("0.4s");
     expect(formatLag(42_000)).toBe("42s");
@@ -459,5 +481,48 @@ describe("keyColumns", () => {
     expect(visibleKeyRows(many.slice(0, 5)).hidden).toBe(0);
     expect(keyRowOffset(many, "k6")).toBe(keyRowOffset(many, "k3") + 18);
     expect(cardHeight([])).toBeLessThan(cardHeight(many));
+  });
+});
+
+describe("flowSpeeds", () => {
+  const states: Record<string, Freshness["state"]> = {
+    table: "fresh",
+    plain: "computedOnRead",
+    unread: "computedOnRead",
+    mv: "lagging",
+    stuck: "stale",
+  };
+  const nodes = Object.keys(states).map((id) => node(id));
+  const getFreshness = (n: OntologyNode): Freshness => ({
+    state: states[n.id],
+    lagMs: null,
+  });
+
+  it("flows into maintained relations, and plain views they read through", () => {
+    const flow = flowSpeeds(
+      nodes,
+      [
+        edge("plain", "table", "lineage"),
+        edge("mv", "plain", "lineage"),
+        edge("unread", "table", "lineage"),
+        edge("stuck", "table", "lineage"),
+      ],
+      getFreshness,
+    );
+    expect(Object.fromEntries(flow)).toEqual({
+      table: "fast",
+      mv: "slow",
+      plain: "slow",
+    });
+  });
+
+  it("takes the fastest speed of a plain view's readers", () => {
+    const flow = flowSpeeds(
+      [...nodes, { ...node("fresh_mv") }],
+      [edge("mv", "plain", "lineage"), edge("fresh_mv", "plain", "lineage")],
+      (n) =>
+        n.id === "fresh_mv" ? { state: "fresh", lagMs: 0 } : getFreshness(n),
+    );
+    expect(flow.get("plain")).toBe("fast");
   });
 });

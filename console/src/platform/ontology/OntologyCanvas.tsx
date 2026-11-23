@@ -13,7 +13,12 @@ import React from "react";
 import { Canvas } from "~/components/Graph";
 import { MaterializeTheme, ThemeColors } from "~/theme";
 
-import { Freshness, freshnessColor, freshnessText } from "./freshness";
+import {
+  flowSpeeds,
+  Freshness,
+  freshnessColor,
+  freshnessText,
+} from "./freshness";
 import {
   CARD_HEADER_HEIGHT,
   KEY_ROW_HEIGHT,
@@ -22,7 +27,13 @@ import {
   visibleKeyRows,
 } from "./keyColumns";
 import { GraphLayout, labelWidth, NODE_WIDTH } from "./layout";
-import { edgeLabel, isErrorEdge, OntologyEdge, OntologyNode } from "./model";
+import {
+  edgeLabel,
+  isErrorEdge,
+  LINEAGE_EDGE_KIND,
+  OntologyEdge,
+  OntologyNode,
+} from "./model";
 import { edgeKindStyle, groupColor, nodeKindLabel } from "./style";
 
 export type Selection =
@@ -94,6 +105,10 @@ export const OntologyCanvas = ({
   const edgesById = React.useMemo(
     () => new Map(edges.map((edge) => [edge.id, edge])),
     [edges],
+  );
+  const flowById = React.useMemo(
+    () => (getFreshness ? flowSpeeds(nodes, edges, getFreshness) : new Map()),
+    [nodes, edges, getFreshness],
   );
   // What the selection touches stays bright and everything else recedes.
   const focus = React.useMemo(() => {
@@ -197,6 +212,18 @@ export const OntologyCanvas = ({
               }
               .ontology-new { animation: ontology-appear 1.2s ease-out 3; }
               .ontology-hydrating { animation: ontology-pulse 1.4s ease-in-out infinite; }
+              .ontology-freshness { transition: fill 0.5s ease; }
+              /* The path runs from the dependent to its input, so a growing
+                 offset moves the dashes from the input to the dependent. One
+                 cycle is two periods of the lineage dash. */
+              @keyframes ontology-flow {
+                to { stroke-dashoffset: 22; }
+              }
+              .ontology-flow-fast { animation: ontology-flow 0.9s linear infinite; }
+              .ontology-flow-slow { animation: ontology-flow 3s linear infinite; }
+              @media (prefers-reduced-motion: reduce) {
+                .ontology-flow-fast, .ontology-flow-slow { animation: none; }
+              }
               .ontology-edge-hit { cursor: pointer; }
               .ontology-node { cursor: pointer; }
             `}
@@ -246,6 +273,8 @@ export const OntologyCanvas = ({
           const isFocused =
             focus?.edgeIds.has(edge.id) || hoveredEdge === edge.id;
           const isDimmed = focus !== null && !focus.edgeIds.has(edge.id);
+          const flow =
+            edge.kind === LINEAGE_EDGE_KIND ? flowById.get(edge.source) : null;
           return (
             <g key={edge.id} opacity={isDimmed ? 0.15 : 1}>
               <path
@@ -256,7 +285,11 @@ export const OntologyCanvas = ({
                 strokeDasharray={hasError ? "5 4" : style.dash}
                 markerEnd={`url(#${markerId(color)})`}
                 className={
-                  recentlyAdded.has(edge.id) ? "ontology-new" : undefined
+                  recentlyAdded.has(edge.id)
+                    ? "ontology-new"
+                    : flow
+                      ? `ontology-flow-${flow}`
+                      : undefined
                 }
               />
               <path
@@ -437,7 +470,11 @@ const OntologyNodeCard = React.memo(
           }
           stroke={border}
           strokeWidth={isSelected || isHighlighted ? 2.5 : 1}
-          strokeDasharray={node.isUnresolved ? "5 4" : undefined}
+          strokeDasharray={
+            node.isUnresolved || freshness?.state === "computedOnRead"
+              ? "5 4"
+              : undefined
+          }
           className={isNew ? "ontology-new" : undefined}
         />
         {!node.isUnresolved && (
@@ -508,8 +545,8 @@ const OntologyNodeCard = React.memo(
               fill={freshnessColor(freshness, colors)}
               className={
                 freshness.state === "hydrating"
-                  ? "ontology-hydrating"
-                  : undefined
+                  ? "ontology-freshness ontology-hydrating"
+                  : "ontology-freshness"
               }
             />
             <text

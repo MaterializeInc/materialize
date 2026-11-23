@@ -56,6 +56,7 @@ const SUMMARY_JOINS: ViewJoins = {
       right: { objectId: "u2", column: "id" },
     },
   ],
+  inputs: [],
   usingJoins: [],
   outputs: [],
 };
@@ -143,6 +144,7 @@ describe("inferred joins", () => {
                 right: { objectId: "u2", column: "region" },
               },
             ],
+            inputs: [],
             usingJoins: [],
             outputs: [],
           },
@@ -175,6 +177,7 @@ describe("inferred joins", () => {
                 right: { objectId: "u1", column: "sku" },
               },
             ],
+            inputs: [],
             usingJoins: [],
             outputs: [],
           },
@@ -197,6 +200,7 @@ describe("inferred joins", () => {
           "u3",
           {
             pairs: [],
+            inputs: [],
             usingJoins: [
               { right: "u2", candidates: ["u1"], columns: ["customer_id"] },
             ],
@@ -222,6 +226,7 @@ describe("inferred joins", () => {
                 right: { objectId: "u2", column: "id" },
               },
             ],
+            inputs: [],
             usingJoins: [],
             outputs: [],
           },
@@ -260,6 +265,7 @@ describe("columns views pass through", () => {
           "u4",
           {
             pairs: [],
+            inputs: [],
             usingJoins: [],
             outputs: [passes("customer_key", "u2", "id")],
           },
@@ -295,6 +301,7 @@ describe("columns views pass through", () => {
           "u5",
           {
             pairs: [],
+            inputs: [],
             usingJoins: [],
             outputs: [passes("cust", "u3", "customer_id")],
           },
@@ -333,6 +340,7 @@ describe("columns views pass through", () => {
             // order_summary passes orders.customer_id, and top_orgs joins
             // that to customers.id: the declared pair is two edges apart.
             pairs: [],
+            inputs: [],
             usingJoins: [],
             outputs: [passes("customer_id", "u1", "customer_id")],
           },
@@ -346,6 +354,7 @@ describe("columns views pass through", () => {
                 right: { objectId: "u2", column: "id" },
               },
             ],
+            inputs: [],
             usingJoins: [],
             outputs: [],
           },

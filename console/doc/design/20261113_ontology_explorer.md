@@ -78,9 +78,19 @@ this shape.
   rows resolve relative to the table's schema, then its database, then
   anywhere they are unique. Each row is checked for unknown or
   ambiguous relations, missing columns, mismatched column counts and join
-  columns of incompatible types. Lineage comes from `mz_object_graph_edges`.
+  columns of incompatible types. A view's or materialized view's lineage is
+  the relations its definition reads. `mz_object_graph_edges` supplies the
+  rest, but it follows dataflows, where a plain view is inlined into its
+  readers, so it gives a plain view no lineage and skips it on its readers'.
   Entities listed by `mz_mcp_data_products` are marked, since that view is
   what the agent MCP server lists.
+- **Data in motion.** Lineage edges into a maintained relation animate from
+  input to dependent, slowly while it lags and not at all once it is stale.
+  Changes flow through a plain view only when a maintained relation reads
+  it, and a plain view's card has a dashed border, since nothing keeps it
+  current. A relation reads as lagging only after its lag has stayed past
+  2s for 2s: frontiers advance about once a second, so the lag between two
+  advances swings by a second, and the dot would otherwise flicker.
 - **Inferred relationships** (`viewJoins.ts`, `inferredJoins.ts`). They come
   only from definitions and index keys, never from declared joins, so they
   stand alone as an independent reading. They follow the rules of
@@ -148,7 +158,7 @@ navigation within the session and each data set is one SUBSCRIBE:
 | Data | Source | Cluster |
 | --- | --- | --- |
 | Relations | the app-wide `allObjects` SUBSCRIBE | `mz_catalog_server` |
-| Lineage | `workflowGraphEdgesCollection` | `mz_catalog_server` |
+| Lineage | `workflowGraphEdgesCollection`, and the view definitions below | `mz_catalog_server` |
 | Ontology table candidates | SUBSCRIBE over `mz_columns`, `mz_objects`, `mz_indexes` | `mz_catalog_server` |
 | Ontology rows | SUBSCRIBE over the chosen ontology table | the table's index cluster |
 | Columns and comments | SUBSCRIBE scoped to the drawn schemas | `mz_catalog_server` |

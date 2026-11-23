@@ -90,6 +90,11 @@ describe("extractViewJoins", () => {
     expect(extractViewJoins(sql).pairs).toEqual([]);
   });
 
+  it("lists each relation read once, including inside CTEs", () => {
+    const sql = `CREATE VIEW "materialize"."auction"."t_inputs" AS WITH "x" AS (SELECT "seller" FROM [u3 AS "materialize"."auction"."auctions"]) SELECT "u"."name" FROM "x", [u6 AS "materialize"."auction"."users"] AS "u" JOIN [u3 AS "materialize"."auction"."auctions"] AS "a" ON "a"."seller" = "u"."id"`;
+    expect(extractViewJoins(sql).inputs).toEqual(["u3", "u6"]);
+  });
+
   it("does not resolve an alias bound to two relations", () => {
     const sql = `CREATE VIEW "materialize"."auction"."t_shadow" AS SELECT "a"."id" FROM [u3 AS "materialize"."auction"."auctions"] AS "a" JOIN (SELECT "a"."id" FROM [u4 AS "materialize"."auction"."bids"] AS "a") AS "s" ON "s"."id" = "a"."id"`;
     expect(extractViewJoins(sql).pairs).toEqual([]);
@@ -98,6 +103,7 @@ describe("extractViewJoins", () => {
   it("skips conditions on expressions, and casts to types", () => {
     const sql = `CREATE VIEW "materialize"."auction"."t_expr" AS SELECT 1 FROM [u4 AS "materialize"."auction"."bids"] AS "b" JOIN [u3 AS "materialize"."auction"."auctions"] AS "a" ON "a"."id" + 0 = "b"."auction_id" AND "a"."seller"::[s46 AS "pg_catalog"."text"] = "b"."buyer"::[s46 AS "pg_catalog"."text"]`;
     expect(extractViewJoins(sql)).toEqual({
+      inputs: ["u4", "u3"],
       pairs: [],
       usingJoins: [],
       outputs: [],

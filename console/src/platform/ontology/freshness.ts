@@ -9,12 +9,20 @@
 
 import type { ThemeColors } from "~/theme";
 
+import { LINEAGE_EDGE_KIND, OntologyEdge, OntologyNode } from "./model";
 import type { RelationVitals } from "./queries";
 
 /** Below this lag a relation reads as current. */
 export const FRESH_LAG_MS = 2_000;
 /** Above this lag a relation reads as stale. */
 export const STALE_LAG_MS = 30_000;
+/**
+ * How long a relation must stay past `FRESH_LAG_MS` before it reads as
+ * lagging. Frontiers advance about once a second, so the lag measured
+ * between two advances swings by a second, and a relation near the threshold
+ * would otherwise flip between fresh and lagging on every tick.
+ */
+export const LAGGING_HOLD_MS = 2_000;
 
 export type FreshnessState =
   "fresh" | "lagging" | "stale" | "hydrating" | "computedOnRead" | "unknown";
@@ -52,6 +60,28 @@ export function freshnessOf(
   return { state: "stale", lagMs };
 }
 
+/**
+ * `freshness`, reading as fresh until the relation has been lagging for
+ * `LAGGING_HOLD_MS`. `laggingSince` holds, by relation, when its current
+ * stretch of lagging began, and is updated here.
+ */
+export function steadyFreshness(
+  freshness: Freshness,
+  id: string,
+  now: number,
+  laggingSince: Map<string, number>,
+): Freshness {
+  if (freshness.state !== "lagging") {
+    laggingSince.delete(id);
+    return freshness;
+  }
+  const since = laggingSince.get(id) ?? now;
+  laggingSince.set(id, since);
+  return now - since < LAGGING_HOLD_MS
+    ? { ...freshness, state: "fresh" }
+    : freshness;
+}
+
 export function formatLag(lagMs: number) {
   if (lagMs < 10_000) return `${(lagMs / 1000).toFixed(1)}s`;
   if (lagMs < 60_000) return `${Math.round(lagMs / 1000)}s`;
@@ -87,4 +117,44 @@ export function freshnessColor(freshness: Freshness, colors: ThemeColors) {
     default:
       return colors.foreground.tertiary;
   }
+}
+
+export type FlowSpeed = "fast" | "slow";
+
+/**
+ * How fast changes visibly flow into each relation along its lineage edges,
+ * by node id, for the relations they flow into at all. A maintained
+ * relation takes changes in as they happen, unless it is stuck past
+ * `STALE_LAG_MS`. A plain view maintains nothing, but a maintained relation
+ * reading it runs it inline, so changes flow through it at the fastest speed
+ * of the maintained relations reading it, directly or through other plain
+ * views.
+ */
+export function flowSpeeds(
+  nodes: OntologyNode[],
+  edges: OntologyEdge[],
+  getFreshness: (node: OntologyNode) => Freshness,
+): Map<string, FlowSpeed> {
+  const flow = new Map<string, FlowSpeed>();
+  const plainViews = new Set<string>();
+  for (const node of nodes) {
+    const freshness = getFreshness(node);
+    if (freshness.state === "computedOnRead") plainViews.add(node.id);
+    if (freshness.state === "fresh") flow.set(node.id, "fast");
+    if (freshness.state === "lagging") flow.set(node.id, "slow");
+  }
+  const lineage = edges.filter((edge) => edge.kind === LINEAGE_EDGE_KIND);
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const { source, target } of lineage) {
+      const speed = flow.get(source);
+      const current = flow.get(target);
+      if (!speed || !plainViews.has(target) || current === "fast") continue;
+      if (current !== speed) {
+        flow.set(target, speed);
+        changed = true;
+      }
+    }
+  }
+  return flow;
 }

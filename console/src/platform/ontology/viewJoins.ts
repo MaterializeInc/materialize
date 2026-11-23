@@ -51,6 +51,8 @@ export interface PassedColumn {
 }
 
 export interface ViewJoins {
+  /** The relations the view reads, each once, by object id. */
+  inputs: string[];
   pairs: JoinColumnPair[];
   usingJoins: UsingJoin[];
   outputs: PassedColumn[];
@@ -329,7 +331,12 @@ export function extractViewJoins(createSql: string): ViewJoins {
     }
   }
 
-  return { pairs, usingJoins, outputs: passedColumns(tokens, resolve) };
+  return {
+    inputs: [...new Set(refs.map((ref) => ref.objectId))],
+    pairs,
+    usingJoins,
+    outputs: passedColumns(tokens, resolve),
+  };
 }
 
 /**

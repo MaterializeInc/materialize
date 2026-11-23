@@ -419,7 +419,17 @@ export function buildDataProductGraph(
     issues.push(...edgeIssues);
   }
 
-  for (const { childId, parentId } of input.lineage) {
+  // A view's dataflow-level lineage skips any plain view it reads, since
+  // that view is inlined into it, and a plain view has none of its own. Views
+  // and materialized views take their inputs from their definitions instead,
+  // so each draws an edge to exactly the relations it names.
+  const lineage = [
+    ...input.lineage.filter(({ childId }) => !input.viewJoins.has(childId)),
+    ...[...input.viewJoins].flatMap(([childId, joins]) =>
+      joins.inputs.map((parentId) => ({ childId, parentId })),
+    ),
+  ];
+  for (const { childId, parentId } of lineage) {
     if (childId === parentId) continue;
     if (!nodes.has(childId) || !nodes.has(parentId)) continue;
     edges.push({

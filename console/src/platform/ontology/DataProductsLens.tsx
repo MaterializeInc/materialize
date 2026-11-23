@@ -38,7 +38,7 @@ import {
   qualifiedName,
 } from "./dataProductGraph";
 import { buildDeclareSql, OntologyTableHome } from "./declareSql";
-import { freshnessOf } from "./freshness";
+import { freshnessOf, steadyFreshness } from "./freshness";
 import {
   INFERRED_JOIN_EDGE_KIND,
   isProblem,
@@ -194,12 +194,20 @@ export const DataProductsLens = () => {
   );
   const { vitals, isLive } = useRelationVitals(vitalIds);
   const now = useNow(FRESHNESS_TICK_MS);
+  const laggingSince = React.useRef(new Map<string, number>());
+  // Calls within one tick pass the same `now`, so they agree, however many
+  // times a node is drawn.
   const getFreshness = React.useCallback(
     (node: OntologyNode) =>
-      freshnessOf(
-        node.objectId ? vitals.get(node.objectId) : undefined,
-        node.kind,
+      steadyFreshness(
+        freshnessOf(
+          node.objectId ? vitals.get(node.objectId) : undefined,
+          node.kind,
+          now,
+        ),
+        node.id,
         now,
+        laggingSince.current,
       ),
     [vitals, now],
   );

@@ -19,7 +19,10 @@
 export const JOIN_EDGE_KIND = "join";
 /** A join some view or materialized view already makes. */
 export const INFERRED_JOIN_EDGE_KIND = "inferred_join";
-/** A derived object reading from another, from `mz_object_graph_edges`. */
+/**
+ * A derived object reading from another: a relation a view or materialized
+ * view definition names, otherwise an edge of `mz_object_graph_edges`.
+ */
 export const LINEAGE_EDGE_KIND = "lineage";
 
 /**

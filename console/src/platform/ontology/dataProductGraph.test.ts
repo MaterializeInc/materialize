@@ -262,6 +262,36 @@ describe("buildDataProductGraph", () => {
     ]);
   });
 
+  it("takes a view's lineage from its definition", () => {
+    const plain = relation("u3", "big_orders", "shop", "view");
+    const mv = relation("u4", "big_order_count", "shop", "materialized-view");
+    const reads = (inputs: string[]) => ({
+      inputs,
+      pairs: [],
+      usingJoins: [],
+      outputs: [],
+    });
+    const graph = buildDataProductGraph(
+      input({
+        relations: [orders, plain, mv],
+        // The dataflow graph skips the plain view the MV reads.
+        lineage: [{ childId: "u4", parentId: "u1" }],
+        viewJoins: new Map([
+          ["u3", reads(["u1"])],
+          ["u4", reads(["u3"])],
+        ]),
+      }),
+    );
+    expect(
+      graph.edges
+        .filter((e) => e.kind === "lineage")
+        .map((e) => [e.source, e.target]),
+    ).toEqual([
+      ["u3", "u1"],
+      ["u4", "u3"],
+    ]);
+  });
+
   it("marks relations the agent MCP server lists as data products", () => {
     const graph = buildDataProductGraph(
       input({
