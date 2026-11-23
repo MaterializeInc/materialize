@@ -571,7 +571,8 @@ impl<'a> DeploymentExecutor<'a> {
                                 std::slice::from_mut(&mut rewritten),
                                 schema,
                                 suffix,
-                            );
+                            )
+                            .map_err(project::error::ProjectError::from)?;
                             verbose!("Applying schema setup for: {}.{}", database, staging_schema);
                             self.execute_sql(&rewritten).await?;
                         } else {
