@@ -27,7 +27,8 @@
 //! dyncfg-gated. `list_data_products` and `get_data_products` are one tool, and
 //! either name works on every route.
 //!
-//! Data products are discovered via `mz_internal.mz_mcp_data_products` system view.
+//! The agent route discovers data products through `mz_internal.mz_mcp_data_products`,
+//! and `/api/mcp` through `mz_internal.mz_mcp_data_product_reads`.
 
 use std::sync::Arc;
 
@@ -310,6 +311,12 @@ fn decode_mcp_name(value: &str) -> Result<Cow<'_, str>, McpRequestError> {
 const DISCOVERY_QUERY: &str = "SELECT * FROM mz_internal.mz_mcp_data_products";
 const DETAILS_QUERY_PREFIX: &str =
     "SELECT * FROM mz_internal.mz_mcp_data_product_details WHERE object_name = ";
+const UNIFIED_DISCOVERY_QUERY: &str = "SELECT object_name, cluster, description \
+     FROM mz_internal.mz_mcp_data_product_reads ORDER BY object_name";
+/// Selects the columns of [`DataProductReadRow`], in its field order.
+const UNIFIED_DETAILS_QUERY_PREFIX: &str = "SELECT object_name, object_type, description, \
+     columns, cluster, uses_index, indexed_columns, hydration, faster_read_available \
+     FROM mz_internal.mz_mcp_data_product_reads WHERE object_name = ";
 
 /// MCP request errors, mapped to JSON-RPC error codes.
 #[derive(Debug, Error)]
@@ -1526,13 +1533,14 @@ You are connected to the Materialize MCP server. It reads data products and the 
 
 Tools:
 - list_data_products: the data products your role can read. Start here.
-- get_data_product_details: one data product's columns, its cluster, and its `hydration`.
+- get_data_product_details: one data product's columns and how to read it.
 - query: read-only SELECT, SHOW, or EXPLAIN against anything your role can read, data products and system catalog alike.
 
 Reading data products:
-- Pass the `cluster` from get_data_product_details to query, so indexed reads hit the arrangement. Prefer indexed objects (served from memory) over unindexed materialized views (read from persistent storage).
-- A null `cluster` means your role lacks USAGE on that cluster. Omit `cluster`, and the query runs on your session's default cluster.
-- Check `hydration` before reading. Reads never return partial data: a read of a product that is not hydrated blocks until the dataflow catches up, and may hit the request timeout. If `hydrated` is false and `replica_count` is greater than 0, wait and retry. If `replica_count` is 0, the cluster has no replicas and the read cannot make progress until one is added.
+- Pass `read.cluster` from get_data_product_details to query. It is the cluster where the read uses an index.
+- A null `read.cluster` means the product is a materialized view with no index your role can use. Omit `cluster`, and the query returns its stored results.
+- Check `read.hydration` before reading. Reads never return partial data: a read of a product that is not hydrated blocks until the dataflow catches up, and may hit the request timeout. If `hydrated` is false and `replica_count` is greater than 0, wait and retry. If `replica_count` is 0, the cluster has no replicas and the read cannot make progress until one is added.
+- `read.faster_read_available` means an index on the product exists on a cluster your role cannot use. If reads are slow, an admin can grant access to it.
 
 System catalog:
 - Write system object names with their schema, for example mz_internal.mz_source_statuses. query does not add the system schemas to the search path.
@@ -1590,6 +1598,8 @@ fn handle_discover(
 }
 
 const DATA_PRODUCTS_DESCRIPTION: &str = "Discover all available real-time data views (data products) that represent business entities like customers, orders, products, etc. Each data product provides fresh, queryable data with defined schemas. Use this first to see what data is available before querying specific information.";
+
+const UNIFIED_DATA_PRODUCT_DETAILS_DESCRIPTION: &str = "Get one data product's columns and how to read it. `read.cluster` is the cluster to pass to `query`: the cluster your role can use with an index on the product, preferring a hydrated index. A null `read.cluster` means the product is a materialized view with no index your role can use: omit `cluster`, and the query returns its stored results. `read.uses_index` says whether the read is served from an index. `read.hydration` (`{hydrated, replica_count, hydrated_replica_count}`) describes that read. Reads never return partial data: if `hydrated` is false and `replica_count` is greater than 0, wait and retry. If `replica_count` is 0, the read cannot make progress until a replica is added. `read.faster_read_available` is true when an index on the product exists on a cluster your role cannot use.";
 
 const DATA_PRODUCT_DETAILS_DESCRIPTION: &str = "Get the complete schema and structure of a specific data product, plus a `hydration` object reporting whether the dataflow is ready across the cluster's replicas (`{hydrated, replica_count, hydrated_replica_count}`). This shows you exactly what fields are available, their types, and what data you can query. Reads never return partial data, so check `hydration` before reading: if `hydrated` is false and `replica_count` is greater than 0 the dataflow is still warming up (a read would block until it catches up, possibly hitting the request timeout), so wait and retry; if `replica_count` is 0 the cluster has no replicas and the read cannot make progress until one is added.";
 
@@ -1701,7 +1711,7 @@ fn handle_tools_list(
             ToolDefinition {
                 name: "get_data_product_details".to_string(),
                 title: Some("Get Data Product Details".to_string()),
-                description: DATA_PRODUCT_DETAILS_DESCRIPTION.to_string(),
+                description: UNIFIED_DATA_PRODUCT_DETAILS_DESCRIPTION.to_string(),
                 input_schema: json!({
                     "type": "object",
                     "properties": {
@@ -1811,14 +1821,18 @@ async fn handle_tools_call(
     let mut guard = ToolCallGuard::new(metrics, endpoint_type.as_label(), tool_name.to_string());
 
     let result = match (endpoint_type, params) {
-        (
-            McpEndpointType::Agent | McpEndpointType::Unified,
-            ToolsCallParams::GetDataProducts(_),
-        ) => get_data_products(client, max_response_size).await,
-        (
-            McpEndpointType::Agent | McpEndpointType::Unified,
-            ToolsCallParams::GetDataProductDetails(p),
-        ) => get_data_product_details(client, &p.name, max_response_size).await,
+        (McpEndpointType::Agent, ToolsCallParams::GetDataProducts(_)) => {
+            get_data_products(client, max_response_size).await
+        }
+        (McpEndpointType::Agent, ToolsCallParams::GetDataProductDetails(p)) => {
+            get_data_product_details(client, &p.name, max_response_size).await
+        }
+        (McpEndpointType::Unified, ToolsCallParams::GetDataProducts(_)) => {
+            list_data_products(client, max_response_size).await
+        }
+        (McpEndpointType::Unified, ToolsCallParams::GetDataProductDetails(p)) => {
+            get_data_product_read_details(client, &p.name, max_response_size).await
+        }
         (McpEndpointType::Agent, ToolsCallParams::ReadDataProduct(_))
             if !read_data_product_tool_enabled =>
         {
@@ -1960,7 +1974,11 @@ fn format_rows_response(
     // verbatim, so the outer array is pretty-printed while rows stay compact.
     let text =
         serde_json::to_string_pretty(&rows).map_err(|e| McpRequestError::Internal(anyhow!(e)))?;
+    text_response(text, max_size)
+}
 
+/// Wraps `text` as tool content, failing when it exceeds `max_size` bytes.
+fn text_response(text: String, max_size: usize) -> Result<McpResult, McpRequestError> {
     if text.len() > max_size {
         return Err(McpRequestError::QueryExecutionFailed(format!(
             "Response size ({} bytes) exceeds the {} byte limit. \
@@ -2006,6 +2024,106 @@ async fn get_data_product_details(
     }
 
     format_rows_response(rows, max_response_size)
+}
+
+async fn list_data_products(
+    client: &mut AuthedClient,
+    max_response_size: usize,
+) -> Result<McpResult, McpRequestError> {
+    let rows = execute_sql(client, UNIFIED_DISCOVERY_QUERY).await?;
+    format_rows_response(rows, max_response_size)
+}
+
+/// A row of [`UNIFIED_DETAILS_QUERY_PREFIX`].
+#[derive(Deserialize)]
+struct DataProductReadRow(
+    String,
+    String,
+    Option<String>,
+    serde_json::Value,
+    Option<String>,
+    bool,
+    serde_json::Value,
+    serde_json::Value,
+    bool,
+);
+
+/// The `/api/mcp` shape of `get_data_product_details`.
+#[derive(Serialize)]
+struct DataProductReadDetails {
+    name: String,
+    #[serde(rename = "type")]
+    object_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    columns: serde_json::Value,
+    read: DataProductRead,
+}
+
+#[derive(Serialize)]
+struct DataProductRead {
+    cluster: Option<String>,
+    uses_index: bool,
+    indexed_columns: serde_json::Value,
+    hydration: serde_json::Value,
+    faster_read_available: bool,
+}
+
+impl From<DataProductReadRow> for DataProductReadDetails {
+    fn from(row: DataProductReadRow) -> Self {
+        let DataProductReadRow(
+            name,
+            object_type,
+            description,
+            columns,
+            cluster,
+            uses_index,
+            indexed_columns,
+            hydration,
+            faster_read_available,
+        ) = row;
+        DataProductReadDetails {
+            name,
+            object_type,
+            description,
+            columns,
+            read: DataProductRead {
+                cluster,
+                uses_index,
+                indexed_columns,
+                hydration,
+                faster_read_available,
+            },
+        }
+    }
+}
+
+async fn get_data_product_read_details(
+    client: &mut AuthedClient,
+    name: &str,
+    max_response_size: usize,
+) -> Result<McpResult, McpRequestError> {
+    let query = format!(
+        "{}{}",
+        UNIFIED_DETAILS_QUERY_PREFIX,
+        escaped_string_literal(name)
+    );
+    let rows = execute_sql(client, &query).await?;
+    let row = match rows.as_slice() {
+        [] => return Err(McpRequestError::DataProductNotFound(name.to_string())),
+        [row] => row,
+        _ => {
+            return Err(McpRequestError::Internal(anyhow!(
+                "mz_mcp_data_product_reads returned {} rows for {name}",
+                rows.len()
+            )));
+        }
+    };
+    let row: DataProductReadRow =
+        serde_json::from_str(row.get()).map_err(|e| McpRequestError::Internal(anyhow!(e)))?;
+    let text = serde_json::to_string_pretty(&DataProductReadDetails::from(row))
+        .map_err(|e| McpRequestError::Internal(anyhow!(e)))?;
+    text_response(text, max_response_size)
 }
 
 /// Parses a data product name and returns it safely quoted for SQL interpolation.

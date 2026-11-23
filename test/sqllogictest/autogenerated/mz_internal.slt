@@ -351,6 +351,19 @@ schema  jsonb  JSON␠Schema␠describing␠the␠object's␠columns␠and␠typ
 hydration  jsonb  Readiness␠summary␠as␠a␠JSON␠object␠with␠`hydrated`␠(bool),␠`replica_count`␠(int),␠and␠`hydrated_replica_count`␠(int).␠`hydrated`␠is␠true␠only␠when␠the␠cluster␠has␠at␠least␠one␠replica␠and␠the␠dataflow␠is␠hydrated␠on␠every␠replica.␠Reads␠against␠a␠non-hydrated␠data␠product␠block␠until␠the␠dataflow␠catches␠up␠(they␠never␠return␠partial␠data).␠Check␠this␠before␠reading:␠if␠`hydrated`␠is␠false␠and␠`replica_count␠>␠0`,␠wait␠and␠retry;␠if␠`replica_count`␠is␠0,␠the␠cluster␠has␠no␠replicas␠and␠that␠needs␠operator␠action,␠not␠a␠retry.␠A␠null␠`cluster`␠means␠your␠role␠lacks␠USAGE␠on␠that␠cluster,␠and␠only␠materialized␠views␠appear␠that␠way,␠since␠a␠view␠is␠listed␠only␠with␠an␠index␠on␠a␠cluster␠you␠can␠use.␠A␠read␠of␠such␠a␠row␠runs␠on␠another␠cluster␠and␠returns␠the␠materialized␠view's␠stored␠results,␠so␠`hydration`␠then␠reports␠the␠materialized␠view's␠own␠cluster,␠the␠one␠that␠keeps␠those␠results␠current.
 
 query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_mcp_data_product_reads' ORDER BY position
+----
+object_name  text  Fully␠qualified␠object␠name␠(database.schema.name).
+object_type  text  `materialized-view`␠or␠`view`.
+description  text  Object␠comment,␠otherwise␠the␠comment␠of␠an␠index␠on␠`cluster`.
+columns  jsonb  Each␠column's␠JSON␠Schema␠type␠and␠comment,␠keyed␠by␠column␠name.
+cluster  text  Cluster␠to␠read␠the␠object␠on:␠the␠cluster␠you␠can␠use␠with␠an␠index␠on␠the␠object,␠preferring␠a␠hydrated␠index.␠Null␠for␠a␠materialized␠view␠with␠no␠such␠index:␠run␠the␠read␠on␠any␠cluster,␠and␠it␠returns␠the␠stored␠results.
+uses_index  boolean  Whether␠a␠read␠on␠`cluster`␠is␠served␠from␠an␠index.
+indexed_columns  jsonb  Key␠columns␠of␠the␠indexes␠on␠`cluster`,␠as␠a␠JSON␠array.␠Empty␠when␠`uses_index`␠is␠false.
+hydration  jsonb  Readiness␠of␠the␠read␠as␠a␠JSON␠object␠with␠`hydrated`␠(bool),␠`replica_count`␠(int),␠and␠`hydrated_replica_count`␠(int).␠It␠describes␠the␠indexes␠on␠`cluster`,␠or,␠when␠`cluster`␠is␠null,␠the␠materialized␠view's␠own␠cluster,␠which␠keeps␠the␠stored␠results␠current.␠`hydrated`␠is␠true␠only␠when␠that␠cluster␠has␠at␠least␠one␠replica␠and␠every␠replica␠is␠hydrated.␠A␠read␠that␠is␠not␠hydrated␠blocks␠until␠it␠is.␠If␠`replica_count`␠is␠0,␠the␠read␠cannot␠make␠progress␠until␠a␠replica␠is␠added.
+faster_read_available  boolean  True␠when␠the␠read␠does␠not␠use␠an␠index,␠but␠an␠index␠on␠the␠object␠exists␠on␠a␠cluster␠your␠role␠cannot␠use.
+
+query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_dependencies' ORDER BY position
 ----
 object_id  text  The␠ID␠of␠the␠dependent␠object.␠Corresponds␠to␠`mz_objects.id`.
@@ -858,6 +871,7 @@ mz_materialization_lag
 mz_materialized_view_refresh_strategies
 mz_materialized_view_refreshes
 mz_mcp_data_product_details
+mz_mcp_data_product_reads
 mz_mcp_data_products
 mz_metric_sinks
 mz_mysql_source_tables

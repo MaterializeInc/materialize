@@ -123,6 +123,7 @@ static RESTRICT_TO_USER_OBJECTS_ALLOWED_OIDS: LazyLock<BTreeSet<u32>> = LazyLock
     btreeset! {
         oid::VIEW_MZ_MCP_DATA_PRODUCTS_OID,
         oid::VIEW_MZ_MCP_DATA_PRODUCT_DETAILS_OID,
+        oid::VIEW_MZ_MCP_DATA_PRODUCT_READS_OID,
         oid::VIEW_MZ_SHOW_MY_CLUSTER_PRIVILEGES_OID,
     }
 });

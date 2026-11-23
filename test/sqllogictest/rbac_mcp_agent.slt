@@ -650,6 +650,154 @@ DROP MATERIALIZED VIEW agent_objects.fallback_mv;
 ----
 COMPLETE 0
 
+# DEX-208: mz_mcp_data_product_reads lists each product once, with the one
+# cluster the /api/mcp route picks to read it on.
+simple conn=agent_restricted,user=agent
+SELECT object_name, object_type, cluster, uses_index, indexed_columns, faster_read_available
+FROM mz_internal.mz_mcp_data_product_reads ORDER BY object_name;
+----
+"materialize"."agent_objects"."compute_only",materialized-view,NULL,f,[],f
+"materialize"."agent_objects"."multi_indexed",materialized-view,quickstart,t,["id"],f
+"materialize"."agent_objects"."next_arrivals",materialized-view,NULL,f,[],f
+"materialize"."agent_objects"."transfer_windows",materialized-view,NULL,f,[],f
+COMPLETE 4
+
+# A materialized view whose only index sits on a cluster the agent cannot use
+# reads its stored results. Hydration follows the view's own cluster, and
+# faster_read_available says an index exists.
+simple conn=mz_system,user=mz_system
+CREATE MATERIALIZED VIEW agent_objects.hidden_index_mv IN CLUSTER agent_serving AS SELECT 1 AS id;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE INDEX hidden_index_mv_idx IN CLUSTER agent_compute ON agent_objects.hidden_index_mv (id);
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT SELECT ON agent_objects.hidden_index_mv TO agent;
+----
+COMPLETE 0
+
+simple conn=agent_restricted,user=agent
+SELECT cluster, uses_index, (hydration->>'replica_count')::int, faster_read_available
+FROM mz_internal.mz_mcp_data_product_reads WHERE object_name = '"materialize"."agent_objects"."hidden_index_mv"';
+----
+NULL,f,1,t
+COMPLETE 1
+
+# An index on a cluster with no replicas never makes progress. A view indexed
+# there and on a cluster with a replica reads on the latter, though the dead
+# cluster sorts first by name.
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER agent_aaa_dead REPLICAS ();
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON CLUSTER agent_aaa_dead TO agent;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE VIEW agent_objects.two_index_view AS SELECT 1 AS id, 'a' AS label;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE INDEX two_index_view_dead IN CLUSTER agent_aaa_dead ON agent_objects.two_index_view (label);
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE INDEX two_index_view_live IN CLUSTER agent_serving ON agent_objects.two_index_view (id);
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT SELECT ON agent_objects.two_index_view TO agent;
+----
+COMPLETE 0
+
+simple conn=agent_restricted,user=agent
+SELECT cluster, uses_index, indexed_columns, (hydration->>'replica_count')::int
+FROM mz_internal.mz_mcp_data_product_reads WHERE object_name = '"materialize"."agent_objects"."two_index_view"';
+----
+agent_serving,t,["id"],1
+COMPLETE 1
+
+# With only the dead index left, the view still reads there: it has nowhere
+# else to go, and replica_count 0 tells the agent the read cannot progress.
+simple conn=mz_system,user=mz_system
+DROP INDEX agent_objects.two_index_view_live;
+----
+COMPLETE 0
+
+simple conn=agent_restricted,user=agent
+SELECT cluster, uses_index, indexed_columns, (hydration->>'replica_count')::int
+FROM mz_internal.mz_mcp_data_product_reads WHERE object_name = '"materialize"."agent_objects"."two_index_view"';
+----
+agent_aaa_dead,t,["label"],0
+COMPLETE 1
+
+# A materialized view prefers its stored results over a dead index.
+simple conn=mz_system,user=mz_system
+CREATE INDEX hidden_index_mv_dead IN CLUSTER agent_aaa_dead ON agent_objects.hidden_index_mv (id);
+----
+COMPLETE 0
+
+simple conn=agent_restricted,user=agent
+SELECT cluster, uses_index, (hydration->>'replica_count')::int
+FROM mz_internal.mz_mcp_data_product_reads WHERE object_name = '"materialize"."agent_objects"."hidden_index_mv"';
+----
+NULL,f,1
+COMPLETE 1
+
+# The object comment wins over the comment of the picked index, which fills in
+# when the object has none. Column comments land in `columns`.
+simple conn=mz_system,user=mz_system
+COMMENT ON INDEX agent_objects.multi_idx_quickstart IS 'index comment';
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+COMMENT ON COLUMN agent_objects.multi_indexed.id IS 'the id';
+----
+COMPLETE 0
+
+simple conn=agent_restricted,user=agent
+SELECT description, columns FROM mz_internal.mz_mcp_data_product_reads WHERE object_name = '"materialize"."agent_objects"."multi_indexed"';
+----
+index comment,{"id":{"description":"the id","type":"number"}}
+COMPLETE 1
+
+simple conn=mz_system,user=mz_system
+COMMENT ON MATERIALIZED VIEW agent_objects.multi_indexed IS 'object comment';
+----
+COMPLETE 0
+
+simple conn=agent_restricted,user=agent
+SELECT description FROM mz_internal.mz_mcp_data_product_reads WHERE object_name = '"materialize"."agent_objects"."multi_indexed"';
+----
+object comment
+COMPLETE 1
+
+simple conn=mz_system,user=mz_system
+DROP CLUSTER agent_aaa_dead CASCADE;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP VIEW agent_objects.two_index_view;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP MATERIALIZED VIEW agent_objects.hidden_index_mv;
+----
+COMPLETE 0
+
 # mz_session_role_memberships() is callable in a restricted session (it only
 # exposes the current session's role chain, not the full system graph).
 # Verify it walks the full transitive chain: grant agent membership in a parent
@@ -1354,6 +1502,15 @@ SELECT schema->'properties'->'c_double' ? 'description' FROM mz_internal.mz_mcp_
 WHERE object_name = '"materialize"."dp_semantics"."mv_types"';
 ----
 false
+
+# mz_mcp_data_product_reads maps columns the same way.
+query T
+SELECT r.columns = d.schema->'properties'
+FROM mz_internal.mz_mcp_data_product_reads r
+JOIN mz_internal.mz_mcp_data_product_details d USING (object_name)
+WHERE object_name = '"materialize"."dp_semantics"."mv_types"';
+----
+true
 
 # -----------------------------------------------------------------------------
 # Cleanup for this section.
