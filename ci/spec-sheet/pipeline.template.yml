@@ -125,6 +125,50 @@ steps:
     agents:
       queue: linux-aarch64-medium
 
+  - id: cluster-spec-sheet-ddl-smoke
+    label: "DDL catalog scaling: staging smoke"
+    timeout_in_minutes: 90
+    depends_on: devel-docker-tags
+    concurrency: 1
+    concurrency_group: "cluster-spec-sheet-account-$$CI_CONCURRENCY_POOL_SLOT"
+    concurrency_pool: 20
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: cluster-spec-sheet
+          run: default
+          args:
+            - --cleanup
+            - --target=cloud-staging
+            - --envd-objects-scalability-sizes=30,60
+            - --ddl-concurrencies=1,2
+            - --ddl-duration=2
+            - --ddl-repeats=1
+            - ddl_catalog_scaling
+    agents:
+      queue: linux-aarch64-medium
+
+  - id: cluster-spec-sheet-ddl
+    label: "DDL catalog scaling: 5k, 10k, 30k"
+    timeout_in_minutes: 1440
+    depends_on: cluster-spec-sheet-ddl-smoke
+    concurrency: 1
+    concurrency_group: "cluster-spec-sheet-account-$$CI_CONCURRENCY_POOL_SLOT"
+    concurrency_pool: 20
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: cluster-spec-sheet
+          run: default
+          args:
+            - --cleanup
+            - --target=cloud-staging
+            - --envd-objects-scalability-sizes=5000,10000,30000
+            - --ddl-concurrencies=1,8
+            - --ddl-duration=20
+            - --ddl-repeats=3
+            - ddl_catalog_scaling
+    agents:
+      queue: linux-aarch64-medium
+
   - id: cluster-spec-sheet-staging
     label: "Cluster spec sheet: COPY + Object Scalability + Cluster Object Count Limits (against Staging)"
     timeout_in_minutes: 3600
