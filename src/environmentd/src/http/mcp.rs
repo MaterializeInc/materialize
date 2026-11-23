@@ -2142,8 +2142,9 @@ async fn query_system_catalog(
 /// unbound. Object names in SHOW, and in EXPLAIN of a named object, are not
 /// reads of rows and stay as written.
 ///
-/// `resolve(schema, item)` returns the ID of the system relation `item` in
-/// `schema`.
+/// `sql` must hold exactly one statement, which `validate_readonly_query`
+/// checks. `resolve(schema, item)` returns the ID of the system relation
+/// `item` in `schema`.
 fn bind_system_catalog_query(
     sql: &str,
     resolve: impl Fn(&str, &str) -> Option<String>,
@@ -2155,19 +2156,7 @@ fn bind_system_catalog_query(
         .map_err(|e| {
             McpRequestError::QueryValidationFailed(format!("Failed to parse SQL: {}", e))
         })?;
-    let stmt = match stmts.as_mut_slice() {
-        [] => {
-            return Err(McpRequestError::QueryValidationFailed(
-                "Empty query".to_string(),
-            ));
-        }
-        [stmt] => &mut stmt.ast,
-        _ => {
-            return Err(McpRequestError::QueryValidationFailed(
-                "Only one query is allowed per request".to_string(),
-            ));
-        }
-    };
+    let stmt = &mut stmts[0].ast;
 
     let mut binder = SystemRelationBinder {
         resolve: &resolve,
