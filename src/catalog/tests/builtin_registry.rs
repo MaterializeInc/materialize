@@ -22,8 +22,17 @@
 //! LIR schema snapshot in `mz-compute-types` complements it: that pins the
 //! serialized shape of the function enums but not what the variants mean.
 //!
-//! TODO(mgree): follow-up PRs will handle SQL-defined builtin functions and
-//! builtin views.
+//! SQL-defined builtin functions are recorded in the source half only.
+//! Planning inlines them, so a change reaches only plans pinned afterwards,
+//! and whether existing pins must be replanned is a judgment. Each pin lists
+//! the SQL-defined builtins it may have inlined, so a migration can replan
+//! just those.
+//!
+//! Builtin views are not recorded: pinning rejects a user item that depends on
+//! any builtin relation, see `PinError::BuiltinRelation`. Builtins in unstable
+//! schemas are left out too, and pinning rejects a user item that reaches one,
+//! including through the body of a SQL-defined function, see
+//! `PinError::UnstableDependency`.
 //!
 //! Three files in `tests/snapshots` hold the state, each with one compact
 //! JSON object per record so a changed builtin is a one-line diff:
@@ -47,10 +56,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use mz_catalog::builtin::BUILTINS;
 use mz_compute_types::plan::reduce::reduction_type;
 use mz_compute_types::plan::{LIR_VERSION, LIR_VERSION_POLICY};
 use mz_expr::func::registry::{FuncRegistry, Record};
+use mz_repr::namespaces::UNSTABLE_SCHEMAS;
 use serde::Serialize;
+use serde_json::json;
 use sha2::{Digest, Sha256};
 
 const SNAPSHOT_DIR: &str = "tests/snapshots";
@@ -128,6 +140,29 @@ fn build() -> (Records, Records) {
         );
     }
     split_into(&mut properties, &mut sources, "TableFunc", &registry.table);
+
+    let sql_functions = sources.entry("SqlFunction".to_string()).or_default();
+    for func in BUILTINS::funcs().filter(|func| !UNSTABLE_SCHEMAS.contains(&func.schema)) {
+        for imp in func.inner.func_impls() {
+            let Some(sql) = imp.sql else { continue };
+            let mut params = imp.arg_typs.clone();
+            if let Some(variadic) = imp.variadic_typ {
+                params.push(variadic);
+            }
+            let key = format!("{}.{}({})", func.schema, func.name, params.join(", "));
+            let previous = sql_functions.insert(
+                key.clone(),
+                json!({
+                    "oid": imp.oid,
+                    "variadic": imp.variadic_typ.is_some(),
+                    "return_type": imp.return_typ,
+                    "returns_set": imp.return_is_set,
+                    "sql": sql,
+                }),
+            );
+            assert!(previous.is_none(), "two overloads render as `{key}`");
+        }
+    }
     (properties, sources)
 }
 
@@ -232,6 +267,49 @@ fn describe(diff: &Diff) -> String {
     lines.join("\n")
 }
 
+/// The lines added to and removed from the `sql` field of each record present
+/// in both files. Lines are compared as sets, so a change that only reorders
+/// or duplicates lines names the record with no lines under it.
+fn sql_changes(expected: &str, actual: &str) -> String {
+    let expected: Records = serde_json::from_str(expected).expect("snapshot is a record file");
+    let actual: Records = serde_json::from_str(actual).expect("rendered records are JSON");
+    let mut out = Vec::new();
+    for (kind, new) in &actual {
+        let Some(old) = expected.get(kind) else {
+            continue;
+        };
+        for (name, new_record) in new {
+            let (Some(old_sql), Some(new_sql)) = (
+                old.get(name)
+                    .and_then(|r| r.get("sql"))
+                    .and_then(|s| s.as_str()),
+                new_record.get("sql").and_then(|s| s.as_str()),
+            ) else {
+                continue;
+            };
+            if old_sql == new_sql {
+                continue;
+            }
+            let old_lines: BTreeSet<_> = old_sql.lines().collect();
+            let new_lines: BTreeSet<_> = new_sql.lines().collect();
+            out.push(format!("  {kind} `{name}`:"));
+            out.extend(
+                old_sql
+                    .lines()
+                    .filter(|line| !new_lines.contains(line))
+                    .map(|line| format!("    - {line}")),
+            );
+            out.extend(
+                new_sql
+                    .lines()
+                    .filter(|line| !old_lines.contains(line))
+                    .map(|line| format!("    + {line}")),
+            );
+        }
+    }
+    out.join("\n")
+}
+
 fn read(path: &str) -> String {
     std::fs::read_to_string(path).unwrap_or_else(|_| {
         panic!(
@@ -308,6 +386,15 @@ fn builtin_registry_snapshot() {
              text, or its SQL display name), without a change to their properties:\n{}",
             describe(&diff(&expected_source, &source)),
         ));
+        let sql = sql_changes(&expected_source, &source);
+        if !sql.is_empty() {
+            informational.push(format!(
+                "Changed SQL of SQL-defined functions:\n{sql}\n\n\
+                 Plans pinned before this change keep the old definition. If they must\n\
+                 pick up the new one, bump LIR_VERSION and migrate the pins whose\n\
+                 inlined_builtins list the builtin."
+            ));
+        }
     }
     if !informational.is_empty() {
         panic!(
@@ -391,4 +478,21 @@ fn render_is_one_line_per_record_and_valid_json() {
     );
     let reparsed: Records = serde_json::from_str(&rendered).expect("valid JSON");
     assert_eq!(reparsed, records);
+}
+
+#[mz_ore::test]
+fn sql_changes_names_changed_lines() {
+    let render_func = |sql: &str| {
+        render(&Records::from([(
+            "SqlFunction".to_string(),
+            BTreeMap::from([("pg_catalog.f(int4)".to_string(), json!({ "sql": sql }))]),
+        )]))
+    };
+    let old = render_func("SELECT\n$1 + 1,\n$1");
+    let new = render_func("SELECT\n$1 + 2,\n$1");
+    assert_eq!(
+        sql_changes(&old, &new),
+        "  SqlFunction `pg_catalog.f(int4)`:\n    - $1 + 1,\n    + $1 + 2,"
+    );
+    assert_eq!(sql_changes(&old, &old), "");
 }

@@ -44,7 +44,9 @@ use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 
 use mz_compute_types::plan::join::JoinPlan;
-use mz_compute_types::plan::pinned::{GlobalIdKey, PinnedDataflow, PinnedSinkKind};
+use mz_compute_types::plan::pinned::{
+    GlobalIdKey, InlinedBuiltinKind, PinnedDataflow, PinnedSinkKind,
+};
 use mz_compute_types::plan::reduce::{BasicPlan, HierarchicalPlan, ReducePlan};
 use mz_compute_types::plan::scalar::{LirScalarExpr, LiteralValue};
 use mz_compute_types::plan::threshold::ThresholdPlan;
@@ -411,6 +413,7 @@ fn run_traces(
         Timezone,
         CatalogItemId,
         PinnedSinkKind,
+        InlinedBuiltinKind,
     ];
 
     // Some enums in the graph are private (MatcherImpl in like_pattern, and

@@ -13,7 +13,9 @@ use std::time::Duration;
 
 use mz_catalog::memory::objects::{CatalogItem, Index, MaterializedView};
 use mz_compute_types::plan::join::JoinPlan;
-use mz_compute_types::plan::pinned::{InstantiateError, PinError, PinnedDataflow};
+use mz_compute_types::plan::pinned::{
+    InlinedBuiltin, InlinedBuiltinKind, InstantiateError, PinError, PinnedDataflow, PinningContext,
+};
 use mz_compute_types::plan::reduce::ReducePlan;
 use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_compute_types::plan::top_k::TopKPlan;
@@ -51,7 +53,7 @@ fn assert_round_trips(catalog: &Catalog, original: LirDataflowDescription) -> Pi
         catalog: catalog.state(),
         transient_ids: &TransientIdGen::new(),
     };
-    let pinned = PinnedDataflow::try_from(original.clone()).expect("pinnable");
+    let pinned = PinnedDataflow::pin(original.clone(), catalog.state()).expect("pinnable");
     let rebuilt = pinned
         .clone()
         .instantiate(&ctx, original.debug_name.clone())
@@ -61,7 +63,7 @@ fn assert_round_trips(catalog: &Catalog, original: LirDataflowDescription) -> Pi
         "pin then instantiate is the identity for {}",
         original.debug_name
     );
-    let repinned = PinnedDataflow::try_from(rebuilt).expect("pinnable");
+    let repinned = PinnedDataflow::pin(rebuilt, catalog.state()).expect("pinnable");
     assert_eq!(
         repinned, pinned,
         "instantiate then pin is the identity for {}",
@@ -731,7 +733,7 @@ async fn builtin_items_refuse_to_pin() {
         let assert_refused = |df_desc: LirDataflowDescription, name: &str| {
             assert!(
                 matches!(
-                    PinnedDataflow::try_from(df_desc),
+                    PinnedDataflow::pin(df_desc, catalog.state()),
                     Err(PinError::BuiltinCollection(_))
                 ),
                 "{name} refuses to pin"
@@ -994,6 +996,385 @@ async fn user_items_cover_every_operator() {
         ]);
         let missing: Vec<_> = expected.difference(&seen).collect();
         assert!(missing.is_empty(), "no plan contains {missing:?}");
+    })
+    .await
+}
+
+fn inlined(kind: InlinedBuiltinKind, schema: &str, name: &str) -> InlinedBuiltin {
+    InlinedBuiltin {
+        kind,
+        schema: schema.to_string(),
+        name: name.to_string(),
+    }
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+async fn pin_records_sql_functions_inlined_through_views() {
+    const PARTS: u64 = 2;
+    const MV: u64 = 3;
+    const MV_ON_TABLE: u64 = 4;
+    const MV_ON_MV: u64 = 5;
+    const UNKNOWN: u64 = 99;
+    Catalog::with_debug(|mut catalog| async move {
+        create_tables(&mut catalog).await;
+        create_item(
+            &mut catalog,
+            PARTS,
+            "parts",
+            "CREATE VIEW \"materialize\".\"public\".\"parts\" AS \
+             SELECT \"pg_catalog\".\"regexp_split_to_table\"(\"name\", '/') AS \"part\" \
+             FROM \"materialize\".\"public\".\"tables\"",
+        )
+        .await;
+        let CatalogItem::MaterializedView(mv) = create_item(
+            &mut catalog,
+            MV,
+            "mv",
+            "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"mv\" \
+             IN CLUSTER \"quickstart\" AS \
+             SELECT \"part\" FROM \"materialize\".\"public\".\"parts\"",
+        )
+        .await
+        else {
+            panic!("expected a materialized view");
+        };
+        create_item(
+            &mut catalog,
+            MV_ON_TABLE,
+            "mv_on_table",
+            "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"mv_on_table\" \
+             IN CLUSTER \"quickstart\" AS \
+             SELECT \"id\" FROM \"materialize\".\"public\".\"tables\"",
+        )
+        .await;
+        create_item(
+            &mut catalog,
+            MV_ON_MV,
+            "mv_on_mv",
+            "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"mv_on_mv\" \
+             IN CLUSTER \"quickstart\" AS \
+             SELECT \"part\" FROM \"materialize\".\"public\".\"mv\"",
+        )
+        .await;
+        let catalog = Arc::new(catalog);
+
+        let expected = BTreeSet::from([inlined(
+            InlinedBuiltinKind::Func,
+            "pg_catalog",
+            "regexp_split_to_table",
+        )]);
+        let df_desc = optimize_materialized_view(&catalog, &mv, "mv".to_string(), BTreeSet::new());
+        let pinned = assert_round_trips(&catalog, df_desc);
+        assert_eq!(pinned.inlined_builtins, expected);
+
+        let state = catalog.state();
+        assert_eq!(
+            state.inlined_builtins(GlobalId::User(MV_ON_TABLE)),
+            Ok(BTreeSet::new()),
+            "a table is an import, not inlined"
+        );
+        assert_eq!(
+            state.inlined_builtins(GlobalId::User(MV_ON_MV)),
+            Ok(BTreeSet::new()),
+            "another materialized view is an import, not inlined"
+        );
+        assert_eq!(
+            state.inlined_builtins(GlobalId::User(UNKNOWN)),
+            Err(PinError::UnknownItem(GlobalId::User(UNKNOWN)))
+        );
+    })
+    .await
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+async fn pin_rejects_builtin_relations() {
+    const DIRECT: u64 = 2;
+    const ZONES: u64 = 3;
+    const THROUGH_VIEW: u64 = 4;
+    const BUILTIN_TABLE: u64 = 5;
+    Catalog::with_debug(|mut catalog| async move {
+        // `mz_timezone_names` reads no collection, so no import betrays it.
+        create_item(
+            &mut catalog,
+            DIRECT,
+            "direct",
+            "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"direct\" \
+             IN CLUSTER \"quickstart\" AS \
+             SELECT \"name\" FROM \"mz_catalog\".\"mz_timezone_names\"",
+        )
+        .await;
+        create_item(
+            &mut catalog,
+            ZONES,
+            "zones",
+            "CREATE VIEW \"materialize\".\"public\".\"zones\" AS \
+             SELECT \"name\" FROM \"mz_catalog\".\"mz_timezone_names\"",
+        )
+        .await;
+        create_item(
+            &mut catalog,
+            THROUGH_VIEW,
+            "through_view",
+            "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"through_view\" \
+             IN CLUSTER \"quickstart\" AS \
+             SELECT \"name\" FROM \"materialize\".\"public\".\"zones\"",
+        )
+        .await;
+        create_item(
+            &mut catalog,
+            BUILTIN_TABLE,
+            "builtin_table",
+            "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"builtin_table\" \
+             IN CLUSTER \"quickstart\" AS \
+             SELECT \"name\" FROM \"mz_catalog\".\"mz_tables\"",
+        )
+        .await;
+        let state = catalog.state();
+        for (id, relation) in [
+            (DIRECT, "mz_catalog.mz_timezone_names"),
+            (THROUGH_VIEW, "mz_catalog.mz_timezone_names"),
+            (BUILTIN_TABLE, "mz_catalog.mz_tables"),
+        ] {
+            let export = GlobalId::User(id);
+            assert_eq!(
+                state.inlined_builtins(export),
+                Err(PinError::BuiltinRelation {
+                    item: export,
+                    relation: relation.to_string(),
+                }),
+            );
+        }
+    })
+    .await
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+async fn pin_rejects_unstable_dependencies() {
+    const DIRECT: u64 = 2;
+    const THROUGH_VIEW: u64 = 3;
+    Catalog::with_debug(|mut catalog| async move {
+        catalog
+            .system_config_mut()
+            .set("unsafe_enable_unstable_dependencies", VarInput::Flat("on"))
+            .expect("flag exists");
+        create_item(
+            &mut catalog,
+            DIRECT,
+            "direct",
+            "CREATE VIEW \"materialize\".\"public\".\"direct\" AS \
+             SELECT \"mz_internal\".\"mz_render_typmod\"(23, -1) AS \"typmod\"",
+        )
+        .await;
+        create_item(
+            &mut catalog,
+            THROUGH_VIEW,
+            "through_view",
+            "CREATE VIEW \"materialize\".\"public\".\"through_view\" AS \
+             SELECT \"typmod\" FROM \"materialize\".\"public\".\"direct\"",
+        )
+        .await;
+        let state = catalog.state();
+        for id in [GlobalId::User(DIRECT), GlobalId::User(THROUGH_VIEW)] {
+            assert_eq!(
+                state.inlined_builtins(id),
+                Err(PinError::UnstableDependency {
+                    item: id,
+                    dependency: "mz_internal.mz_render_typmod".to_string(),
+                }),
+            );
+        }
+    })
+    .await
+}
+
+/// `has_role` is SQL-defined, and its body calls `pg_has_role`, whose body
+/// returns NULL for NULL arguments before reading catalog tables and calling
+/// the unstable `mz_validate_role_privilege` and `mz_role_oid_memberships`.
+/// Constant folding removes all of that, and the plan imports nothing. Only
+/// the function body references show the unstable calls.
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+async fn pin_rejects_unstable_functions_in_folded_function_bodies() {
+    const MV: u64 = 2;
+    Catalog::with_debug(|mut catalog| async move {
+        let CatalogItem::MaterializedView(mv) = create_item(
+            &mut catalog,
+            MV,
+            "mv",
+            "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"mv\" \
+             IN CLUSTER \"quickstart\" AS \
+             SELECT \"mz_catalog\".\"has_role\"(NULL::\"pg_catalog\".\"oid\", \
+             1::\"pg_catalog\".\"oid\", 'USAGE') AS \"r\"",
+        )
+        .await
+        else {
+            panic!("expected a materialized view");
+        };
+        let body_names: BTreeSet<String> = mv
+            .function_body_ids
+            .items()
+            .map(|id| {
+                let entry = catalog.get_entry(id);
+                catalog.resolve_full_name(entry.name(), None).to_string()
+            })
+            .collect();
+        assert!(
+            body_names.contains("pg_catalog.pg_has_role"),
+            "nested calls are captured: {body_names:?}"
+        );
+        let catalog = Arc::new(catalog);
+        let df_desc = optimize_materialized_view(&catalog, &mv, "mv".to_string(), BTreeSet::new());
+        assert!(
+            df_desc.source_imports.is_empty() && df_desc.index_imports.is_empty(),
+            "folding removed every read"
+        );
+        // Either unstable call refuses the pin. Which one the walk meets
+        // first depends on how the builtins' ids sort.
+        let export = GlobalId::User(MV);
+        let result = PinnedDataflow::pin(df_desc, catalog.state());
+        assert!(
+            matches!(
+                &result,
+                Err(PinError::UnstableDependency { item: e, dependency })
+                    if *e == export
+                        && [
+                            "mz_internal.mz_validate_role_privilege",
+                            "mz_internal.mz_role_oid_memberships",
+                        ]
+                        .contains(&dependency.as_str())
+            ),
+            "an unstable call in pg_has_role's body refuses the pin: {result:?}"
+        );
+    })
+    .await
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+async fn pin_records_builtins_inlined_into_imported_index_keys() {
+    const TABLE: u64 = 1;
+    const INDEX: u64 = 2;
+    const MV: u64 = 3;
+    Catalog::with_debug(|mut catalog| async move {
+        create_item(
+            &mut catalog,
+            TABLE,
+            "t",
+            "CREATE TABLE \"materialize\".\"public\".\"t\" (\"n\" int8)",
+        )
+        .await;
+        create_item(
+            &mut catalog,
+            INDEX,
+            "i",
+            "CREATE INDEX \"i\" IN CLUSTER \"quickstart\" \
+             ON \"materialize\".\"public\".\"t\" \
+             (\"pg_catalog\".\"pg_encoding_to_char\"(\"n\"))",
+        )
+        .await;
+        let CatalogItem::MaterializedView(mv) = create_item(
+            &mut catalog,
+            MV,
+            "mv",
+            "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"mv\" \
+             IN CLUSTER \"quickstart\" AS SELECT \"n\" FROM \"materialize\".\"public\".\"t\"",
+        )
+        .await
+        else {
+            panic!("expected a materialized view");
+        };
+        let catalog = Arc::new(catalog);
+        let index = GlobalId::User(INDEX);
+        let df_desc =
+            optimize_materialized_view(&catalog, &mv, "mv".to_string(), BTreeSet::from([index]));
+        assert!(
+            df_desc.index_imports.contains_key(&index),
+            "the plan reads the index"
+        );
+        let pinned = assert_round_trips(&catalog, df_desc);
+        assert_eq!(
+            pinned.inlined_builtins,
+            BTreeSet::from([inlined(
+                InlinedBuiltinKind::Func,
+                "pg_catalog",
+                "pg_encoding_to_char"
+            )])
+        );
+    })
+    .await
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+async fn pin_follows_pending_replacements() {
+    const TARGET: u64 = 2;
+    const REPLACEMENT: u64 = 3;
+    const SINK: u64 = 4;
+    // A metric sink may read a pending replacement, which other items may not.
+    let gauge = |from: &str| {
+        format!(
+            "SELECT 'n'::text AS metric_name, 'gauge'::text AS metric_type, \
+             NULL::map[text=>text] AS labels, count(*)::double AS value, 'h'::text AS help \
+             FROM {from}"
+        )
+    };
+    Catalog::with_debug(|mut catalog| async move {
+        for flag in [
+            "enable_replacement_materialized_views",
+            "enable_metric_sink",
+        ] {
+            catalog
+                .system_config_mut()
+                .set(flag, VarInput::Flat("on"))
+                .expect("flag exists");
+        }
+        create_tables(&mut catalog).await;
+        create_item(
+            &mut catalog,
+            TARGET,
+            "t",
+            &format!(
+                "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"t\" \
+                 IN CLUSTER \"quickstart\" AS {}",
+                gauge("\"materialize\".\"public\".\"tables\"")
+            ),
+        )
+        .await;
+        catalog
+            .register_collection_shard(GlobalId::User(TARGET))
+            .await
+            .expect("registers the target's shard");
+        create_item(
+            &mut catalog,
+            REPLACEMENT,
+            "r",
+            &format!(
+                "CREATE REPLACEMENT MATERIALIZED VIEW \"materialize\".\"public\".\"r\" \
+                 FOR \"materialize\".\"public\".\"t\" IN CLUSTER \"quickstart\" AS {}",
+                gauge("\"mz_catalog\".\"mz_timezone_names\"")
+            ),
+        )
+        .await;
+        create_item(
+            &mut catalog,
+            SINK,
+            "ms",
+            "CREATE METRIC SINK \"materialize\".\"public\".\"ms\" IN CLUSTER \"quickstart\" \
+             FROM \"materialize\".\"public\".\"r\" WITH (PREFIX = 'mz_metric_sink_ms_')",
+        )
+        .await;
+        let export = GlobalId::User(SINK);
+        assert_eq!(
+            catalog.state().inlined_builtins(export),
+            Err(PinError::BuiltinRelation {
+                item: export,
+                relation: "mz_catalog.mz_timezone_names".to_string(),
+            }),
+            "planning inlines a pending replacement's definition"
+        );
     })
     .await
 }

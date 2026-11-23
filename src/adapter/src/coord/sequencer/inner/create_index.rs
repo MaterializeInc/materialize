@@ -467,6 +467,7 @@ impl Coordinator {
                 on,
                 conn_id: None,
                 resolved_ids,
+                function_body_ids: ResolvedIds::empty(),
                 cluster_id,
                 is_retained_metrics_object: false,
                 custom_logical_compaction_window: compaction_window,

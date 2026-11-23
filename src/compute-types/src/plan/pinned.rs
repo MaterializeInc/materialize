@@ -22,14 +22,22 @@
 //!
 //! Only dataflows behind catalog items can be pinned: indexes, materialized
 //! views, and metric sinks. Subscribes and one-shot copies have no durable
-//! identity to pin under, and the [`TryFrom`] conversion rejects them, along
+//! identity to pin under, and [`PinnedDataflow::pin`] rejects them, along
 //! with any export under a transient id (a peek's index, a curated metric
 //! sink) and a dataflow that exports nothing.
 //!
-//! [`TryFrom`] also rejects a dataflow that imports or exports a builtin
-//! collection. Builtins keep their ids across releases while their schemas
-//! and definitions change, and the plan inlines the bodies of builtin views,
-//! which instantiation cannot check.
+//! [`PinnedDataflow::pin`] also rejects a dataflow that imports or exports a
+//! builtin collection, and its [`PinningContext`] rejects one whose exports
+//! depend on any builtin relation. Builtins keep their ids across releases
+//! while their schemas and definitions change. A builtin view that reads no
+//! collection leaves no import behind once inlined, so only the catalog can
+//! tell that a plan depends on it.
+//!
+//! Planning also inlines the bodies of SQL-defined builtin functions, and the
+//! plan keeps no trace of where an inlined expression came from. A pin
+//! therefore records the SQL-defined builtins its exports call, as the
+//! [`PinningContext`] reports them, so that a later change to one of them can
+//! be traced to the pins that may have inlined it.
 //!
 //! Index keys are stored as [`LirScalarExpr`] and converted back to
 //! `MirScalarExpr` on instantiation. LIR scalars are a subset of MIR scalars,
@@ -42,7 +50,7 @@
 //! `GlobalId` serialize their keys through [`GlobalIdKey`], the id's string
 //! form.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use itertools::Itertools;
@@ -82,6 +90,40 @@ pub struct PinnedDataflow {
     /// Sinks the plan exports, keyed by sink id.
     #[serde(with = "global_id_keys")]
     pub sink_exports: BTreeMap<GlobalId, PinnedSink>,
+    /// Builtins planning may have inlined into the plan. Over-approximates:
+    /// a builtin the optimizer eliminated is still listed.
+    pub inlined_builtins: BTreeSet<InlinedBuiltin>,
+}
+
+/// A builtin whose definition planning inlines.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct InlinedBuiltin {
+    /// What kind of builtin it is.
+    pub kind: InlinedBuiltinKind,
+    /// The schema the builtin is in.
+    pub schema: String,
+    /// The builtin's name within its schema.
+    pub name: String,
+}
+
+/// The kinds of builtin whose definitions planning inlines into a pinnable
+/// plan.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize
+)]
+pub enum InlinedBuiltinKind {
+    /// A builtin function with at least one implementation defined in SQL.
+    /// Name resolution happens before an overload is chosen, so this covers
+    /// every overload.
+    Func,
 }
 
 /// A `GlobalId` in its string form (`u1`, `s2`, `t3`), for use as a map key.
@@ -202,6 +244,32 @@ pub enum PinnedSinkKind {
 // PINNING
 ///////////////////////////////////////////////////////////////////////////////
 
+/// What [`PinnedDataflow::pin`] needs from its environment.
+pub trait PinningContext {
+    /// The builtins planning may have inlined into the catalog item exported
+    /// under `id`, found through its dependencies, the user views and pending
+    /// replacements among them, and the bodies of the SQL-defined functions
+    /// and casts they call.
+    ///
+    /// Fails with [`PinError::UnknownItem`] when no catalog item is exported
+    /// under `id`, with [`PinError::BuiltinRelation`] when any of those
+    /// depends on a builtin relation, and with
+    /// [`PinError::UnstableDependency`] when any of them references an
+    /// unstable builtin.
+    fn inlined_builtins(&self, id: GlobalId) -> Result<BTreeSet<InlinedBuiltin>, PinError>;
+
+    /// The builtins inlined into the key of the index imported under `id`.
+    ///
+    /// A plan that reads an index copies its key expression into the import,
+    /// but not the indexed relation's definition, so only the key matters.
+    /// Fails with [`PinError::UnknownItem`] when no index exists under `id`,
+    /// with [`PinError::BuiltinRelation`] when the body of a SQL-defined
+    /// function in the key references a builtin relation, and with
+    /// [`PinError::UnstableDependency`] when the key, or such a body,
+    /// references an unstable builtin.
+    fn index_key_builtins(&self, id: GlobalId) -> Result<BTreeSet<InlinedBuiltin>, PinError>;
+}
+
 /// Why a `DataflowDescription` could not be pinned.
 ///
 /// Lowering scalar expressions to LIR is not an error case: expression
@@ -221,6 +289,27 @@ pub enum PinError {
     NoExports,
     /// The dataflow imports or exports the builtin collection under this id.
     BuiltinCollection(GlobalId),
+    /// The pinning context knows no catalog item under this id.
+    UnknownItem(GlobalId),
+    /// Something the plan inlines references a builtin relation, see
+    /// [`PinningContext`].
+    BuiltinRelation {
+        /// The export, or imported index, whose catalog item has the
+        /// dependency.
+        item: GlobalId,
+        /// The builtin relation's full name.
+        relation: String,
+    },
+    /// Something the plan inlines references an unstable builtin, see
+    /// [`PinningContext`]. The builtin registry does not track unstable
+    /// builtins, so a change to one would not be flagged as affecting the pin.
+    UnstableDependency {
+        /// The export, or imported index, whose catalog item has the
+        /// dependency.
+        item: GlobalId,
+        /// The unstable builtin's full name.
+        dependency: String,
+    },
 }
 
 impl fmt::Display for PinError {
@@ -248,16 +337,31 @@ impl fmt::Display for PinError {
                     "a dataflow that reads or writes builtin collection {id} cannot be pinned"
                 )
             }
+            PinError::UnknownItem(id) => {
+                write!(f, "no catalog item exists under {id}")
+            }
+            PinError::BuiltinRelation { item, relation } => {
+                write!(
+                    f,
+                    "{item} depends on builtin relation {relation}, so it cannot be pinned"
+                )
+            }
+            PinError::UnstableDependency { item, dependency } => {
+                write!(
+                    f,
+                    "{item} depends on unstable builtin {dependency}, so it cannot be pinned"
+                )
+            }
         }
     }
 }
 
 impl std::error::Error for PinError {}
 
-impl TryFrom<LirDataflowDescription> for PinnedDataflow {
-    type Error = PinError;
-
-    fn try_from(desc: LirDataflowDescription) -> Result<Self, PinError> {
+impl PinnedDataflow {
+    /// Pins a lowered dataflow, recording the builtins `ctx` reports for its
+    /// exports.
+    pub fn pin(desc: LirDataflowDescription, ctx: &impl PinningContext) -> Result<Self, PinError> {
         // Destructured without `..` on purpose, so a new field on any of
         // these types fails to compile here until it is either pinned or
         // listed among the supplied fields.
@@ -320,7 +424,7 @@ impl TryFrom<LirDataflowDescription> for PinnedDataflow {
             })
             .collect();
 
-        let index_imports = index_imports
+        let index_imports: BTreeMap<_, _> = index_imports
             .into_iter()
             .map(|(id, import)| {
                 let IndexImport {
@@ -341,7 +445,7 @@ impl TryFrom<LirDataflowDescription> for PinnedDataflow {
             })
             .collect();
 
-        let index_exports = index_exports
+        let index_exports: BTreeMap<_, _> = index_exports
             .into_iter()
             .map(|(id, (IndexDesc { on_id, key: _ }, _typ))| {
                 if id.is_transient() {
@@ -351,7 +455,7 @@ impl TryFrom<LirDataflowDescription> for PinnedDataflow {
             })
             .collect::<Result<_, _>>()?;
 
-        let sink_exports = sink_exports
+        let sink_exports: BTreeMap<_, _> = sink_exports
             .into_iter()
             .map(|(id, sink)| {
                 let ComputeSinkDesc {
@@ -390,12 +494,21 @@ impl TryFrom<LirDataflowDescription> for PinnedDataflow {
             })
             .collect::<Result<_, _>>()?;
 
+        let mut inlined_builtins = BTreeSet::new();
+        for id in index_exports.keys().chain(sink_exports.keys()) {
+            inlined_builtins.extend(ctx.inlined_builtins(*id)?);
+        }
+        for id in index_imports.keys() {
+            inlined_builtins.extend(ctx.index_key_builtins(*id)?);
+        }
+
         Ok(PinnedDataflow {
             source_imports,
             index_imports,
             objects_to_build,
             index_exports,
             sink_exports,
+            inlined_builtins,
         })
     }
 }
@@ -515,11 +628,10 @@ impl PinnedDataflow {
     /// or if the catalog disagrees with the plan about what it is. Only the
     /// first problem found is reported.
     ///
-    /// NOTE: The plan also contains the bodies of the views it inlines, and
-    /// of SQL-defined builtin functions, and nothing here verifies those.
-    /// Pinning refuses builtin collections, which keeps out builtin views
-    /// that read one, but not a builtin view that reads no collection or a
-    /// SQL-defined function.
+    /// NOTE: The plan also contains the bodies of the user views and
+    /// SQL-defined builtin functions it inlines, and nothing here verifies
+    /// those. A changed SQL-defined builtin is traced through
+    /// `inlined_builtins` instead.
     // TODO(mgree): the import and export checks are independent, so
     // collecting every problem into a list instead of returning at the first
     // one would be easy.
@@ -534,6 +646,7 @@ impl PinnedDataflow {
             mut objects_to_build,
             index_exports,
             sink_exports,
+            inlined_builtins: _,
         } = self;
 
         // Transient ids come from a per-process counter, so the internal

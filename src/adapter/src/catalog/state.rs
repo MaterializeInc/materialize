@@ -1454,19 +1454,21 @@ impl CatalogState {
         })
     }
 
-    /// Parses the given SQL string into a pair of [`Plan`] and a [`ResolvedIds`].
+    /// Parses the given SQL string into a [`Plan`], the ids its names resolve
+    /// to, and the ids resolved inside the bodies of the SQL-defined functions
+    /// it calls.
     #[mz_ore::instrument]
     pub(crate) fn parse_plan(
         create_sql: &str,
         pcx: Option<&PlanContext>,
         catalog: &ConnCatalog,
-    ) -> Result<(Plan, ResolvedIds), AdapterError> {
+    ) -> Result<(Plan, ResolvedIds, ResolvedIds), AdapterError> {
         let stmt = mz_sql::parse::parse(create_sql)?.into_element().ast;
         let (stmt, resolved_ids) = mz_sql::names::resolve(catalog, stmt)?;
-        let (plan, _sql_impl_ids) =
+        let (plan, function_body_ids) =
             mz_sql::plan::plan(pcx, catalog, stmt, &Params::empty(), &resolved_ids)?;
 
-        Ok((plan, resolved_ids))
+        Ok((plan, resolved_ids, function_body_ids))
     }
 
     /// Parses the given SQL string into a pair of [`CatalogItem`].
@@ -1560,10 +1562,11 @@ impl CatalogState {
     > {
         let session_catalog = self.for_system_session();
 
-        let (plan, resolved_ids) = match Self::parse_plan(create_sql, pcx, &session_catalog) {
-            Ok((plan, resolved_ids)) => (plan, resolved_ids),
-            Err(err) => return Err((err, cached_expr)),
-        };
+        let (plan, resolved_ids, function_body_ids) =
+            match Self::parse_plan(create_sql, pcx, &session_catalog) {
+                Ok(parsed) => parsed,
+                Err(err) => return Err((err, cached_expr)),
+            };
 
         let mut uncached_expr = None;
 
@@ -1788,6 +1791,7 @@ impl CatalogState {
                     locally_optimized_expr: optimized_expr,
                     conn_id: None,
                     resolved_ids,
+                    function_body_ids,
                     dependencies: DependencyIds(dependencies),
                 })
             }
@@ -1872,6 +1876,7 @@ impl CatalogState {
                     locally_optimized_expr: optimized_expr,
                     desc,
                     resolved_ids,
+                    function_body_ids,
                     dependencies,
                     replacement_target: materialized_view.replacement_target,
                     cluster_id: materialized_view.cluster_id,
@@ -1892,6 +1897,7 @@ impl CatalogState {
                 keys: index.keys.into(),
                 conn_id: None,
                 resolved_ids,
+                function_body_ids,
                 cluster_id: index.cluster_id,
                 custom_logical_compaction_window: custom_logical_compaction_window
                     .or(index.compaction_window),

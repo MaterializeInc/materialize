@@ -222,8 +222,22 @@ impl InstantiationContext for Ctx {
     }
 }
 
+/// A pinning context whose exports depend on no builtins, as for the
+/// fixtures here, which reference no catalog.
+struct NoInlinedBuiltins;
+
+impl PinningContext for NoInlinedBuiltins {
+    fn inlined_builtins(&self, _id: GlobalId) -> Result<BTreeSet<InlinedBuiltin>, PinError> {
+        Ok(BTreeSet::new())
+    }
+
+    fn index_key_builtins(&self, _id: GlobalId) -> Result<BTreeSet<InlinedBuiltin>, PinError> {
+        Ok(BTreeSet::new())
+    }
+}
+
 fn instantiate(df: &LirDataflowDescription, ctx: &Ctx) -> LirDataflowDescription {
-    PinnedDataflow::try_from(df.clone())
+    PinnedDataflow::pin(df.clone(), &NoInlinedBuiltins)
         .expect("pinnable")
         .instantiate(ctx, df.debug_name.clone())
         .expect("instantiates")
@@ -248,7 +262,7 @@ fn rejects_one_shot_sinks() {
         },
     );
     assert_eq!(
-        PinnedDataflow::try_from(df),
+        PinnedDataflow::pin(df, &NoInlinedBuiltins),
         Err(PinError::UnpinnableSink(MV_SINK))
     );
 }
@@ -268,7 +282,7 @@ fn rejects_transient_index_exports() {
         ),
     );
     assert_eq!(
-        PinnedDataflow::try_from(df),
+        PinnedDataflow::pin(df, &NoInlinedBuiltins),
         Err(PinError::TransientIndexExport(peek_index))
     );
 }
@@ -293,7 +307,7 @@ fn rejects_transient_sink_exports() {
         },
     );
     assert_eq!(
-        PinnedDataflow::try_from(df),
+        PinnedDataflow::pin(df, &NoInlinedBuiltins),
         Err(PinError::TransientSinkExport(curated_sink))
     );
 }
@@ -301,7 +315,7 @@ fn rejects_transient_sink_exports() {
 #[mz_ore::test]
 #[should_panic(expected = "pinning a dataflow with no exports")]
 fn rejects_dataflows_without_exports() {
-    let _ = PinnedDataflow::try_from(imports_only());
+    let _ = PinnedDataflow::pin(imports_only(), &NoInlinedBuiltins);
 }
 
 fn materialized_view_dataflow() -> LirDataflowDescription {
@@ -315,7 +329,7 @@ fn materialized_view_dataflow() -> LirDataflowDescription {
 fn materialized_view_round_trips() {
     let df = materialized_view_dataflow();
 
-    let pinned = PinnedDataflow::try_from(df.clone()).unwrap();
+    let pinned = PinnedDataflow::pin(df.clone(), &NoInlinedBuiltins).unwrap();
     let (_, lower, upper) = pinned.source_imports[&SOURCE]
         .operators
         .clone()
@@ -342,7 +356,7 @@ fn rejects_builtin_collections() {
     let mut df = materialized_view_dataflow();
     move_key(&mut df.source_imports, SOURCE, builtin);
     assert_eq!(
-        PinnedDataflow::try_from(df),
+        PinnedDataflow::pin(df, &NoInlinedBuiltins),
         Err(PinError::BuiltinCollection(builtin)),
         "a builtin source import"
     );
@@ -350,7 +364,7 @@ fn rejects_builtin_collections() {
     let mut df = materialized_view_dataflow();
     move_key(&mut df.index_imports, IMPORTED_INDEX, builtin);
     assert_eq!(
-        PinnedDataflow::try_from(df),
+        PinnedDataflow::pin(df, &NoInlinedBuiltins),
         Err(PinError::BuiltinCollection(builtin)),
         "a builtin index import"
     );
@@ -358,7 +372,7 @@ fn rejects_builtin_collections() {
     let mut df = materialized_view_dataflow();
     move_key(&mut df.sink_exports, MV_SINK, builtin);
     assert_eq!(
-        PinnedDataflow::try_from(df),
+        PinnedDataflow::pin(df, &NoInlinedBuiltins),
         Err(PinError::BuiltinCollection(builtin)),
         "a builtin materialized view"
     );
@@ -366,7 +380,7 @@ fn rejects_builtin_collections() {
     let mut df = index_dataflow();
     move_key(&mut df.index_exports, INDEX, builtin);
     assert_eq!(
-        PinnedDataflow::try_from(df),
+        PinnedDataflow::pin(df, &NoInlinedBuiltins),
         Err(PinError::BuiltinCollection(builtin)),
         "a builtin index"
     );
@@ -375,7 +389,7 @@ fn rejects_builtin_collections() {
     let mut df = materialized_view_dataflow();
     move_key(&mut df.index_imports, IMPORTED_INDEX, introspection);
     assert_eq!(
-        PinnedDataflow::try_from(df),
+        PinnedDataflow::pin(df, &NoInlinedBuiltins),
         Err(PinError::BuiltinCollection(introspection)),
         "an introspection index import"
     );
@@ -390,14 +404,14 @@ fn materialized_view_key_drift_is_detected() {
             ..mv_info()
         }),
     );
-    let pinned = PinnedDataflow::try_from(materialized_view_dataflow()).unwrap();
+    let pinned = PinnedDataflow::pin(materialized_view_dataflow(), &NoInlinedBuiltins).unwrap();
     let detail = export_drift_detail(pinned.instantiate(&ctx, "test".to_string()), MV_SINK);
     assert!(detail.contains("pinned type"), "{detail}");
 }
 
 #[mz_ore::test]
 fn materialized_view_column_type_drift_is_detected() {
-    let pinned = PinnedDataflow::try_from(materialized_view_dataflow()).unwrap();
+    let pinned = PinnedDataflow::pin(materialized_view_dataflow(), &NoInlinedBuiltins).unwrap();
     let ctx = Ctx::new(
         None,
         Some(MaterializedViewInfo {
@@ -414,7 +428,7 @@ fn materialized_view_column_type_drift_is_detected() {
 
 #[mz_ore::test]
 fn pinned_dataflow_round_trips_through_json() {
-    let pinned = PinnedDataflow::try_from(materialized_view_dataflow()).unwrap();
+    let pinned = PinnedDataflow::pin(materialized_view_dataflow(), &NoInlinedBuiltins).unwrap();
     let json = serde_json::to_string(&pinned).expect("serializes as JSON");
     assert!(json.contains("\"u1\":"), "map keys are id strings: {json}");
     let parsed: PinnedDataflow = serde_json::from_str(&json).expect("parses back");
@@ -491,7 +505,7 @@ fn index_dataflow() -> LirDataflowDescription {
 #[mz_ore::test]
 fn index_round_trips() {
     let df = index_dataflow();
-    let pinned = PinnedDataflow::try_from(df.clone()).unwrap();
+    let pinned = PinnedDataflow::pin(df.clone(), &NoInlinedBuiltins).unwrap();
     assert_eq!(pinned.index_exports, BTreeMap::from([(INDEX, ON)]));
     let ctx = Ctx::new(
         Some(IndexInfo {
@@ -552,7 +566,7 @@ fn index_key_drift_is_detected() {
         )
     };
     for df in [index_dataflow(), index_dataflow_with_elided_arrange_by()] {
-        let pinned = PinnedDataflow::try_from(df).unwrap();
+        let pinned = PinnedDataflow::pin(df, &NoInlinedBuiltins).unwrap();
         assert!(matches!(
             pinned.instantiate(&ctx(), "test".to_string()),
             Err(InstantiateError::ExportDrift { id: INDEX, .. })
@@ -574,7 +588,7 @@ fn index_built_from_an_unverifiable_shape_is_drift() {
             input: Box::new(get(4, ON)),
         },
     };
-    let pinned = PinnedDataflow::try_from(df).unwrap();
+    let pinned = PinnedDataflow::pin(df, &NoInlinedBuiltins).unwrap();
     let ctx = Ctx::new(
         Some(IndexInfo {
             on: ON,
@@ -591,7 +605,7 @@ fn index_built_from_an_unverifiable_shape_is_drift() {
 
 #[mz_ore::test]
 fn missing_catalog_item_is_detected() {
-    let pinned = PinnedDataflow::try_from(index_dataflow()).unwrap();
+    let pinned = PinnedDataflow::pin(index_dataflow(), &NoInlinedBuiltins).unwrap();
     let ctx = Ctx::new(None, None);
     assert_eq!(
         pinned.instantiate(&ctx, "test".to_string()),
@@ -618,7 +632,7 @@ fn export_drift_detail(
 
 #[mz_ore::test]
 fn index_on_drift_is_detected() {
-    let pinned = PinnedDataflow::try_from(index_dataflow()).unwrap();
+    let pinned = PinnedDataflow::pin(index_dataflow(), &NoInlinedBuiltins).unwrap();
     let ctx = Ctx::new(
         Some(IndexInfo {
             on: SOURCE,
@@ -635,7 +649,7 @@ fn index_on_drift_is_detected() {
 fn index_export_without_a_build_is_drift() {
     let mut df = index_dataflow();
     df.objects_to_build.retain(|object| object.id != INDEX);
-    let pinned = PinnedDataflow::try_from(df).unwrap();
+    let pinned = PinnedDataflow::pin(df, &NoInlinedBuiltins).unwrap();
     let ctx = Ctx::new(
         Some(IndexInfo {
             on: ON,
@@ -653,7 +667,7 @@ fn sink_reading_an_unbuilt_object_is_drift() {
     let mut df = materialized_view_dataflow();
     df.sink_exports
         .insert(MV_SINK, mv_sink(GlobalId::Transient(42)));
-    let pinned = PinnedDataflow::try_from(df).unwrap();
+    let pinned = PinnedDataflow::pin(df, &NoInlinedBuiltins).unwrap();
     let ctx = Ctx::new(None, Some(mv_info()));
     let detail = export_drift_detail(pinned.instantiate(&ctx, "test".to_string()), MV_SINK);
     assert!(detail.contains("builds no object"), "{detail}");
@@ -661,7 +675,7 @@ fn sink_reading_an_unbuilt_object_is_drift() {
 
 #[mz_ore::test]
 fn missing_materialized_view_is_detected() {
-    let pinned = PinnedDataflow::try_from(materialized_view_dataflow()).unwrap();
+    let pinned = PinnedDataflow::pin(materialized_view_dataflow(), &NoInlinedBuiltins).unwrap();
     let ctx = Ctx::new(None, None);
     assert_eq!(
         pinned.instantiate(&ctx, "test".to_string()),
@@ -690,7 +704,7 @@ fn missing_metric_sink_is_detected() {
             from_arrangement: None,
         },
     );
-    let pinned = PinnedDataflow::try_from(df).unwrap();
+    let pinned = PinnedDataflow::pin(df, &NoInlinedBuiltins).unwrap();
     let ctx = Ctx::new(None, None);
     assert_eq!(
         pinned.instantiate(&ctx, "test".to_string()),
@@ -703,7 +717,7 @@ fn missing_metric_sink_is_detected() {
 
 #[mz_ore::test]
 fn missing_source_import_is_detected() {
-    let pinned = PinnedDataflow::try_from(materialized_view_dataflow()).unwrap();
+    let pinned = PinnedDataflow::pin(materialized_view_dataflow(), &NoInlinedBuiltins).unwrap();
     let mut ctx = Ctx::new(None, Some(mv_info()));
     ctx.collections.remove(&SOURCE);
     assert_eq!(
@@ -717,7 +731,7 @@ fn missing_source_import_is_detected() {
 
 #[mz_ore::test]
 fn missing_index_import_is_detected() {
-    let pinned = PinnedDataflow::try_from(materialized_view_dataflow()).unwrap();
+    let pinned = PinnedDataflow::pin(materialized_view_dataflow(), &NoInlinedBuiltins).unwrap();
     let mut ctx = Ctx::new(None, Some(mv_info()));
     ctx.indexes.remove(&IMPORTED_INDEX);
     assert_eq!(
@@ -731,7 +745,7 @@ fn missing_index_import_is_detected() {
 
 #[mz_ore::test]
 fn source_import_type_drift_is_detected() {
-    let pinned = PinnedDataflow::try_from(materialized_view_dataflow()).unwrap();
+    let pinned = PinnedDataflow::pin(materialized_view_dataflow(), &NoInlinedBuiltins).unwrap();
     let mut ctx = Ctx::new(None, Some(mv_info()));
     ctx.collections.insert(
         SOURCE,
@@ -745,7 +759,7 @@ fn source_import_type_drift_is_detected() {
 
 #[mz_ore::test]
 fn index_import_drift_is_detected() {
-    let pinned = PinnedDataflow::try_from(materialized_view_dataflow()).unwrap();
+    let pinned = PinnedDataflow::pin(materialized_view_dataflow(), &NoInlinedBuiltins).unwrap();
     let altered = [
         IndexInfo {
             on: SOURCE,
@@ -771,4 +785,92 @@ fn index_import_drift_is_detected() {
             })
         ));
     }
+}
+
+/// A pinning context that knows only the given exports and imported indexes.
+struct Builtins {
+    exports: BTreeMap<GlobalId, BTreeSet<InlinedBuiltin>>,
+    index_keys: BTreeMap<GlobalId, BTreeSet<InlinedBuiltin>>,
+}
+
+impl Builtins {
+    /// Knows `exports`, and `IMPORTED_INDEX` with a key that inlines nothing.
+    fn exports(exports: impl IntoIterator<Item = (GlobalId, BTreeSet<InlinedBuiltin>)>) -> Self {
+        Builtins {
+            exports: exports.into_iter().collect(),
+            index_keys: BTreeMap::from([(IMPORTED_INDEX, BTreeSet::new())]),
+        }
+    }
+}
+
+impl PinningContext for Builtins {
+    fn inlined_builtins(&self, id: GlobalId) -> Result<BTreeSet<InlinedBuiltin>, PinError> {
+        self.exports
+            .get(&id)
+            .cloned()
+            .ok_or(PinError::UnknownItem(id))
+    }
+
+    fn index_key_builtins(&self, id: GlobalId) -> Result<BTreeSet<InlinedBuiltin>, PinError> {
+        self.index_keys
+            .get(&id)
+            .cloned()
+            .ok_or(PinError::UnknownItem(id))
+    }
+}
+
+fn builtin_func(name: &str) -> InlinedBuiltin {
+    InlinedBuiltin {
+        kind: InlinedBuiltinKind::Func,
+        schema: "pg_catalog".to_string(),
+        name: name.to_string(),
+    }
+}
+
+#[mz_ore::test]
+fn pin_records_inlined_builtins_of_every_export() {
+    let regexp_split = InlinedBuiltin {
+        kind: InlinedBuiltinKind::Func,
+        schema: "pg_catalog".to_string(),
+        name: "regexp_split_to_table".to_string(),
+    };
+    let ctx = Builtins::exports([(
+        MV_SINK,
+        BTreeSet::from([builtin_func("date_bin_hopping"), regexp_split.clone()]),
+    )]);
+    let pinned = PinnedDataflow::pin(materialized_view_dataflow(), &ctx).unwrap();
+    assert_eq!(
+        pinned.inlined_builtins,
+        BTreeSet::from([builtin_func("date_bin_hopping"), regexp_split])
+    );
+    let json = serde_json::to_string(&pinned).expect("serializes as JSON");
+    let parsed: PinnedDataflow = serde_json::from_str(&json).expect("parses back");
+    assert_eq!(parsed, pinned);
+
+    let ctx = Builtins::exports([(INDEX, BTreeSet::from([builtin_func("pg_encoding_to_char")]))]);
+    let pinned = PinnedDataflow::pin(index_dataflow(), &ctx).unwrap();
+    assert_eq!(
+        pinned.inlined_builtins,
+        BTreeSet::from([builtin_func("pg_encoding_to_char")])
+    );
+}
+
+#[mz_ore::test]
+fn pin_records_inlined_builtins_of_imported_index_keys() {
+    let mut ctx = Builtins::exports([(MV_SINK, BTreeSet::new())]);
+    ctx.index_keys.insert(
+        IMPORTED_INDEX,
+        BTreeSet::from([builtin_func("pg_encoding_to_char")]),
+    );
+    let pinned = PinnedDataflow::pin(materialized_view_dataflow(), &ctx).unwrap();
+    assert_eq!(
+        pinned.inlined_builtins,
+        BTreeSet::from([builtin_func("pg_encoding_to_char")])
+    );
+
+    ctx.index_keys.clear();
+    assert_eq!(
+        PinnedDataflow::pin(materialized_view_dataflow(), &ctx),
+        Err(PinError::UnknownItem(IMPORTED_INDEX))
+    );
 }

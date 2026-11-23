@@ -702,6 +702,7 @@ impl Coordinator {
                     desc,
                     collections,
                     resolved_ids,
+                    function_body_ids: ResolvedIds::empty(),
                     dependencies,
                     replacement_target,
                     cluster_id,

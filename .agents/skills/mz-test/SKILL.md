@@ -49,7 +49,8 @@ variant's properties and `#[sqlfunc]` body fingerprint into
 when a recorded property changes, and when a `#[sqlfunc]` declaration or body
 changes. It records nothing for the bodies of hand-written variants, which
 include every `AggregateFunc` and `TableFunc` variant, so a change to one of
-those passes.
+those passes. It also records the SQL of SQL-defined builtin functions in
+the source half.
 Removals and property changes to a shipped `LIR_VERSION` require a bump
 **before** regenerating, because a rewrite at the old version silently
 overwrites that version's digest. See the mz-commit skill for the decision

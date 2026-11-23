@@ -216,8 +216,8 @@ impl TypeCategory {
 
 /// Builds an expression that evaluates a scalar function on the provided
 /// input expressions.
-pub struct Operation<R>(
-    pub  Box<
+pub struct Operation<R> {
+    pub build: Box<
         dyn Fn(
                 &ExprContext,
                 Vec<CoercibleScalarExpr>,
@@ -227,7 +227,9 @@ pub struct Operation<R>(
             + Send
             + Sync,
     >,
-);
+    /// The SQL text `build` plans, for an operation defined in SQL.
+    sql: Option<String>,
+}
 
 impl<R> fmt::Debug for Operation<R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -255,7 +257,18 @@ impl<R> Operation<R> {
             + Sync
             + 'static,
     {
-        Operation(Box::new(f))
+        Operation {
+            build: Box::new(f),
+            sql: None,
+        }
+    }
+
+    /// Records the SQL text this operation plans.
+    fn with_sql(self, sql: &str) -> Operation<R> {
+        Operation {
+            sql: Some(sql.to_string()),
+            ..self
+        }
     }
 
     /// Builds an operation that takes no arguments.
@@ -421,6 +434,7 @@ fn sql_impl_func(expr: &str) -> Operation<HirScalarExpr> {
         out.splice_parameters(&args, 0);
         Ok(out)
     })
+    .with_sql(expr)
 }
 
 // Defines a built-in table function from a static SQL SELECT statement.
@@ -483,6 +497,7 @@ fn sql_impl_table_func_inner(
             column_names: scope.column_names().cloned().collect(),
         })
     })
+    .with_sql(sql)
 }
 
 /// Implements a table function using SQL.
@@ -516,6 +531,8 @@ pub struct FuncImplCatalogDetails {
     pub variadic_typ: Option<&'static str>,
     pub return_typ: Option<&'static str>,
     pub return_is_set: bool,
+    /// The SQL body, for an implementation defined in SQL.
+    pub sql: Option<String>,
 }
 
 impl<R> FuncImpl<R> {
@@ -526,6 +543,7 @@ impl<R> FuncImpl<R> {
             variadic_typ: self.params.variadic_name(),
             return_typ: self.return_type.typ.as_ref().map(|t| t.name()),
             return_is_set: self.return_type.is_set_of,
+            sql: self.op.sql.clone(),
         }
     }
 }
@@ -1073,7 +1091,7 @@ where
         }
     })?;
 
-    (f.op.0)(ecx, args, &f.params, order_by)
+    (f.op.build)(ecx, args, &f.params, order_by)
 }
 
 /// Finds an exact match based on the arguments, or, if no exact match, finds

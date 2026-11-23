@@ -3972,7 +3972,7 @@ mod tests {
 
         // Execute the function as much as possible, ensuring no panics occur, but
         // otherwise ignoring eval errors. We also do various other checks.
-        let res = (op.0)(&ecx, scalars, &imp.params, vec![]);
+        let res = (op.build)(&ecx, scalars, &imp.params, vec![]);
         if let Ok(hir) = res {
             let uneliminated_result_row = {
                 if let HirScalarExpr::CallUnary { func, .. } = &hir
