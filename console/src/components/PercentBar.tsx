@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { Box, HStack, Text, useTheme } from "@chakra-ui/react";
+import { Box, Stack, Text, useTheme } from "@chakra-ui/react";
 import React from "react";
 
 import {
@@ -24,9 +24,11 @@ export interface PercentBarProps {
    * Callers reading a relation that reports percentages must divide by 100.
    */
   fraction: number | null | undefined;
+  /** Puts the bar under the value, for a column too narrow for both. */
+  isStacked?: boolean;
 }
 
-const PercentBar = ({ fraction }: PercentBarProps) => {
+const PercentBar = ({ fraction, isStacked }: PercentBarProps) => {
   const { colors } = useTheme<MaterializeTheme>();
 
   if (fraction === null || fraction === undefined) {
@@ -50,7 +52,12 @@ const PercentBar = ({ fraction }: PercentBarProps) => {
   );
 
   return (
-    <HStack spacing="2" minWidth="80px">
+    <Stack
+      direction={isStacked ? "column" : "row"}
+      alignItems={isStacked ? "flex-start" : "center"}
+      spacing={isStacked ? "1" : "2"}
+      minWidth={isStacked ? undefined : "80px"}
+    >
       <Text as="span" whiteSpace="nowrap" minWidth="32px">
         {formatPercentage(fraction, 1)}
       </Text>
@@ -70,7 +77,7 @@ const PercentBar = ({ fraction }: PercentBarProps) => {
           transition="width 0.3s ease"
         />
       </Box>
-    </HStack>
+    </Stack>
   );
 };
 export default PercentBar;

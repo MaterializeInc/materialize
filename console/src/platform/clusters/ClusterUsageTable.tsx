@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { HStack, Text, Tooltip, VStack } from "@chakra-ui/react";
+import { Box, HStack, Text, Tooltip, VStack } from "@chakra-ui/react";
 import {
   ColumnFiltersState,
   createColumnHelper,
@@ -52,8 +52,10 @@ import {
 import WarningIcon from "~/svg/WarningIcon";
 import { truncateMaxWidth } from "~/theme/components/Table";
 import {
+  DATE_FORMAT,
   formatDate,
   FRIENDLY_DATETIME_FORMAT_NO_SECONDS,
+  TIME_FORMAT_NO_SECONDS,
 } from "~/utils/dateFormat";
 
 import { ClusterFilterChips } from "./ClusterFilterChips";
@@ -69,7 +71,14 @@ import {
   hydrationFilterFromUrl,
 } from "./hydrationFilters";
 import {
+  OWNER_COLUMN_ID,
+  OWNER_URL_KEY,
+  ownerFilterFn,
+  ownerFilterFromUrl,
+} from "./ownerFilters";
+import {
   ReplicaHydrationCounts,
+  useOwners,
   useReplicaHydration,
   useReplicaUtilization,
 } from "./queries";
@@ -123,6 +132,8 @@ const NO_UTILIZATION: ReplicaUtilizationValues = {
  */
 type ClusterReplicaRow = {
   cluster: ClusterWithOwnership;
+  /** The owning role's name, null until the roles load. */
+  owner: string | null;
   replica: Replica | null;
   utilization: ReplicaUtilizationValues;
   hydration: ReplicaHydrationCounts | null;
@@ -134,7 +145,7 @@ const ReplicaPercentCell = ({ value }: { value: number | null }) => {
   if (value === null) {
     return <>-</>;
   }
-  return <PercentBar fraction={value} />;
+  return <PercentBar fraction={value} isStacked />;
 };
 
 /**
@@ -181,10 +192,6 @@ const hydrationSortingFn: SortingFn<ClusterReplicaRow> = (rowA, rowB) => {
   return a - b;
 };
 
-/** Formats a status-change timestamp for display, or "-" when there is none. */
-const formatStatusChange = (timestamp: string | null | undefined) =>
-  timestamp ? formatDate(timestamp, FRIENDLY_DATETIME_FORMAT_NO_SECONDS) : "-";
-
 const ReplicaLastStatusChangeCell = ({
   updatedAt,
   offlineStatus,
@@ -193,9 +200,25 @@ const ReplicaLastStatusChangeCell = ({
   offlineStatus: LatestOfflineReplicaInfo | undefined;
 }) => (
   <HStack>
-    <Text as="span" noOfLines={1}>
-      {formatStatusChange(updatedAt)}
-    </Text>
+    {updatedAt ? (
+      // The date over its time, so the column is as wide as the date alone.
+      // The space between them is for the cell read as text.
+      <Text as="span" whiteSpace="nowrap">
+        <Text as="span" display="block">
+          {formatDate(updatedAt, DATE_FORMAT)}
+        </Text>{" "}
+        <Text
+          as="span"
+          display="block"
+          textStyle="text-small"
+          color="foreground.secondary"
+        >
+          {formatDate(updatedAt, `${TIME_FORMAT_NO_SECONDS} z`)}
+        </Text>
+      </Text>
+    ) : (
+      <Text as="span">-</Text>
+    )}
     {offlineStatus?.shouldSurfaceOom && (
       <Tooltip
         px={3}
@@ -233,6 +256,14 @@ const latestReplicaStatusAt = (replica: Replica | null) =>
   ) ?? null;
 
 const columnHelper = createColumnHelper<ClusterReplicaRow>();
+
+interface ClusterUsageTableMeta extends ClusterTableMeta {
+  /**
+   * The roles that own a listed cluster, by id, in name order, for the owner
+   * filter.
+   */
+  ownerNames: Map<string, string>;
+}
 
 interface UtilizationColumn {
   id: string;
@@ -298,6 +329,11 @@ const columnFiltersFromSearch = (search: string): ColumnFiltersState => {
     filters.push({ id: REPLICA_COLUMN_ID, value: minimumReplicas });
   }
 
+  const owners = ownerFilterFromUrl(params.getAll(OWNER_URL_KEY));
+  if (owners) {
+    filters.push({ id: OWNER_COLUMN_ID, value: owners });
+  }
+
   return filters;
 };
 
@@ -324,8 +360,8 @@ const columns = [
     sortingFn: "alphanumeric",
     cell: (info) => <ClusterNameCell cluster={info.row.original.cluster} />,
     meta: {
-      minWidth: { md: "240px", sm: "auto" },
-      cellProps: truncateMaxWidth,
+      minWidth: { md: "140px", sm: "auto" },
+      cellProps: { maxW: { base: "120px", xl: "150px", "2xl": "400px" } },
     },
   }),
   columnHelper.accessor((row) => row.replica?.name ?? null, {
@@ -347,6 +383,51 @@ const columns = [
     sortingFn: sortingFunctions.nullsLast,
     sortDescFirst: true,
     cell: (info) => info.getValue() ?? "-",
+  }),
+  // NOTE: an unknown owner reads as "". TanStack searches a column only if
+  // its value on the first row is a string or a number, so a null there would
+  // take every owner out of the search.
+  columnHelper.accessor((row) => row.owner ?? "", {
+    id: OWNER_COLUMN_ID,
+    header: "Owner",
+    sortingFn: (rowA, rowB) => {
+      const a = rowA.original.owner;
+      const b = rowB.original.owner;
+      if (a === null || b === null) {
+        return Number(a === null) - Number(b === null);
+      }
+      return a.localeCompare(b, undefined, { numeric: true });
+    },
+    filterFn: ownerFilterFn,
+    cell: (info) => {
+      const { owner } = info.row.original;
+      // Role names are often email addresses. A long one is cut short, with
+      // the whole name on hover.
+      return owner === null ? (
+        "-"
+      ) : (
+        <Text as="span" noOfLines={1} title={owner}>
+          {owner}
+        </Text>
+      );
+    },
+    meta: {
+      cellProps: { maxW: { base: "110px", xl: "120px", "2xl": "240px" } },
+      renderFilter: (column, table) => {
+        const meta = table.options.meta as ClusterUsageTableMeta;
+        return (
+          <MultiSelectFilterPanel<string, ClusterReplicaRow>
+            column={column}
+            items={[...meta.ownerNames.keys()]}
+            getLabel={(ownerId) => meta.ownerNames.get(ownerId)}
+            getSearchText={(ownerId) => meta.ownerNames.get(ownerId) ?? ""}
+            searchable
+            searchPlaceholder="Search roles..."
+            emptyMessage="No roles match"
+          />
+        );
+      },
+    },
   }),
   ...UTILIZATION_COLUMNS.map(percentColumn),
   columnHelper.accessor(
@@ -383,7 +464,12 @@ const columns = [
     // from the replica status *history*, so it counts replicas that have since
     // been dropped and can name a time no visible row reports.
     id: "lastStatusChange",
-    header: "Last status change",
+    // Wraps, as its dates do: on one line this is the widest column.
+    header: () => (
+      <Text as="span" whiteSpace="normal" minWidth="80px">
+        Last status change
+      </Text>
+    ),
     sortingFn: sortingFunctions.nullsLast,
     sortDescFirst: false,
     cell: (info) => {
@@ -424,9 +510,8 @@ export const ClusterUsageTable = ({ clusters }: ClusterUsageTableProps) => {
     useLatestOfflineReplica();
   const { data: replicaUtilization } = useReplicaUtilization();
   const { data: replicaHydration } = useReplicaHydration();
+  const { ownerName } = useOwners();
   const location = useLocation();
-
-  const meta: ClusterTableMeta = { offlineReplicaMap };
 
   // Read once, on mount: the URL seeds the table, and from then on the table
   // drives the URL. Reading it on every render would fight the writer below.
@@ -441,11 +526,13 @@ export const ClusterUsageTable = ({ clusters }: ClusterUsageTableProps) => {
   // flattened rows have to outlive the render that built them.
   const rows = React.useMemo<ClusterReplicaRow[]>(
     () =>
-      clusters.flatMap((cluster): ClusterReplicaRow[] =>
-        cluster.replicas.length === 0
+      clusters.flatMap((cluster): ClusterReplicaRow[] => {
+        const owner = ownerName(cluster.ownerId) ?? null;
+        return cluster.replicas.length === 0
           ? [
               {
                 cluster,
+                owner,
                 replica: null,
                 utilization: NO_UTILIZATION,
                 hydration: null,
@@ -453,13 +540,28 @@ export const ClusterUsageTable = ({ clusters }: ClusterUsageTableProps) => {
             ]
           : cluster.replicas.map((replica) => ({
               cluster,
+              owner,
               replica,
               utilization:
                 replicaUtilization?.get(replica.id) ?? NO_UTILIZATION,
               hydration: replicaHydration?.get(replica.id) ?? null,
-            })),
+            }));
+      }),
+    [clusters, ownerName, replicaHydration, replicaUtilization],
+  );
+
+  const meta = React.useMemo<ClusterUsageTableMeta>(
+    () => ({
+      offlineReplicaMap,
+      ownerNames: new Map(
+        rows
+          .flatMap(({ cluster, owner }): [string, string][] =>
+            owner === null ? [] : [[cluster.ownerId, owner]],
+          )
+          .sort(([, a], [, b]) => a.localeCompare(b)),
       ),
-    [clusters, replicaHydration, replicaUtilization],
+    }),
+    [offlineReplicaMap, rows],
   );
 
   const table = useUniversalTable({
@@ -515,6 +617,12 @@ export const ClusterUsageTable = ({ clusters }: ClusterUsageTableProps) => {
     if (minimumReplicas !== undefined) {
       params[REPLICA_COUNT_URL_KEY] = minimumReplicas;
     }
+    const ownerFilter = tableState.columnFilters.find(
+      (filter) => filter.id === OWNER_COLUMN_ID,
+    );
+    if (ownerFilter) {
+      params[OWNER_URL_KEY] = ownerFilter.value;
+    }
     if (tableState.globalFilter) {
       params.q = tableState.globalFilter;
     }
@@ -556,6 +664,7 @@ export const ClusterUsageTable = ({ clusters }: ClusterUsageTableProps) => {
       <ClusterFilterChips
         table={table}
         utilizationColumns={UTILIZATION_COLUMNS}
+        ownerName={ownerName}
       />
       {noMatches ? (
         <EmptyListWrapper>
@@ -568,11 +677,15 @@ export const ClusterUsageTable = ({ clusters }: ClusterUsageTableProps) => {
         </EmptyListWrapper>
       ) : (
         <>
-          <UniversalTable
-            table={table}
-            variant="linkable"
-            data-testid="cluster-table"
-          />
+          {/* Eleven columns at the table's usual padding overflow a laptop
+              window, so cells here are padded less. */}
+          <Box sx={{ "& th, & td": { px: 3 } }}>
+            <UniversalTable
+              table={table}
+              variant="linkable"
+              data-testid="cluster-table"
+            />
+          </Box>
           <TablePagination table={table} itemLabel="replicas" />
         </>
       )}
