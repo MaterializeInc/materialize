@@ -927,9 +927,9 @@ default CA certificates. To verify the server's certificate with `SSL MODE`
 set to `verify_ca` or `verify_full`, [download the certificate bundle for your
 AWS Region](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/UsingWithRDS.SSL.html),
 store its contents in a secret, and pass that secret as
-`SSL CERTIFICATE AUTHORITY`. With `SSL MODE 'require'`, the connection is
-encrypted but the server's certificate is not verified, and no certificate
-bundle is needed.
+`SSL CERTIFICATE AUTHORITY`. With `SSL MODE 'require'` and no certificate
+authority, the connection is encrypted but the server's certificate is not
+verified.
 
 Before you create the connection, configure the database for IAM
 authentication:
@@ -944,6 +944,9 @@ authentication:
 * Grant the database user the `rds_iam` and `rds_replication` roles.
 * Allow the IAM role assumed by the [AWS connection](#aws) to perform the
   `rds-db:connect` action for that database user.
+
+Set `REGION` on the AWS connection to the AWS Region of the database.
+Materialize signs the authentication token for that Region.
 
 See the Amazon RDS User Guide for instructions on [IAM database authentication](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/UsingWithRDS.IAMDBAuth.html)
 and on [IAM authentication for logical replication connections](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/PostgreSQL.Concepts.General.FeatureSupport.IAMLogicalReplication.html).
