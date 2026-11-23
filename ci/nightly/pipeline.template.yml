@@ -62,6 +62,22 @@ steps:
         sanitizer: skip
         branches: "main"
 
+      - id: antithesis
+        label: ":rust: Antithesis run"
+        command: bin/ci-builder run stable ci/test/build-antithesis.sh
+        inputs:
+          - "*"
+        depends_on: []
+        timeout_in_minutes: 180
+        agents:
+          queue: l-builder-linux-x86_64
+        env:
+          CI_ANTITHESIS: 1
+          CI_ANTITHESIS_DURATION: 60
+        coverage: skip
+        sanitizer: skip
+        branches: "main"
+
       - id: build-rust-latest-beta
         label: "Build with Latest Rust Beta"
         command: bin/ci-builder run stable ci/test/rust-beta-build.sh

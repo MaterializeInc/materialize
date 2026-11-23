@@ -85,8 +85,15 @@ snouty launch --launcher basic_k8s_test \
     --config-image "$(jq -r .config antithesis-images.json)" \
     --param "antithesis.images=$(jq -r 'del(.config) | [.[]] | join(";")' antithesis-images.json)" \
     --fault-tolerance high_availability --fault-exclusions '^driver$' \
+    --param antithesis.setup_timeout=10 \
     --duration 60m --test-name "materialize k8s harness"
 ```
+
+Setup takes about five minutes of wall-clock time, longer than the default limit.
+
+Nightly on `main` does the same and launches a 1 h run through the Antithesis
+API, with the key in the CI secret `ANTITHESIS_API_KEY`. Its reports share the
+source `main`, so each property has a history across nights.
 
 To check the manifests without pushing anything:
 
