@@ -15,6 +15,119 @@ use uuid::Uuid;
 use crate::durable::persist::{CATALOG_SEED, fetch_catalog_shard_version, shard_id};
 use crate::durable::{DurableCatalogError, TestCatalogStateBuilder, test_bootstrap_args};
 
+#[mz_ore::test]
+fn test_transaction_snapshot_refresh_and_decode_recovery() {
+    use std::sync::Arc;
+
+    use mz_ore::metrics::MetricsRegistry;
+    use mz_persist_types::ShardId;
+    use mz_repr::Diff;
+
+    use super::{
+        ApplyUpdate, CatalogStateInner, FenceableToken, Metrics, StateUpdate, StateUpdateKind,
+    };
+    use crate::durable::objects::Snapshot;
+    use crate::durable::objects::serialization::proto;
+    use crate::durable::transaction::TransactionSnapshot;
+
+    let setting = |value: &str| {
+        StateUpdateKind::Setting(
+            proto::SettingKey {
+                name: "refresh_test".into(),
+            },
+            proto::SettingValue {
+                value: value.into(),
+            },
+        )
+    };
+    let wal = |value: &str| {
+        StateUpdateKind::TxnWalShard(
+            (),
+            proto::TxnWalShardValue {
+                shard: value.into(),
+            },
+        )
+    };
+    let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
+    let mut fence = FenceableToken::new(None);
+    let mut state = CatalogStateInner::new();
+    let original = setting("original");
+    let trace = vec![(original.clone(), 1.into(), Diff::ONE)];
+    let base = state
+        .transaction_snapshot(&trace)
+        .expect("initialize cache");
+    drop(base);
+    let mut apply = |state: &mut CatalogStateInner, kind, diff| {
+        state
+            .apply_update(
+                StateUpdate {
+                    kind,
+                    ts: 2.into(),
+                    diff,
+                },
+                &mut fence,
+                &metrics,
+            )
+            .expect("apply unfenced update");
+    };
+
+    let mut previous = original.clone();
+    for i in 0..100 {
+        let next = setting(&i.to_string());
+        apply(&mut state, previous, Diff::MINUS_ONE);
+        apply(&mut state, next.clone(), Diff::ONE);
+        assert_eq!(state.transaction_updates.len(), 2);
+        previous = next;
+    }
+    apply(&mut state, previous, Diff::MINUS_ONE);
+    apply(&mut state, original.clone(), Diff::ONE);
+    assert!(state.transaction_updates.is_empty());
+    let valid_wal = wal(&ShardId::new().to_string());
+    apply(&mut state, valid_wal.clone(), Diff::ONE);
+    apply(&mut state, valid_wal.clone(), Diff::MINUS_ONE);
+    assert!(state.transaction_updates.is_empty());
+
+    let replacement = setting("replacement");
+    apply(&mut state, original, Diff::MINUS_ONE);
+    apply(&mut state, replacement.clone(), Diff::ONE);
+    let malformed = wal("invalid-shard-id");
+    apply(&mut state, malformed.clone(), Diff::ONE);
+    let corrupt = vec![
+        (replacement.clone(), 2.into(), Diff::ONE),
+        (malformed.clone(), 2.into(), Diff::ONE),
+    ];
+    assert!(state.transaction_snapshot(&corrupt).is_err());
+    assert!(state.transaction_snapshot.is_none());
+    assert!(state.transaction_updates.is_empty());
+    assert!(state.transaction_snapshot(&corrupt).is_err());
+
+    apply(&mut state, malformed, Diff::MINUS_ONE);
+    apply(&mut state, valid_wal.clone(), Diff::ONE);
+    let repaired = vec![
+        (replacement, 3.into(), Diff::ONE),
+        (valid_wal.clone(), 3.into(), Diff::ONE),
+    ];
+    let mut expected = Snapshot::empty();
+    expected.settings.insert(
+        proto::SettingKey {
+            name: "refresh_test".into(),
+        },
+        proto::SettingValue {
+            value: "replacement".into(),
+        },
+    );
+    let StateUpdateKind::TxnWalShard((), value) = valid_wal else {
+        unreachable!()
+    };
+    expected.txn_wal_shard.insert((), value);
+    assert_eq!(
+        state
+            .transaction_snapshot(&repaired)
+            .expect("rebuild repaired cache"),
+        TransactionSnapshot::try_from(expected).expect("decode expected snapshot")
+    );
+}
+
 /// Test that the catalog forces users to upgrade one major version at a time.
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`

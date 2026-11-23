@@ -316,6 +316,66 @@ async fn test_dry_run_fork_preserves_parent_commit() {
 }
 
 #[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn test_transaction_snapshot_tracks_commits_not_aborts() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let mut state = TestCatalogStateBuilder::new(persist_client)
+        .with_default_deploy_generation()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    let _ = state.sync_to_current_updates().await.unwrap();
+    let captured = state.snapshot().await.unwrap();
+
+    for value in [Some("first"), Some("replacement"), None] {
+        let mut txn = state.transaction().await.unwrap();
+        txn.set_setting("snapshot_test".into(), value.map(str::to_owned))
+            .unwrap();
+        txn.get_and_increment_id_by(USER_ITEM_ALLOC_KEY.into(), 1)
+            .unwrap();
+        let expected = txn.current_snapshot();
+        let _ = txn.get_and_commit_op_updates();
+        let ts = txn.upper();
+        txn.commit(ts).await.unwrap();
+        assert_eq!(state.snapshot().await.unwrap(), expected);
+
+        let mut txn = state.transaction().await.unwrap();
+        assert_eq!(txn.current_snapshot(), expected);
+        txn.set_setting("snapshot_test".into(), Some("aborted".into()))
+            .unwrap();
+        txn.get_and_increment_id_by(USER_ITEM_ALLOC_KEY.into(), 10)
+            .unwrap();
+        let _ = txn.get_and_commit_op_updates();
+        drop(txn);
+        assert_eq!(
+            state.transaction().await.unwrap().current_snapshot(),
+            expected
+        );
+        assert_eq!(state.snapshot().await.unwrap(), expected);
+
+        let dry_run = state.transaction_from_snapshot(captured.clone()).unwrap();
+        assert_eq!(dry_run.current_snapshot(), captured);
+    }
+
+    let mut malformed = captured;
+    malformed.txn_wal_shard.insert(
+        (),
+        proto::TxnWalShardValue {
+            shard: "invalid-shard-id".into(),
+        },
+    );
+    assert!(state.transaction_from_snapshot(malformed).is_err());
+    let expected = state.snapshot().await.unwrap();
+    assert_eq!(
+        state.transaction().await.unwrap().current_snapshot(),
+        expected
+    );
+    Box::new(state).expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_advance_upper_at_least_semantics() {
     let persist_client = PersistClient::new_for_tests().await;
@@ -1362,7 +1422,7 @@ async fn test_item_metadata(state_builder: TestCatalogStateBuilder) {
     let commit_ts = txn.upper();
     txn.commit(commit_ts).await.unwrap();
     assert_eq!(
-        recorded(state.snapshot().await.unwrap()),
+        recorded(state.transaction().await.unwrap().current_snapshot()),
         (
             vec![ItemColumns {
                 id: table,
@@ -1397,7 +1457,7 @@ async fn test_item_metadata(state_builder: TestCatalogStateBuilder) {
     let commit_ts = txn.upper();
     txn.commit(commit_ts).await.unwrap();
     assert_eq!(
-        recorded(state.snapshot().await.unwrap()),
+        recorded(state.transaction().await.unwrap().current_snapshot()),
         (
             vec![ItemColumns {
                 id: table,
@@ -1417,7 +1477,10 @@ async fn test_item_metadata(state_builder: TestCatalogStateBuilder) {
     let _ = txn.get_and_commit_op_updates();
     let commit_ts = txn.upper();
     txn.commit(commit_ts).await.unwrap();
-    assert_eq!(recorded(state.snapshot().await.unwrap()), (vec![], vec![]));
+    assert_eq!(
+        recorded(state.transaction().await.unwrap().current_snapshot()),
+        (vec![], vec![])
+    );
 
     Box::new(state).expire().await;
 }

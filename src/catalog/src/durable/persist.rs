@@ -60,7 +60,7 @@ use crate::durable::objects::state_update::{
     TryIntoStateUpdateKind,
 };
 use crate::durable::objects::{AuditLogKey, FenceToken, Snapshot};
-use crate::durable::transaction::TransactionBatch;
+use crate::durable::transaction::{TransactionBatch, TransactionSnapshot};
 use crate::durable::upgrade::upgrade;
 use crate::durable::{
     BootstrapArgs, CATALOG_CONTENT_VERSION_KEY, CatalogError, DryRunTransaction,
@@ -1627,6 +1627,11 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
 /// Applies updates for an opened catalog.
 #[derive(Debug)]
 struct CatalogStateInner {
+    // Decoding stays fallible at transaction entry, including for collections that
+    // do not produce adapter updates. Consolidating pending changes bounds retained
+    // history when a read-only handle synchronizes without opening transactions.
+    transaction_snapshot: Option<TransactionSnapshot>,
+    transaction_updates: BTreeMap<StateUpdateKind, Diff>,
     /// A trace of all catalog updates that can be consumed by some higher layer.
     updates: VecDeque<memory::objects::StateUpdate>,
 }
@@ -1634,8 +1639,40 @@ struct CatalogStateInner {
 impl CatalogStateInner {
     fn new() -> CatalogStateInner {
         CatalogStateInner {
+            transaction_snapshot: None,
+            transaction_updates: BTreeMap::new(),
             updates: VecDeque::new(),
         }
+    }
+
+    fn transaction_snapshot(
+        &mut self,
+        trace: &[(StateUpdateKind, Timestamp, Diff)],
+    ) -> Result<TransactionSnapshot, TryFromProtoError> {
+        // Decode only updates since the preceding transaction. On a decoding error,
+        // discard the candidate so the next attempt rebuilds from the authoritative trace.
+        let snapshot = match self.transaction_snapshot.take() {
+            Some(mut snapshot) => {
+                let mut updates: Vec<_> = std::mem::take(&mut self.transaction_updates)
+                    .into_iter()
+                    .collect();
+                // Replacements retract the old value before inserting the new one.
+                updates.sort_by_key(|(_, diff)| *diff);
+                for (kind, diff) in updates {
+                    snapshot.apply(&kind, diff)?;
+                }
+                snapshot
+            }
+            None => {
+                let mut snapshot = TransactionSnapshot::default();
+                for (kind, _, diff) in trace {
+                    snapshot.apply(kind, *diff)?;
+                }
+                snapshot
+            }
+        };
+        self.transaction_snapshot = Some(snapshot.clone());
+        Ok(snapshot)
     }
 }
 
@@ -1670,11 +1707,27 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
                 current_fence_token.maybe_fence(token)?;
                 Ok(None)
             }
-            (kind, diff) => Ok(Some(StateUpdate {
-                kind,
-                ts: update.ts,
-                diff,
-            })),
+            (kind, diff) => {
+                if self.transaction_snapshot.is_some() {
+                    use std::collections::btree_map::Entry;
+                    match self.transaction_updates.entry(kind.clone()) {
+                        Entry::Vacant(entry) => {
+                            entry.insert(diff);
+                        }
+                        Entry::Occupied(mut entry) => {
+                            *entry.get_mut() += diff;
+                            if *entry.get() == Diff::ZERO {
+                                entry.remove();
+                            }
+                        }
+                    }
+                }
+                Ok(Some(StateUpdate {
+                    kind,
+                    ts: update.ts,
+                    diff,
+                }))
+            }
         }
     }
 }
@@ -1690,14 +1743,22 @@ impl PersistHandle<StateUpdateKind, CatalogStateInner> {
     /// Creates a transaction without validating pending catalog updates.
     async fn transaction_unchecked(&mut self) -> Result<Transaction<'_>, CatalogError> {
         self.metrics.transactions_started.inc();
-        let snapshot = self.snapshot().await?;
+        self.sync_to_current_upper().await?;
+        let snapshot = {
+            let _timer = self
+                .metrics
+                .transaction_step_seconds
+                .with_label_values(&["snapshot_build", "durable"])
+                .start_timer();
+            self.update_applier.transaction_snapshot(&self.snapshot)?
+        };
         let commit_ts = self.upper;
         let _timer = self
             .metrics
             .transaction_step_seconds
             .with_label_values(&["transaction_init", "durable"])
             .start_timer();
-        Transaction::new(self, snapshot, commit_ts)
+        Ok(Transaction::from_shared(self, snapshot, commit_ts))
     }
 }
 
