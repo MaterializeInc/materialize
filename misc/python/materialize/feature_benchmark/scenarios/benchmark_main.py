@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 import random
 import re
+import time
 import uuid
 from math import ceil, floor
 from pathlib import Path
@@ -516,6 +517,170 @@ class CopyFromS3(DML):
   /* B */
 {n}
 """)
+
+
+def _envd_metrics(executor) -> dict[str, float]:
+    """Unlabeled metric samples from environmentd's internal HTTP endpoint."""
+    out = executor._composition.exec(
+        "materialized", "curl", "-s", "localhost:6878/metrics", capture=True
+    ).stdout
+    metrics: dict[str, float] = {}
+    for line in out.splitlines():
+        if line.startswith("#") or "{" in line:
+            continue
+        parts = line.split()
+        if len(parts) == 2:
+            try:
+                metrics[parts[0]] = float(parts[1])
+            except ValueError:
+                pass
+    return metrics
+
+
+def _compactions_in_flight(metrics: dict[str, float]) -> float:
+    def get(name: str) -> float:
+        return metrics.get(f"mz_persist_compaction_{name}", 0.0)
+
+    queued = get("requested") - get("dropped") - get("disabled") - get("skipped")
+    done = get("applied") + get("failed") + get("timed_out") + get("noop")
+    return max(queued - get("started"), 0.0) + max(get("started") - done, 0.0)
+
+
+class CompactionMemory(ScenarioBig):
+    """Compact table batches that COPY INTO ... FROM S3 writes, and report environmentd's peak
+    memory during compaction. The low-cardinality text columns are dictionary encoded, so the
+    decoded data is much larger than the encoded parts that the compaction memory budget counts.
+
+    The memory that every scenario reports is read after an iteration and misses compaction's
+    transient peak. Each iteration appends three copies of the same data to a fresh table, waits
+    until environmentd has no compaction in flight, and prints a `COMPACTION-MEMORY` line with
+    the cgroup `memory.peak` of the environmentd container, which grows monotonically over the
+    container's lifetime. The wallclock covers the copies and the compactions they trigger.
+
+    Run it with `--other-tag=current-source` and the same persist sizing on both sides,
+    for example
+    `persist_blob_target_size=16777216;persist_compaction_memory_bound_bytes=134217728`,
+    so that only the parameters under test differ.
+    """
+
+    FIXED_SCALE = True  # The memory effect needs a minimum number of parts per batch.
+    COPIES = 3
+
+    def __init__(
+        self, scale: float, mz_version: MzVersion, default_size: int, seed: int
+    ) -> None:
+        super().__init__(scale, mz_version, default_size, seed)
+        self._s3_path = f"s3://copytos3/benchmark/compaction_memory/{uuid.uuid4()}"
+
+    def n(self) -> int:
+        return 2_000_000
+
+    def version(self) -> ScenarioVersion:
+        return ScenarioVersion.create(1, 0, 0)
+
+    def init(self) -> Action:
+        n = self.n()
+        # Generate rows from a cross join of tables, not from a literal generate_series,
+        # which the constant optimizer folds in environmentd. f1 is a permutation of 0..n,
+        # so rows arrive unsorted.
+        digits = " CROSS JOIN ".join(f"compaction_memory_ten AS d{i}" for i in range(6))
+        i = " + ".join([f"d{k}.f1 * {10**k}" for k in range(6)] + ["h.f1 * 1000000"])
+        return TdAction(f"""
+> CREATE SECRET compaction_memory_secret AS '${{arg.aws-secret-access-key}}'
+
+> CREATE CONNECTION compaction_memory_conn TO AWS (
+    ACCESS KEY ID = '${{arg.aws-access-key-id}}',
+    SECRET ACCESS KEY = SECRET compaction_memory_secret,
+    ENDPOINT = '${{arg.aws-endpoint}}',
+    REGION = 'us-east-1'
+  )
+
+> CREATE TABLE compaction_memory_ten (f1 BIGINT)
+
+> INSERT INTO compaction_memory_ten VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9)
+
+> CREATE TABLE compaction_memory_halves (f1 BIGINT)
+
+> INSERT INTO compaction_memory_halves VALUES (0), (1)
+
+> CREATE VIEW compaction_memory_src AS
+  SELECT
+    (i * 7919) % {n} AS f1,
+    'category-' || (i % 16) || '-' || repeat('x', 40) AS f2,
+    'status-' || (i % 5) || '-' || repeat('y', 40) AS f3,
+    i % 1000 AS f4
+  FROM (
+    SELECT {i} AS i
+    FROM {digits} CROSS JOIN compaction_memory_halves AS h
+  )
+
+> COPY (SELECT * FROM compaction_memory_src) TO '{self._s3_path}'
+  WITH (AWS CONNECTION = compaction_memory_conn, FORMAT = 'csv')
+""")
+
+    def before(self) -> Action:
+        return TdAction("""
+> DROP TABLE IF EXISTS compaction_memory_t
+
+> CREATE TABLE compaction_memory_t (f1 BIGINT, f2 TEXT, f3 TEXT, f4 INTEGER)
+""")
+
+    def benchmark(self) -> BenchmarkingSequence:
+        n = self.n()
+        copies = "\n".join(f"""
+> COPY INTO compaction_memory_t FROM '{self._s3_path}'
+  (FORMAT CSV, AWS CONNECTION = compaction_memory_conn)
+""" for _ in range(self.COPIES))
+
+        def wait_for_compaction(executor) -> None:
+            # Compaction requests follow the appends asynchronously, so require the
+            # in-flight count to stay at zero for a few polls.
+            deadline = time.time() + 900
+            idle_polls = 0
+            while idle_polls < 5:
+                assert time.time() < deadline, "compaction did not quiesce"
+                time.sleep(1)
+                metrics = _envd_metrics(executor)
+                idle_polls = (
+                    idle_polls + 1 if _compactions_in_flight(metrics) == 0 else 0
+                )
+            peak = executor._composition.exec(
+                "materialized", "cat", "/sys/fs/cgroup/memory.peak", capture=True
+            ).stdout.strip()
+            current = executor._composition.exec(
+                "materialized", "cat", "/sys/fs/cgroup/memory.current", capture=True
+            ).stdout.strip()
+            fields = {
+                "memory_peak_bytes": peak,
+                "memory_current_bytes": current,
+            }
+            for name in [
+                "mz_persist_compaction_seconds",
+                "mz_persist_compaction_applied",
+                "mz_persist_compaction_timed_out",
+                "mz_persist_compaction_memory_violations",
+                "mz_persist_compaction_runs_compacted",
+                "mz_persist_compaction_chunks_compacted",
+                "mz_persist_compaction_parts_waited",
+                "mz_persist_compaction_parts_prefetched",
+            ]:
+                fields[name] = str(metrics.get(name))
+            print(
+                "COMPACTION-MEMORY "
+                + " ".join(f"{name}={value}" for name, value in fields.items())
+            )
+
+        return [
+            Td(f"""
+> SELECT 1
+  /* A */
+1
+{copies}
+> SELECT count(*) FROM compaction_memory_t
+{n * self.COPIES}
+"""),
+            Lambda(wait_for_compaction),
+        ]
 
 
 class Dataflow(Scenario):
