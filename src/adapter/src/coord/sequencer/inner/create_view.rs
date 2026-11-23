@@ -442,6 +442,7 @@ impl Coordinator {
                         None
                     },
                     resolved_ids: resolved_ids.clone(),
+                    function_body_ids: ResolvedIds::empty(),
                     dependencies: dependencies.clone(),
                 }),
                 owner_id: *session.current_role_id(),

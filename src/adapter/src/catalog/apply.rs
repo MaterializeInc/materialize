@@ -2186,6 +2186,7 @@ impl CatalogState {
             ),
             conn_id: None,
             resolved_ids: [(log_item_id, log_global_id)].into_iter().collect(),
+            function_body_ids: ResolvedIds::empty(),
             cluster_id,
             is_retained_metrics_object: false,
             custom_logical_compaction_window: None,

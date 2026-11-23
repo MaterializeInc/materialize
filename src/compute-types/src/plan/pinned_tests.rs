@@ -230,6 +230,10 @@ impl PinningContext for NoInlinedBuiltins {
     fn inlined_builtins(&self, _id: GlobalId) -> Result<BTreeSet<InlinedBuiltin>, PinError> {
         Ok(BTreeSet::new())
     }
+
+    fn index_key_builtins(&self, _id: GlobalId) -> Result<BTreeSet<InlinedBuiltin>, PinError> {
+        Ok(BTreeSet::new())
+    }
 }
 
 fn instantiate(df: &LirDataflowDescription, ctx: &Ctx) -> LirDataflowDescription {
@@ -783,12 +787,35 @@ fn index_import_drift_is_detected() {
     }
 }
 
-/// A pinning context that knows only the given exports.
-struct Builtins(BTreeMap<GlobalId, BTreeSet<InlinedBuiltin>>);
+/// A pinning context that knows only the given exports and imported indexes.
+struct Builtins {
+    exports: BTreeMap<GlobalId, BTreeSet<InlinedBuiltin>>,
+    index_keys: BTreeMap<GlobalId, BTreeSet<InlinedBuiltin>>,
+}
+
+impl Builtins {
+    /// Knows `exports`, and `IMPORTED_INDEX` with a key that inlines nothing.
+    fn exports(exports: impl IntoIterator<Item = (GlobalId, BTreeSet<InlinedBuiltin>)>) -> Self {
+        Builtins {
+            exports: exports.into_iter().collect(),
+            index_keys: BTreeMap::from([(IMPORTED_INDEX, BTreeSet::new())]),
+        }
+    }
+}
 
 impl PinningContext for Builtins {
     fn inlined_builtins(&self, id: GlobalId) -> Result<BTreeSet<InlinedBuiltin>, PinError> {
-        self.0.get(&id).cloned().ok_or(PinError::UnknownExport(id))
+        self.exports
+            .get(&id)
+            .cloned()
+            .ok_or(PinError::UnknownItem(id))
+    }
+
+    fn index_key_builtins(&self, id: GlobalId) -> Result<BTreeSet<InlinedBuiltin>, PinError> {
+        self.index_keys
+            .get(&id)
+            .cloned()
+            .ok_or(PinError::UnknownItem(id))
     }
 }
 
@@ -807,10 +834,10 @@ fn pin_records_inlined_builtins_of_every_export() {
         schema: "pg_catalog".to_string(),
         name: "regexp_split_to_table".to_string(),
     };
-    let ctx = Builtins(BTreeMap::from([(
+    let ctx = Builtins::exports([(
         MV_SINK,
         BTreeSet::from([builtin_func("date_bin_hopping"), regexp_split.clone()]),
-    )]));
+    )]);
     let pinned = PinnedDataflow::pin(materialized_view_dataflow(), &ctx).unwrap();
     assert_eq!(
         pinned.inlined_builtins,
@@ -820,13 +847,30 @@ fn pin_records_inlined_builtins_of_every_export() {
     let parsed: PinnedDataflow = serde_json::from_str(&json).expect("parses back");
     assert_eq!(parsed, pinned);
 
-    let ctx = Builtins(BTreeMap::from([(
-        INDEX,
-        BTreeSet::from([builtin_func("pg_encoding_to_char")]),
-    )]));
+    let ctx = Builtins::exports([(INDEX, BTreeSet::from([builtin_func("pg_encoding_to_char")]))]);
     let pinned = PinnedDataflow::pin(index_dataflow(), &ctx).unwrap();
     assert_eq!(
         pinned.inlined_builtins,
         BTreeSet::from([builtin_func("pg_encoding_to_char")])
+    );
+}
+
+#[mz_ore::test]
+fn pin_records_inlined_builtins_of_imported_index_keys() {
+    let mut ctx = Builtins::exports([(MV_SINK, BTreeSet::new())]);
+    ctx.index_keys.insert(
+        IMPORTED_INDEX,
+        BTreeSet::from([builtin_func("pg_encoding_to_char")]),
+    );
+    let pinned = PinnedDataflow::pin(materialized_view_dataflow(), &ctx).unwrap();
+    assert_eq!(
+        pinned.inlined_builtins,
+        BTreeSet::from([builtin_func("pg_encoding_to_char")])
+    );
+
+    ctx.index_keys.clear();
+    assert_eq!(
+        PinnedDataflow::pin(materialized_view_dataflow(), &ctx),
+        Err(PinError::UnknownItem(IMPORTED_INDEX))
     );
 }

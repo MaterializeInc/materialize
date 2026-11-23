@@ -247,14 +247,24 @@ pub enum PinnedSinkKind {
 /// What [`PinnedDataflow::pin`] needs from its environment.
 pub trait PinningContext {
     /// The builtins planning may have inlined into the catalog item exported
-    /// under `id`, found through its dependencies and the views among them.
+    /// under `id`, found through its dependencies, the user views among them,
+    /// and the bodies of the SQL-defined functions they call.
     ///
-    /// Fails with [`PinError::UnknownExport`] when no catalog item is exported
-    /// under `id`, with [`PinError::BuiltinRelation`] when the item, or a
-    /// user view it reads, depends on a builtin relation, and with
-    /// [`PinError::UnstableDependency`] when the item, or
-    /// a user view it reads, references an unstable builtin.
+    /// Fails with [`PinError::UnknownItem`] when no catalog item is exported
+    /// under `id`, with [`PinError::BuiltinRelation`] when any of those
+    /// depends on a builtin relation, and with
+    /// [`PinError::UnstableDependency`] when any of them references an
+    /// unstable builtin.
     fn inlined_builtins(&self, id: GlobalId) -> Result<BTreeSet<InlinedBuiltin>, PinError>;
+
+    /// The builtins inlined into the key of the index imported under `id`.
+    ///
+    /// A plan that reads an index copies its key expression into the import,
+    /// but not the indexed relation's definition, so only the key matters.
+    /// Fails with [`PinError::UnknownItem`] when no index exists under `id`,
+    /// and with [`PinError::UnstableDependency`] when the key references an
+    /// unstable builtin.
+    fn index_key_builtins(&self, id: GlobalId) -> Result<BTreeSet<InlinedBuiltin>, PinError>;
 }
 
 /// Why a `DataflowDescription` could not be pinned.
@@ -276,8 +286,8 @@ pub enum PinError {
     NoExports,
     /// The dataflow imports or exports the builtin collection under this id.
     BuiltinCollection(GlobalId),
-    /// The pinning context knows no catalog item exported under this id.
-    UnknownExport(GlobalId),
+    /// The pinning context knows no catalog item under this id.
+    UnknownItem(GlobalId),
     /// The exported item, or a user view it reads, references a builtin
     /// relation.
     BuiltinRelation {
@@ -322,8 +332,8 @@ impl fmt::Display for PinError {
                     "a dataflow that reads or writes builtin collection {id} cannot be pinned"
                 )
             }
-            PinError::UnknownExport(id) => {
-                write!(f, "no catalog item is exported under {id}")
+            PinError::UnknownItem(id) => {
+                write!(f, "no catalog item exists under {id}")
             }
             PinError::BuiltinRelation { export, relation } => {
                 write!(
@@ -409,7 +419,7 @@ impl PinnedDataflow {
             })
             .collect();
 
-        let index_imports = index_imports
+        let index_imports: BTreeMap<_, _> = index_imports
             .into_iter()
             .map(|(id, import)| {
                 let IndexImport {
@@ -482,6 +492,9 @@ impl PinnedDataflow {
         let mut inlined_builtins = BTreeSet::new();
         for id in index_exports.keys().chain(sink_exports.keys()) {
             inlined_builtins.extend(ctx.inlined_builtins(*id)?);
+        }
+        for id in index_imports.keys() {
+            inlined_builtins.extend(ctx.index_key_builtins(*id)?);
         }
 
         Ok(PinnedDataflow {

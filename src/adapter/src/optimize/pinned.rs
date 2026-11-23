@@ -116,53 +116,121 @@ impl PinningContext for CatalogState {
     fn inlined_builtins(&self, id: GlobalId) -> Result<BTreeSet<InlinedBuiltin>, PinError> {
         let exported = self
             .try_get_entry_by_global_id(&id)
-            .ok_or(PinError::UnknownExport(id))?;
-        let full_name = |entry: &CatalogEntry| self.resolve_full_name(entry.name(), None);
+            .ok_or(PinError::UnknownItem(id))?;
         let mut builtins = BTreeSet::new();
         let mut seen = BTreeSet::new();
-        // Every item visited is referenced by the export or by a user view it
-        // reads, since the walk recurses only through user views.
-        let mut todo = exported.uses().into_iter().collect::<Vec<_>>();
+        // The export and the user views it reads, directly or through other
+        // user views, are what planning inlines. Every other item reached is
+        // referenced by one of them.
+        let mut todo = vec![exported.id()];
         while let Some(item_id) = todo.pop() {
             if !seen.insert(item_id) {
                 continue;
             }
             let entry = self.get_entry(&item_id);
-            // The builtin registry leaves out unstable builtins, see its module
-            // docs. A user item can reference one only with
-            // `unsafe_enable_unstable_dependencies`, see
-            // `CatalogState::check_unstable_dependencies`.
-            if self.is_unstable_schema_specifier(entry.name().qualifiers.schema_spec) {
-                return Err(PinError::UnstableDependency {
+            let inlined = item_id == exported.id()
+                || (!item_id.is_system() && matches!(entry.item(), CatalogItem::View(_)));
+            if inlined {
+                todo.extend(entry.uses());
+                self.inlined_function_bodies(id, entry, &mut builtins)?;
+                continue;
+            }
+            self.check_referenced_builtin(id, entry, &mut builtins)?;
+            if item_id.is_system() && entry.is_relation() {
+                return Err(PinError::BuiltinRelation {
                     export: id,
-                    dependency: full_name(entry).to_string(),
+                    relation: self.full_name(entry),
                 });
             }
-            if item_id.is_system() {
-                if entry.is_relation() {
-                    return Err(PinError::BuiltinRelation {
-                        export: id,
-                        relation: full_name(entry).to_string(),
-                    });
-                }
-                if let CatalogItem::Func(func) = entry.item() {
-                    if func.inner.func_impls().iter().any(|imp| imp.sql.is_some()) {
-                        let name = full_name(entry);
-                        builtins.insert(InlinedBuiltin {
-                            kind: InlinedBuiltinKind::Func,
-                            schema: name.schema,
-                            name: name.item,
-                        });
-                    }
-                }
-            } else if let CatalogItem::View(_) = entry.item() {
-                // Planning inlines the views a plan reads. Anything else it
-                // reads, including another index or materialized view, is an
-                // import with its own plan, so the walk stops there.
-                todo.extend(entry.uses());
-            }
+            // Anything else, including another index or materialized view, is
+            // an import with its own plan, so the walk stops here.
         }
         Ok(builtins)
+    }
+
+    fn index_key_builtins(&self, id: GlobalId) -> Result<BTreeSet<InlinedBuiltin>, PinError> {
+        let entry = self
+            .try_get_entry_by_global_id(&id)
+            .filter(|entry| entry.index().is_some())
+            .ok_or(PinError::UnknownItem(id))?;
+        let mut builtins = BTreeSet::new();
+        // The index's references are the indexed object, which the reader
+        // imports as an arrangement and does not inline, and the functions in
+        // its key, which the reader does inline.
+        for item_id in entry.references().items() {
+            let referenced = self.get_entry(item_id);
+            if !referenced.is_relation() {
+                self.check_referenced_builtin(id, referenced, &mut builtins)?;
+            }
+        }
+        self.inlined_function_bodies(id, entry, &mut builtins)?;
+        Ok(builtins)
+    }
+}
+
+impl CatalogState {
+    fn full_name(&self, entry: &CatalogEntry) -> String {
+        self.resolve_full_name(entry.name(), None).to_string()
+    }
+
+    /// Rejects `referenced` if it is unstable, and records it if it is a
+    /// SQL-defined builtin function.
+    fn check_referenced_builtin(
+        &self,
+        export: GlobalId,
+        referenced: &CatalogEntry,
+        builtins: &mut BTreeSet<InlinedBuiltin>,
+    ) -> Result<(), PinError> {
+        // The builtin registry leaves out unstable builtins, see its module
+        // docs. A user item can reference one directly only with
+        // `unsafe_enable_unstable_dependencies`, see
+        // `CatalogState::check_unstable_dependencies`, but a function body can
+        // reference one regardless.
+        if self.is_unstable_schema_specifier(referenced.name().qualifiers.schema_spec) {
+            return Err(PinError::UnstableDependency {
+                export,
+                dependency: self.full_name(referenced),
+            });
+        }
+        if let CatalogItem::Func(func) = referenced.item() {
+            if referenced.id().is_system()
+                && func.inner.func_impls().iter().any(|imp| imp.sql.is_some())
+            {
+                let name = self.resolve_full_name(referenced.name(), None);
+                builtins.insert(InlinedBuiltin {
+                    kind: InlinedBuiltinKind::Func,
+                    schema: name.schema,
+                    name: name.item,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Checks what planning resolved inside the bodies of the SQL-defined
+    /// functions `entry` calls, transitively.
+    fn inlined_function_bodies(
+        &self,
+        export: GlobalId,
+        entry: &CatalogEntry,
+        builtins: &mut BTreeSet<InlinedBuiltin>,
+    ) -> Result<(), PinError> {
+        for item_id in entry.item().function_body_references().items() {
+            let referenced = self.get_entry(item_id);
+            self.check_referenced_builtin(export, referenced, builtins)?;
+            // A builtin relation read in a body usually makes the plan import
+            // it, and `PinnedDataflow::pin` refuses builtin imports anyway.
+            // Constant folding can remove the read, though, so refuse on the
+            // reference, which keeps the rule that nothing depending on a
+            // builtin relation is pinned.
+            if referenced.is_relation() {
+                return Err(PinError::BuiltinRelation {
+                    export,
+                    relation: self.full_name(referenced),
+                });
+            }
+        }
+        Ok(())
     }
 }
 

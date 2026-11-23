@@ -1466,6 +1466,11 @@ pub struct View {
     pub conn_id: Option<ConnectionId>,
     /// Other catalog objects that are referenced by this view, determined at name resolution.
     pub resolved_ids: ResolvedIds,
+    /// Catalog objects resolved inside the bodies of the SQL-defined functions
+    /// this item calls, transitively. Set when the catalog parses `create_sql`,
+    /// which is how every stored item enters it. See
+    /// [`CatalogItem::function_body_references`].
+    pub function_body_ids: ResolvedIds,
     /// All of the catalog objects that are referenced by this view.
     pub dependencies: DependencyIds,
 }
@@ -1492,6 +1497,11 @@ pub struct MaterializedView {
     pub desc: VersionedRelationDesc,
     /// Other catalog items that this materialized view references, determined at name resolution.
     pub resolved_ids: ResolvedIds,
+    /// Catalog objects resolved inside the bodies of the SQL-defined functions
+    /// this item calls, transitively. Set when the catalog parses `create_sql`,
+    /// which is how every stored item enters it. See
+    /// [`CatalogItem::function_body_references`].
+    pub function_body_ids: ResolvedIds,
     /// All of the catalog objects that are referenced by this view.
     pub dependencies: DependencyIds,
     /// ID of the materialized view this materialized view is intended to replace.
@@ -1619,6 +1629,7 @@ impl MaterializedView {
             locally_optimized_expr: replacement.locally_optimized_expr,
             desc: replacement.desc,
             resolved_ids,
+            function_body_ids: replacement.function_body_ids,
             dependencies,
             replacement_target: None,
             cluster_id: replacement.cluster_id,
@@ -1648,6 +1659,11 @@ pub struct Index {
     pub conn_id: Option<ConnectionId>,
     /// Other catalog objects referenced by this index, e.g. the object we're indexing.
     pub resolved_ids: ResolvedIds,
+    /// Catalog objects resolved inside the bodies of the SQL-defined functions
+    /// this item calls, transitively. Set when the catalog parses `create_sql`,
+    /// which is how every stored item enters it. See
+    /// [`CatalogItem::function_body_references`].
+    pub function_body_ids: ResolvedIds,
     /// Cluster this index is installed on.
     pub cluster_id: ClusterId,
     /// Custom compaction window, e.g. set via `ALTER RETAIN HISTORY`.
@@ -2114,6 +2130,31 @@ impl CatalogItem {
             CatalogItem::Secret(_) => &*EMPTY,
             CatalogItem::Connection(connection) => &connection.resolved_ids,
             CatalogItem::MetricSink(metric_sink) => &metric_sink.resolved_ids,
+        }
+    }
+
+    /// Collects the identifiers of the objects resolved inside the bodies of the
+    /// SQL-defined functions this item calls, transitively.
+    ///
+    /// These are not dependencies, and [`CatalogItem::uses`] leaves them out:
+    /// the body of a builtin function may reference objects, including
+    /// unstable ones, that its callers do not depend on in any user-visible
+    /// way. Pinning reads them, because planning inlines those bodies.
+    pub fn function_body_references(&self) -> &ResolvedIds {
+        static EMPTY: LazyLock<ResolvedIds> = LazyLock::new(ResolvedIds::empty);
+        match self {
+            CatalogItem::Index(idx) => &idx.function_body_ids,
+            CatalogItem::View(view) => &view.function_body_ids,
+            CatalogItem::MaterializedView(mview) => &mview.function_body_ids,
+            CatalogItem::Func(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::Source(_)
+            | CatalogItem::Log(_)
+            | CatalogItem::Table(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connection(_)
+            | CatalogItem::MetricSink(_) => &*EMPTY,
         }
     }
 

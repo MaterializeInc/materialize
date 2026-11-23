@@ -30,11 +30,9 @@
 //!
 //! Builtin views are not recorded: pinning rejects a user item that depends on
 //! any builtin relation, see `PinError::BuiltinRelation`. Builtins in unstable
-//! schemas are left out too, and pinning rejects a user item that references
-//! one, see `PinError::UnstableDependency`. A pin does not record what a SQL
-//! body calls, so `mz-adapter`'s
-//! `sql_bodies_that_inline_builtins_read_a_collection` test checks that no
-//! pinnable plan can reach a builtin through one.
+//! schemas are left out too, and pinning rejects a user item that reaches one,
+//! including through the body of a SQL-defined function, see
+//! `PinError::UnstableDependency`.
 //!
 //! Three files in `tests/snapshots` hold the state, each with one compact
 //! JSON object per record so a changed builtin is a one-line diff:
