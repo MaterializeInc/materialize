@@ -12,10 +12,7 @@ import { differenceInDays } from "date-fns";
 import React from "react";
 import { Link } from "react-router-dom";
 
-import {
-  hasEnvironmentWritePermission,
-  useCurrentOrganization,
-} from "~/api/auth";
+import { hasBillingWritePermission, useCurrentOrganization } from "~/api/auth";
 import { AppConfigSwitch } from "~/config/AppConfigSwitch";
 import { User } from "~/external-library-wrappers/frontegg";
 import { useFlags } from "~/hooks/useFlags";
@@ -35,7 +32,7 @@ const FreeTrialNoticeContent = ({
 
   const flags = useFlags();
 
-  const isOrgAdmin = hasEnvironmentWritePermission(user);
+  const canManageBilling = hasBillingWritePermission(user);
 
   const isBillingEnabled = flags["billing-ui-3756"];
 
@@ -89,7 +86,7 @@ const FreeTrialNoticeContent = ({
         Have questions? <ScheduleDemoLink>Talk to our team</ScheduleDemoLink>.
       </Text>
 
-      {isBillingEnabled && isOrgAdmin && (
+      {isBillingEnabled && canManageBilling && (
         <Button
           mt="4"
           size="sm"

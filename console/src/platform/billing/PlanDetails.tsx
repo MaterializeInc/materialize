@@ -364,7 +364,7 @@ export const EvaluationPlanDetails = ({
             textAlign="center"
             as="i"
           >
-            Contact an organization admin to upgrade.
+            Contact an organization or billing admin to upgrade.
           </Text>
         )}
       </VStack>

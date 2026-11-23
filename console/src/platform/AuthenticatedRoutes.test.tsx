@@ -12,6 +12,11 @@ import React from "react";
 
 import { CloudAppConfig, SelfManagedAppConfig } from "~/config/AppConfig";
 import { appConfigAtom } from "~/config/store";
+import { dummyValidUser } from "~/external-library-wrappers/__mocks__/frontegg";
+import {
+  type ITeamUserPermission,
+  useAuthUser,
+} from "~/external-library-wrappers/frontegg";
 import {
   healthyEnvironment,
   renderComponent,
@@ -34,6 +39,9 @@ vi.mock("~/platform/query-history/QueryHistoryRoutes", () => ({
 vi.mock("~/platform/support/SupportPage", () => ({
   default: () => <div>Support page</div>,
 }));
+vi.mock("~/platform/billing/UsageRoutes", () => ({
+  default: () => <div>Usage page</div>,
+}));
 vi.mock("~/hooks/useFlags", () => ({
   useFlags: () => ({ "support-page-cns-147": true }),
 }));
@@ -42,6 +50,32 @@ const SELF_MANAGED_REGION_ID = "local/flexible-deployment";
 const SELF_MANAGED_REGION_SLUG = "local-flexible-deployment";
 
 describe("AuthenticatedRoutes", () => {
+  afterEach(() => {
+    vi.mocked(useAuthUser).mockReset();
+  });
+
+  it("sends a Billing Admin without environment access to usage", async () => {
+    vi.mocked(useAuthUser).mockReturnValue({
+      ...dummyValidUser,
+      permissions: [
+        { key: "materialize.invoice.read" },
+        { key: "materialize.billing.write" },
+      ] as ITeamUserPermission[],
+    });
+    await renderComponent(<AuthenticatedRoutes />, {
+      initialRouterEntries: ["/"],
+      initializeState: async ({ set }) => {
+        set(appConfigAtom, new CloudAppConfig());
+        await setFakeEnvironment(set, "aws/us-east-1", {
+          state: "disabled",
+          errors: [],
+        });
+      },
+    });
+
+    expect(await screen.findByText("Usage page")).toBeVisible();
+  });
+
   it("renders query history in self-managed deployments", async () => {
     await renderComponent(<AuthenticatedRoutes />, {
       initialRouterEntries: [

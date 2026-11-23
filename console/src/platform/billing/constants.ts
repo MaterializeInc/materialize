@@ -11,7 +11,7 @@ export const INVOICE_FETCH_ERROR_MESSAGE =
   "An error occurred loading invoices.";
 
 export const FORBIDDEN_PAYMENT_ERROR_MESSAGE =
-  "Only organization admins can manage payment methods. Contact an admin to make changes.";
+  "Only organization and billing admins can manage payment methods. Contact an admin to make changes.";
 
 export const ACCOUNT_SPEND_FETCH_ERROR_MESSAGE =
   "An error occurred loading your usage";

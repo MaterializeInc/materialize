@@ -81,6 +81,11 @@ export function hasInvoiceReadPermission(
   return hasPermission(user, "materialize.invoice.read");
 }
 
+/** Held by Organization Admins and Billing Admins. */
+export function hasBillingWritePermission(user: User | null): boolean {
+  return hasPermission(user, "materialize.billing.write");
+}
+
 export function isSuperUser(user: User | null): boolean {
   return !!user && Boolean(user.roles.find((r) => r.key === ADMIN_ROLE_KEY));
 }
@@ -238,9 +243,9 @@ export function useCanViewBilling({
     return false;
   }
 
-  const isOrgAdmin = hasEnvironmentWritePermission(runtimeConfig.user);
-
-  return !!flags["billing-ui-3756"] && isOrgAdmin;
+  return (
+    !!flags["billing-ui-3756"] && hasBillingWritePermission(runtimeConfig.user)
+  );
 }
 
 /**

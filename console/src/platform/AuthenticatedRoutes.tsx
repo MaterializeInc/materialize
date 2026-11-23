@@ -20,6 +20,7 @@ import {
 import { AppPasswordRoutes } from "~/access/AppPasswordRoutes";
 import { LicenseRoutes } from "~/access/license/LicenseRoutes";
 import {
+  hasEnvironmentReadPermission,
   hasInvoiceReadPermission,
   useMaybeCurrentOrganizationId,
 } from "~/api/auth";
@@ -120,6 +121,16 @@ const EnvironmentNotReadyRoutesWrapper = () => {
       cloudConfigElement={({ runtimeConfig }) => {
         if (runtimeConfig.isImpersonating) {
           return <RedirectToHome />;
+        }
+        // Billing Admins can't read regions, so every region would look
+        // unreachable. Send them to usage instead. Requiring invoice read
+        // avoids a loop, since the usage routes redirect home without it.
+        const { user } = runtimeConfig;
+        if (
+          !hasEnvironmentReadPermission(user) &&
+          hasInvoiceReadPermission(user)
+        ) {
+          return <Navigate to="/usage" replace />;
         }
         return (
           <RestrictIfBlocked>
