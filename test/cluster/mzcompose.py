@@ -6842,10 +6842,16 @@ def workflow_test_reconfiguration_lag_gate(c: Composition) -> None:
         SELECT i.id FROM mz_indexes i JOIN mz_tables t ON i.on_id = t.id
         WHERE t.name = 'lag_gate_table'
         """)[0][0]
+    # Hydration and frontier observations are published independently. Pausing
+    # the replacement before its first known frontier is visible can leave the
+    # lag comparison below without a target row, even though it is hydrated.
     wait_for(f"""
-        SELECT count(*) = 2 AND bool_and(hydrated)
-        FROM mz_internal.mz_compute_hydration_statuses
-        WHERE object_id = '{index_id}' AND replica_id IN ('{outgoing}', '{target}')
+        SELECT count(*) = 2 AND count(DISTINCT h.replica_id) = 2
+            AND bool_and(h.hydrated AND f.write_frontier IS NOT NULL)
+        FROM mz_internal.mz_compute_hydration_statuses h
+        JOIN mz_catalog.mz_cluster_replica_frontiers f USING (object_id, replica_id)
+        WHERE h.object_id = '{index_id}'
+          AND h.replica_id IN ('{outgoing}', '{target}')
         """)
 
     # The process orchestrator records each worker process in its service's

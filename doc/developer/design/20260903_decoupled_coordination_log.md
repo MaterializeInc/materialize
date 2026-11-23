@@ -6,12 +6,10 @@ Finish native-only M3 under the [prompt](20260903_decoupled_coordination_prompt.
 Preserve compatible full writers, explicit retirement, durable protection,
 adapter-owned policy, shared query transport and required formats. Keep the PR draft.
 
-**Next action:** diagnose the Cluster 4 lag-gate failure in CI 144537 and verify
-the fixture's observation preconditions. Hydration and native frontier publication
-are independent, so stopping a hydrated replica need not leave a published
-frontier for the lag comparison. Isolated debug and optimized runs passed, so
-this is not yet the established cause of that CI failure. Keep startup
-optimization proposals separate.
+**Next action:** revalidate the lag-gate fixture repair in fresh CI, then finish
+source and resource cleanup. Fault injection reproduced the missing-frontier
+race, and the strengthened setup passed with that same injection and ordinary
+debug and optimized binaries. Keep startup optimization proposals separate.
 
 ## Decisions in force
 
@@ -35,10 +33,12 @@ optimization proposals separate.
 
 - **CI.** [Build 144537](https://buildkite.com/materialize/test/builds/144537)
   failed Cluster 4 waiting for the outgoing index frontier to exceed the paused
-  replacement's frontier. CI captured no frontier rows at failure. Do not treat
-  passing isolated runs as a repair. Evidence: `ci-144537/` and
-  `cluster-lag-gate/`. Merge skew remains accepted and pre-native upgrade smoke
-  remains unsupported.
+  replacement's frontier. CI captured no frontier rows at failure. A delayed
+  publisher reproduced that assertion with both replicas hydrated but no target
+  frontier row. Requiring visible frontiers before SIGSTOP passes the same fault
+  without changing deadlines or lag/cutover assertions. Fresh CI remains pending.
+  Evidence: `ci-144537/` and `cluster-lag-gate/outcome.md`. Merge skew remains
+  accepted and pre-native upgrade smoke remains unsupported.
 - **Startup proposal.** Current debug cold startup reaches controller HTTP in
   19.81 s and SQL in 48.96 s. Ordinary builtin optimization costs about 15 CPU-s,
   mostly logical optimization. Exact metadata rules out simply enabling replica
@@ -103,9 +103,11 @@ scheduled for 2026-11-23 19:02:53 UTC. Recheck access and extend it.
 Scratch worktrees:
 
 - `/home/ubuntu/materialize-m3-final-head`: `c1b310c5` with the recorded five-file
-  ALTER SINK overlay and a diagnostic-only first-frontier-publication delay.
-  The delay's source receipt is in `cluster-lag-gate/publication-delay-source.json`.
-  Restore that owned patch before ordinary runs. The profiling overlay is removed.
+  ALTER SINK overlay and verified lag-gate fixture change. The diagnostic
+  first-publication delay is removed from source. Its receipt is in
+  `cluster-lag-gate/publication-delay-source.json`. The shared debug target is
+  being rebuilt without that delay. Use pinned artifacts until cleanup finishes.
+  The profiling overlay is removed.
   Current primary binaries are in `current-controller-baseline/artifacts/`.
   The scoped ALTER SINK binaries are in `alter-sink-overlap/artifacts-after/`,
   with separate source and binary receipts. They have targeted coverage, not a
