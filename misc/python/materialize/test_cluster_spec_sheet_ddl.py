@@ -79,3 +79,22 @@ def test_index_name_is_unqualified_and_identifiers_are_quoted():
         'CREATE INDEX "i""x" IN CLUSTER "cluster" ON "s""x"."base" (a)'
     )
     assert drop.as_string() == 'DROP INDEX "s""x"."i""x"'
+
+
+def test_index_clients_use_independent_tables_and_single_slots():
+    connections = [Connection(), Connection()]
+    available = iter(connections)
+    driver = DdlMeasurement(lambda: next(available), 2, "probe", "c", lambda _: None)
+    try:
+        with pytest.raises(ValueError, match="one slot"):
+            driver.run("index", "create", slots=2)
+        driver.run("index", "create")
+        driver.run("index", "drop")
+    finally:
+        driver.close()
+    for worker, connection in enumerate(connections):
+        assert connection.statements[1] == (
+            f'CREATE INDEX "probe_{worker}_0" IN CLUSTER "c" '
+            f'ON "probe"."index_base_{worker}" (a)'
+        )
+        assert connection.statements[2] == f'DROP INDEX "probe"."probe_{worker}_0"'

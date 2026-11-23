@@ -2671,6 +2671,10 @@ class DdlCatalogScalingScenario(EnvdObjectsScalabilityScenario):
         super().init(runner)
         runner.run_query(f"CREATE SCHEMA {self.PROBE_SCHEMA}")
         runner.run_query(f"CREATE TABLE {self.PROBE_SCHEMA}.base (a int, b text)")
+        for worker in range(max(self.concurrencies)):
+            runner.run_query(
+                f"CREATE TABLE {self.PROBE_SCHEMA}.index_base_{worker} (a int, b text)"
+            )
         rows = runner.run_query(
             "SELECT count(*) FROM mz_objects WHERE id LIKE 'u%%'", fetch=True
         )
@@ -2741,6 +2745,17 @@ class DdlCatalogScalingScenario(EnvdObjectsScalabilityScenario):
                 if counts is None or sum(count for _, count in counts) != runner.scale:
                     raise RuntimeError(f"incorrect user object count: {counts}")
                 emit({"event": "catalog_counts", "user_objects_by_type": counts})
+                idle_start = time.time()
+                idle_clock = time.perf_counter()
+                time.sleep(self.duration)
+                emit(
+                    {
+                        "event": "idle",
+                        "start_unix": idle_start,
+                        "end_unix": time.time(),
+                        "elapsed_seconds": time.perf_counter() - idle_clock,
+                    }
+                )
                 for concurrency in self.concurrencies:
                     driver = DdlMeasurement(
                         runner.target.new_connection,
@@ -2759,7 +2774,9 @@ class DdlCatalogScalingScenario(EnvdObjectsScalabilityScenario):
                                     "repetition": repetition,
                                     "concurrency": concurrency,
                                 }
-                                slots = max(1, 32 // concurrency)
+                                slots = (
+                                    1 if kind == "index" else max(1, 32 // concurrency)
+                                )
                                 driver.run(kind, "create", slots=slots)
                                 driver.run(kind, "drop", slots=slots)
                                 result = driver.run(

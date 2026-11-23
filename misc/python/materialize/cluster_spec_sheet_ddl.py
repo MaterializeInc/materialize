@@ -10,16 +10,18 @@
 """DDL measurements on persistent connections, without retries or implicit transactions."""
 
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from threading import Barrier
-from typing import Callable
 
 import psycopg
 from psycopg import sql
 
 
-def ddl_statements(kind: str, schema: str, cluster: str, name: str) -> tuple:
+def ddl_statements(
+    kind: str, schema: str, cluster: str, name: str, *, index_table: str = "base"
+) -> tuple:
     """Return a single-object CREATE/DROP pair. Indexes use the fixture's base table."""
     obj = sql.Identifier(schema, name)
     if kind == "table":
@@ -30,7 +32,9 @@ def ddl_statements(kind: str, schema: str, cluster: str, name: str) -> tuple:
         )
     elif kind == "index":
         create = sql.SQL("CREATE INDEX {} IN CLUSTER {} ON {} (a)").format(
-            sql.Identifier(name), sql.Identifier(cluster), sql.Identifier(schema, "base")
+            sql.Identifier(name),
+            sql.Identifier(cluster),
+            sql.Identifier(schema, index_table),
         )
     else:
         raise ValueError(f"Unknown DDL object kind: {kind}")
@@ -88,14 +92,24 @@ class DdlMeasurement:
         statements after its deadline, includes them in elapsed time, and ends
         with no probe objects. CREATE batches must be paired with DROP batches.
         SQL acknowledgement is measured, not hydration or resource reclamation.
+        Index clients require fixture tables named index_base_<worker>, and one
+        slot each. Multiple indexes on one table can depend on each other.
         """
         if phase not in ("create", "drop", "cycle") or slots < 1:
             raise ValueError("invalid DDL phase")
         if phase == "cycle" and duration <= 0:
             raise ValueError("cycle duration must be positive")
+        if kind == "index" and slots != 1:
+            raise ValueError("index measurements require one slot per client")
         queries = [
             [
-                ddl_statements(kind, self.schema, self.cluster, f"probe_{w}_{s}")
+                ddl_statements(
+                    kind,
+                    self.schema,
+                    self.cluster,
+                    f"probe_{w}_{s}",
+                    index_table=f"index_base_{w}",
+                )
                 for s in range(slots)
             ]
             for w in range(self.concurrency)
@@ -164,5 +178,7 @@ class DdlMeasurement:
         }
         self.emit(result)
         if errors:
-            raise RuntimeError(f"DDL phase failed with {errors} errors, see raw samples")
+            raise RuntimeError(
+                f"DDL phase failed with {errors} errors, see raw samples"
+            )
         return result
