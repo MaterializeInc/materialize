@@ -15,9 +15,9 @@
 MZFROM debian-base
 
 # renovate: datasource=github-release-attachments depName=leanprover/elan
-ARG ELAN_AMD64=v4.2.4@42b94d4244e8353142c456ec0e4ca6528fd898a6c604d4059f494e706e431f63
+ARG ELAN_AMD64=v4.4.0@0e8250aa2be86c7af929ade68db617af9edc8b9ccf6eaf5ece228250d0d032e2
 # renovate: datasource=github-release-attachments depName=leanprover/elan
-ARG ELAN_ARM64=v4.2.4@05febd124d84ebf994b2e7479922a5650b1e950c17ae3bd1ddd776b65bb72bf9
+ARG ELAN_ARM64=v4.4.0@45cde3006f82f98804c94cf2ca4949d117060a5f3cc8afa62f523759947ee21f
 
 ENV ELAN_HOME=/opt/elan
 ENV PATH=$ELAN_HOME/bin:$PATH
