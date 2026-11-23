@@ -1,4 +1,4 @@
-# Materialize SDK: correct `SUBSCRIBE` consumption and a framework for custom sinks
+# Materialize SDK: correct `SUBSCRIBE` consumption
 
 - Associated:
   - Product requirements: [Sink SDK PRD](https://app.notion.com/p/materialize/Sink-SDK-3dd13f48d37b8024985ce70b1d96e9cd) (PRD-85). Overlapping proposal: PRD-87 (`mzq`).
@@ -10,6 +10,34 @@
   - [database-issues#5182](https://github.com/MaterializeInc/database-issues/issues/5182): dataflow errors poison a subscribe.
   - [Durable subscriptions pattern](https://materialize.com/docs/transform-data/patterns/durable-subscriptions/): the manual protocol this SDK packages.
   - Prior art: [mz-sink-sdk](https://github.com/MaterializeIncLabs/mz-sink-sdk) and its private-preview [build your own sink](https://materialize.com/docs/export-data/build-your-own-sink/) guide (#38872), [mz-redis-sync](https://github.com/MaterializeIncLabs/mz-redis-sync), [novu-materialize-integration](https://github.com/MaterializeIncLabs/novu-materialize-integration), [mz-turbopuffer-sink](https://github.com/MaterializeInc/mz-turbopuffer-sink).
+
+## Scope update
+
+After review with the sources and sinks team, this design is narrowed to
+consuming `SUBSCRIBE` correctly, for live views and small syncs. The sink
+framework is parked. Every `SUBSCRIBE` result reaches the client through
+environmentd, merged into one stream per subscription
+(`absorb_subscribe_response` in `src/compute-client/src/service.rs`). Sinks
+built on `SUBSCRIBE` put their whole load on environmentd, which does not scale
+out with them.
+
+In scope are the protocol core, the Rust, Python, and Node packages for live
+subscriptions, the conformance vectors and the nightly end-to-end suite, and an
+example that keeps a Valkey hash equal to a view. The packages take a new
+snapshot on each reconnect and deliver at least once. The core also builds the
+statements and catalog checks for a resume, for consumers that store their own
+frontier. A resume covers one object. Multi-view subscriptions are parked.
+
+The intended use is a result of about 100 MiB or less. Each reconnect sends the
+whole snapshot through environmentd again, as one message held in memory there
+(see "Buffering limits"). The figure is guidance from the review, an order of
+magnitude under `max_result_size` (1 GB by default), not a measured limit.
+
+Parked are requirements R1 to R5 and R11, items 3 to 6 of "Testing", and the
+sections "Checkpoints and fencing", "Delivery guarantees", "Multi-view
+consistency", "Sink API", "Sink module", "turbopuffer sink", "Durable
+subscriptions", and "Appendix: turbopuffer sink". They stay as the record of
+that design.
 
 ## The Problem
 
@@ -185,6 +213,8 @@ this document adds.
 | R10 | Several languages with identical behavior, checked by machines | Design |
 | R11 | Sink authors can test without a live environment | Design |
 
+R1 to R5 and R11 are parked with the sink framework (see "Scope update").
+
 R1 and R4 are met in full by targets that can write the whole cut atomically,
 such as one Postgres transaction. A target with no transaction over the whole
 cut, such as turbopuffer, where only one write request is atomic, gets
@@ -203,6 +233,8 @@ the same once the sink has caught up and stopped writing.
 
 ## Out of Scope
 
+- Sinks built on `SUBSCRIBE`, and the framework for writing them. See "Scope
+  update".
 - Rewriting subscribe internals. The server changes this program depends on are
   listed under "Materialize-side workstream".
 - Exactly-once side effects. No client can make an HTTP call exactly once, so
@@ -234,6 +266,9 @@ streams that never resume will accept any query.
 The Rust package comes first, with Python and Node to follow, and the first sink
 will be turbopuffer, written in Rust. The spec, conformance vectors, and an
 end-to-end suite will live in this repository and run in the nightlies.
+
+With the sink framework parked (see "Scope update"), the packages expose only
+`subscribe`, and a Valkey example takes the place of the turbopuffer sink.
 
 ### Naming
 
@@ -456,6 +491,8 @@ it must stop sooner.
 
 ### Checkpoints and fencing
 
+*Parked. See "Scope update".*
+
 A checkpoint records the owner's epoch, a generation, the frontier, the
 subscriptions' fingerprints, and, while a snapshot is being written, its `AS
 OF`. The frontier is where a resume starts: the next subscribe reads from `AS OF
@@ -560,6 +597,8 @@ unchanged. After a swap the same name points at a different object with the same
 columns, and without the shard a reconnect would switch objects silently.
 
 ### Delivery guarantees
+
+*Parked. See "Scope update".*
 
 A sink's type decides its delivery guarantee (see "Sink API"). A `Transactional`
 sink commits the batch and the checkpoint together, so state is exactly once. A
@@ -753,6 +792,8 @@ and disconnect.
 
 ### Multi-view consistency
 
+*Parked. See "Scope update".*
+
 A multi-view subscription (R4) will release changes only up to the minimum
 frontier across its members, so every released moment is a consistent cut
 across all views. A Materialize timestamp is a global commit order, so one
@@ -896,6 +937,8 @@ transport-agnostic, so adding it later will not change the model.
 
 ### Sink API
 
+*Parked. See "Scope update".*
+
 Every sink will implement one API, and the SDK will call it the same way for
 every target. The SDK drives everything else: fetching, snapshot, resume,
 retry, fencing, and the history-loss policy. Which envelope a sink reads and
@@ -1031,6 +1074,8 @@ Each call guarantees the SDK:
 
 ### Sink module
 
+*Parked. See "Scope update".*
+
 Keyed-state targets (caches, search indexes, tables) will read the upsert
 envelope. How they re-snapshot depends on whether the target commits data and
 checkpoint in one transaction.
@@ -1131,11 +1176,15 @@ later retraction.
 
 ### turbopuffer sink
 
+*Parked. See "Scope update".*
+
 The first sink keeps turbopuffer namespaces equal to views. It is one sink that
 meets the Sink API, and nothing in the SDK depends on it. Its design is in
 "Appendix: turbopuffer sink".
 
 ### Durable subscriptions
+
+*Parked. See "Scope update".*
 
 Durable subscriptions (#38468) give the server a per-consumer hold advanced by
 `ACKNOWLEDGE`, with a wall-clock deadline (`ACKNOWLEDGE WITHIN`) in place of a
@@ -1310,12 +1359,13 @@ clear error. The nightlies define which Materialize versions a release supports.
 
 ## Testing
 
-The conformance suite is the contract, whatever the generation strategy.
+The conformance suite is the contract, whatever the generation strategy. Items
+3 to 6 are parked with the sink framework (see "Scope update").
 
 1. Conformance vectors: language-agnostic JSON files, each with inputs and
-   expected outputs for one function (decode, batch release, multi-view release,
-   checkpoint encoding and fencing, statement SQL, and error classification
-   from SQLSTATE and message). The protocol core will run them natively, and
+   expected outputs for one function (decode, batch release, latest change per
+   key, statement SQL, error classification from SQLSTATE and message, object
+   identity, and catalog checks). The protocol core will run them natively, and
    each package will run them through its binding.
 2. End-to-end suite: the spec, vectors, and end-to-end suite will live in this
    repository and run in the nightly pipeline against `main` through mzcompose.
@@ -1417,6 +1467,8 @@ The server-side buffering bound (#37905) has landed and needs no further work.
 
 ## Minimal Viable Prototype
 
+*The turbopuffer sink and the sink items below are parked. See "Scope update".*
+
 The prototype will be the protocol core extracted from the Rust prototype, the
 Rust package on top of it, and the turbopuffer sink, written in Rust, running
 against the internal context graph. Python and Node packages are stretch goals
@@ -1458,24 +1510,12 @@ In the turbopuffer sink:
 
 ## Delivery plan
 
-October: the prototype above, with the end-to-end suite in the nightlies, and
-the Python and Node packages as stretch goals. Exit criteria are a passing
-convergence test, passing fencing and lost-response tests, and every typed
-error reproduced in the end-to-end suite.
+By the end of December: the protocol core and the Rust, Python, and Node
+packages for live subscriptions, the conformance vectors and the nightly
+end-to-end suite, and the Valkey example, as a beta.
 
-November and December: the Python and Node packages if they did not land in
-October, durable subscriptions as they land, and a Postgres reference sink. The
-turbopuffer sink exercises only the path for targets without transactions, so
-Postgres is the sink that proves the transactional path: data and checkpoint in
-one transaction, the expected-checkpoint check, and re-snapshot in place. MySQL
-follows by demand.
-
-GA requires dedicated SQLSTATEs released, the client docs rewritten on the SDK,
-every published language passing the same vectors and end-to-end suite, the
-Postgres sink passing the convergence and lost-response tests, upsert key
-validation (workstream item 10) or a duplicate-key check in each keyed sink, and
-an answer to snapshot size: either server-side chunking, or a documented
-per-sink size limit with sizing guidance for environments that run many sinks.
+The sink framework, durable subscriptions, and the Postgres and turbopuffer
+sinks wait for a new decision on sinks.
 
 ## Future work
 
@@ -1682,6 +1722,8 @@ October work, because the doc picks a safe default for each.
     bound it by a quarter of G.
 
 ## Appendix: turbopuffer sink
+
+*Parked. See "Scope update".*
 
 The first sink will keep turbopuffer namespaces equal to views. It answers the
 search-index use case and will run against our internal context graph, which
