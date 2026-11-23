@@ -93,7 +93,7 @@ skip = [
     { name = "crossterm", version = "0.28.1" },
     # flate2 is on 0.9, while apache-avro and backtrace still pull 0.8.
     { name = "miniz_oxide", version = "0.8.9" },
-    # reqsign-core is on 0.7, while opendal still pulls 0.6.
+    # reqsign uses 0.8 and opendal still pulls 0.6.
     { name = "asyncband", version = "0.6.7" },
     # rand 0.9 is still used by apache-avro, governor, iceberg,
     # launchdarkly-server-sdk, mysql_async, opentelemetry_sdk, proptest,
