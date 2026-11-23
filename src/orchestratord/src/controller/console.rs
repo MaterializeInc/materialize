@@ -41,10 +41,13 @@ use tracing::{trace, warn};
 use crate::{
     Error,
     k8s::{
-        apply_resource, get_resource, pod_disruption_budget, recommended_k8s_labels,
-        replace_resource,
+        apply_resource, delete_resource, get_resource, pod_disruption_budget,
+        recommended_k8s_labels, replace_resource,
     },
-    tls::{DefaultCertificateSpecs, create_certificate, issuer_ref_defined},
+    tls::{
+        DefaultCertificateSpecs, create_external_certificate, existing_certificate_secret,
+        external_certificate_secret_name, validate_external_certificate_spec,
+    },
 };
 use mz_cloud_resources::crd::{
     ManagedResource,
@@ -221,7 +224,7 @@ impl Context {
         &self,
         console: &Console,
     ) -> anyhow::Result<Option<Certificate>> {
-        create_certificate(
+        create_external_certificate(
             self.config
                 .default_certificate_specs
                 .console_external
@@ -230,7 +233,6 @@ impl Context {
             console.spec.external_certificate_spec.clone(),
             console.external_certificate_name(),
             console.external_certificate_secret_name(),
-            None,
             CertificatePrivateKeyAlgorithm::Ecdsa,
             Some(256),
         )
@@ -339,15 +341,16 @@ impl Context {
             ..Default::default()
         }];
 
-        let scheme = if issuer_ref_defined(
+        let scheme = if let Some(secret_name) = external_certificate_secret_name(
             &self.config.default_certificate_specs.console_external,
             &console.spec.external_certificate_spec,
+            console.external_certificate_secret_name(),
         ) {
             volumes.push(Volume {
                 name: "external-certificate".to_owned(),
                 secret: Some(SecretVolumeSource {
                     default_mode: Some(0o400),
-                    secret_name: Some(console.external_certificate_secret_name()),
+                    secret_name: Some(secret_name),
                     items: None,
                     optional: Some(false),
                 }),
@@ -657,6 +660,9 @@ impl k8s_controller::Context for Context {
         let certificate_api: Api<Certificate> = Api::namespaced(client.clone(), &namespace);
         let pdb_api: Api<PodDisruptionBudget> = Api::namespaced(client.clone(), &namespace);
 
+        // Reject an invalid certificate spec before the deployment mounts it.
+        validate_external_certificate_spec(&console.spec.external_certificate_spec)?;
+
         let step = metadata.step("network_policies");
         trace!("creating new network policies");
         let network_policies = self.create_network_policies(console);
@@ -703,6 +709,12 @@ impl k8s_controller::Context for Context {
             trace!("creating new console external certificate");
             apply_resource(&certificate_api, certificate).await?;
             step.finish(Outcome::Completed);
+        } else if existing_certificate_secret(&console.spec.external_certificate_spec).is_some() {
+            // The certificate comes from an existing Secret, so stop managing
+            // any Certificate created before the switch.
+            trace!("deleting console external certificate");
+            delete_resource(&certificate_api, &console.external_certificate_name()).await?;
+            step.finish(Outcome::Completed);
         } else {
             step.finish(Outcome::Skipped);
         }
@@ -717,6 +729,7 @@ impl k8s_controller::Context for Context {
 
 #[cfg(test)]
 mod tests {
+    use mz_cloud_resources::crd::MaterializeExternalCertSpec;
     use mz_cloud_resources::crd::console::v1alpha1::ConsoleSpec;
 
     use super::*;
@@ -800,5 +813,46 @@ mod tests {
                 .and_then(|annotations| annotations.get("prometheus.io/port").cloned());
             assert_eq!(scrape_port.as_deref(), annotate.then_some("8081"));
         }
+    }
+
+    #[mz_ore::test]
+    fn external_certificate_from_existing_secret() {
+        let mut console = test_console();
+        console.spec.external_certificate_spec = Some(MaterializeExternalCertSpec {
+            secret_name: Some("wildcard-tls".to_owned()),
+            ..Default::default()
+        });
+        let context = test_context(false);
+        assert!(
+            context
+                .create_console_external_certificate(&console)
+                .unwrap()
+                .is_none()
+        );
+        let pod = context
+            .create_console_deployment_object(&console)
+            .spec
+            .unwrap()
+            .template
+            .spec
+            .unwrap();
+        let secret = pod
+            .volumes
+            .iter()
+            .flatten()
+            .find(|volume| volume.name == "external-certificate")
+            .and_then(|volume| volume.secret.as_ref())
+            .and_then(|secret| secret.secret_name.as_deref());
+        assert_eq!(secret, Some("wildcard-tls"));
+        let listener = pod.containers[0]
+            .env
+            .iter()
+            .flatten()
+            .find(|var| var.name == "MZ_NGINX_LISTENER_CONFIG")
+            .and_then(|var| var.value.clone())
+            .unwrap();
+        assert!(listener.starts_with("listen 8080 ssl;"), "{listener}");
+        assert!(listener.contains("ssl_certificate /nginx/tls/tls.crt;"));
+        assert!(listener.contains("ssl_certificate_key /nginx/tls/tls.key;"));
     }
 }

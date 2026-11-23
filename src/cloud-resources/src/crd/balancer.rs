@@ -17,7 +17,9 @@ use kube::{CustomResource, Resource, ResourceExt};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::crd::{ManagedResource, MaterializeCertSpec, new_resource_id};
+use crate::crd::{
+    ManagedResource, MaterializeCertSpec, MaterializeExternalCertSpec, new_resource_id,
+};
 
 pub mod v1alpha1 {
     use super::*;
@@ -77,10 +79,9 @@ pub mod v1alpha1 {
         /// autoscaler, such as a HorizontalPodAutoscaler. `replicas` then only
         /// seeds the count when the Deployment is first created.
         pub externally_scaled: Option<bool>,
-        // The configuration for generating an x509 certificate using cert-manager for balancerd
-        // to present to incoming connections.
-        // The dns_names and issuer_ref fields are required.
-        pub external_certificate_spec: Option<MaterializeCertSpec>,
+        // The x509 certificate balancerd presents to incoming connections.
+        // Either issuer_ref (and dns_names) or secret_name must be set.
+        pub external_certificate_spec: Option<MaterializeExternalCertSpec>,
         // The configuration for generating an x509 certificate using cert-manager for balancerd
         // to use to communicate with environmentd.
         // The dns_names and issuer_ref fields are required.

@@ -16,7 +16,7 @@ use kube::{CustomResource, Resource, ResourceExt};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::crd::{ManagedResource, MaterializeCertSpec, new_resource_id};
+use crate::crd::{ManagedResource, MaterializeExternalCertSpec, new_resource_id};
 use mz_server_core::listeners::AuthenticatorKind;
 
 pub mod v1alpha1 {
@@ -73,10 +73,9 @@ pub mod v1alpha1 {
         pub resource_requirements: Option<ResourceRequirements>,
         // Number of console pods to create
         pub replicas: Option<i32>,
-        // The configuration for generating an x509 certificate using cert-manager for console
-        // to present to incoming connections.
-        // The dns_names and issuer_ref fields are required.
-        pub external_certificate_spec: Option<MaterializeCertSpec>,
+        // The x509 certificate console presents to incoming connections.
+        // Either issuer_ref (and dns_names) or secret_name must be set.
+        pub external_certificate_spec: Option<MaterializeExternalCertSpec>,
         // Annotations to apply to the pods
         pub pod_annotations: Option<BTreeMap<String, String>>,
         // Labels to apply to the pods

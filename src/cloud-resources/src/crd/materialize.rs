@@ -33,7 +33,10 @@ use sha2::{Digest, Sha256};
 use tracing::warn;
 use uuid::Uuid;
 
-use crate::crd::{ManagedResource, MaterializeCertSpec, is_valid_resource_id, new_resource_id};
+use crate::crd::{
+    ManagedResource, MaterializeCertSpec, MaterializeExternalCertSpec, is_valid_resource_id,
+    new_resource_id,
+};
 use mz_server_core::listeners::AuthenticatorKind;
 
 pub const LAST_KNOWN_ACTIVE_GENERATION_ANNOTATION: &str =
@@ -381,15 +384,14 @@ pub mod v1alpha1 {
         /// ```
         pub system_parameter_configmap_name: Option<String>,
 
-        /// The configuration for generating an x509 certificate using cert-manager for balancerd
-        /// to present to incoming connections.
-        /// The `dnsNames` and `issuerRef` fields are required.
-        pub balancerd_external_certificate_spec: Option<MaterializeCertSpec>,
-        /// The configuration for generating an x509 certificate using cert-manager for the console
-        /// to present to incoming connections.
-        /// The `dnsNames` and `issuerRef` fields are required.
-        /// Not yet implemented.
-        pub console_external_certificate_spec: Option<MaterializeCertSpec>,
+        /// The x509 certificate balancerd presents to incoming connections.
+        /// Either set `issuerRef` (and `dnsNames`) to have cert-manager issue it,
+        /// or set `secretName` to use an existing Secret.
+        pub balancerd_external_certificate_spec: Option<MaterializeExternalCertSpec>,
+        /// The x509 certificate the console presents to incoming connections.
+        /// Either set `issuerRef` (and `dnsNames`) to have cert-manager issue it,
+        /// or set `secretName` to use an existing Secret.
+        pub console_external_certificate_spec: Option<MaterializeExternalCertSpec>,
         /// The cert-manager Issuer or ClusterIssuer to use for database internal communication.
         /// The `issuerRef` field is required.
         /// This currently is only used for environmentd, but will eventually support clusterd.
@@ -1743,19 +1745,18 @@ pub mod v1 {
         /// ```
         pub system_parameter_configmap_name: Option<String>,
 
-        /// The configuration for generating an x509 certificate using cert-manager for balancerd
-        /// to present to incoming connections.
-        /// The `dnsNames` and `issuerRef` fields are required.
+        /// The x509 certificate balancerd presents to incoming connections.
+        /// Either set `issuerRef` (and `dnsNames`) to have cert-manager issue it,
+        /// or set `secretName` to use an existing Secret.
         ///
         /// This field is excluded from the rollout hash and changes will not trigger a rollout.
-        pub balancerd_external_certificate_spec: Option<MaterializeCertSpec>,
-        /// The configuration for generating an x509 certificate using cert-manager for the console
-        /// to present to incoming connections.
-        /// The `dnsNames` and `issuerRef` fields are required.
-        /// Not yet implemented.
+        pub balancerd_external_certificate_spec: Option<MaterializeExternalCertSpec>,
+        /// The x509 certificate the console presents to incoming connections.
+        /// Either set `issuerRef` (and `dnsNames`) to have cert-manager issue it,
+        /// or set `secretName` to use an existing Secret.
         ///
         /// This field is excluded from the rollout hash and changes will not trigger a rollout.
-        pub console_external_certificate_spec: Option<MaterializeCertSpec>,
+        pub console_external_certificate_spec: Option<MaterializeExternalCertSpec>,
         /// The cert-manager Issuer or ClusterIssuer to use for database internal communication.
         /// The `issuerRef` field is required.
         /// This currently is only used for environmentd, but will eventually support clusterd.
@@ -3530,6 +3531,35 @@ mod tests {
             &serde_json::json!(DEFAULT_ROLLOUT_REQUEST_TIMEOUT),
             "rolloutRequestTimeout schema default missing/wrong in generated CRD",
         );
+    }
+
+    #[mz_ore::test]
+    fn external_certificate_secret_name_in_crd_schema() {
+        // `secretName` must sit beside the flattened cert-manager fields in
+        // both CRD versions, or the API server prunes it.
+        for crd in [
+            <Materialize as kube::CustomResourceExt>::crd(),
+            <super::v1::Materialize as kube::CustomResourceExt>::crd(),
+        ] {
+            let crd = serde_json::to_value(crd).expect("CRD serializes");
+            let spec = &crd["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["spec"]
+                ["properties"];
+            for field in [
+                "balancerdExternalCertificateSpec",
+                "consoleExternalCertificateSpec",
+            ] {
+                let properties = &spec[field]["properties"];
+                assert!(
+                    properties["secretName"].is_object(),
+                    "{field}: {properties}"
+                );
+                assert!(properties["issuerRef"].is_object(), "{field}: {properties}");
+            }
+            assert!(
+                spec["internalCertificateSpec"]["properties"]["secretName"].is_null(),
+                "internalCertificateSpec must not accept secretName",
+            );
+        }
     }
 
     #[mz_ore::test]
