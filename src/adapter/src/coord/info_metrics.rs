@@ -471,6 +471,7 @@ mod tests {
             }),
             workload_class: None,
             query_policy: None,
+            query_routing: Default::default(),
         }
     }
 

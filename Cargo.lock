@@ -7069,6 +7069,7 @@ version = "0.0.0"
 dependencies = [
  "mz-cluster-client",
  "mz-dyncfg",
+ "serde",
 ]
 
 [[package]]

@@ -28,4 +28,37 @@ impl From<u64> for WatchSetId {
 }
 
 /// Default logging interval for replicas.
+/// How a cluster's replicas share the queries sent to the cluster.
+///
+/// Maintained dataflows (indexes, materialized views, sinks) run on every replica in both modes.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialOrd,
+    Ord,
+    PartialEq,
+    Eq,
+    Default,
+    serde::Serialize,
+    serde::Deserialize
+)]
+pub enum QueryRouting {
+    /// Every replica runs every query, and the first response wins.
+    #[default]
+    Broadcast,
+    /// Each query runs on one replica that has caught up to the query's timestamp, chosen
+    /// round-robin.
+    Balanced,
+}
+
+impl std::fmt::Display for QueryRouting {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            QueryRouting::Broadcast => f.write_str("BROADCAST"),
+            QueryRouting::Balanced => f.write_str("BALANCED"),
+        }
+    }
+}
+
 pub const DEFAULT_REPLICA_LOGGING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);

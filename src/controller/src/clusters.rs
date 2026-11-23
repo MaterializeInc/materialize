@@ -29,7 +29,7 @@ use mz_controller_types::dyncfgs::{
     ENABLE_TIMELY_ZERO_COPY, ENABLE_TIMELY_ZERO_COPY_LGALLOC, ENABLE_UNIFIED_CLUSTER,
     TIMELY_ZERO_COPY_LIMIT,
 };
-use mz_controller_types::{ClusterId, ReplicaId};
+use mz_controller_types::{ClusterId, QueryRouting, ReplicaId};
 use mz_orchestrator::NamespacedOrchestrator;
 use mz_orchestrator::{
     CpuLimit, DiskLimit, LabelSelectionLogic, LabelSelector, MemoryLimit, Service, ServiceConfig,
@@ -57,6 +57,8 @@ pub struct ClusterConfig {
     /// An optional arbitrary string that describes the class of the workload
     /// this cluster is running (e.g., `production` or `staging`).
     pub workload_class: Option<String>,
+    /// How the cluster's replicas share the queries sent to the cluster.
+    pub query_routing: QueryRouting,
 }
 
 /// The status of a cluster.
@@ -421,7 +423,20 @@ impl Controller {
             .create_instance(id, config.workload_class.clone());
         self.compute
             .create_instance(id, config.arranged_logs, config.workload_class)?;
+        self.compute
+            .set_instance_query_routing(id, config.query_routing)?;
         Ok(())
+    }
+
+    /// Updates how a cluster's replicas share the queries sent to the cluster.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the instance does not exist in the ComputeController.
+    pub fn update_cluster_query_routing(&mut self, id: ClusterId, query_routing: QueryRouting) {
+        self.compute
+            .set_instance_query_routing(id, query_routing)
+            .expect("instance exists");
     }
 
     /// Updates the workload class for a cluster.

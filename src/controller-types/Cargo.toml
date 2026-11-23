@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 mz-cluster-client = { path = "../cluster-client" }
 mz-dyncfg = { path = "../dyncfg" }
+serde.workspace = true
 
 [features]
 default = []

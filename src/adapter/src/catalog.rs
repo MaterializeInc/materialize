@@ -2830,6 +2830,7 @@ mod tests {
             }),
             workload_class: None,
             query_policy: None,
+            query_routing: Default::default(),
         };
         let commit_ts = catalog.current_upper().await;
         catalog

@@ -18,7 +18,7 @@ use ipnet::IpNet;
 use itertools::max;
 use mz_audit_log::{CreateOrDropClusterReplicaReasonV1, EventV1, VersionedEvent};
 use mz_controller::clusters::ReplicaLogging;
-use mz_controller_types::{ClusterId, ReplicaId};
+use mz_controller_types::{ClusterId, QueryRouting, ReplicaId};
 use mz_ore::collections::HashSet;
 use mz_ore::now::EpochMillis;
 use mz_persist_types::ShardId;
@@ -814,6 +814,7 @@ fn default_cluster_config(args: &BootstrapArgs) -> Result<ClusterConfig, Catalog
         }),
         workload_class: None,
         query_policy: None,
+        query_routing: QueryRouting::Broadcast,
     })
 }
 

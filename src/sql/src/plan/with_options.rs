@@ -12,6 +12,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+use mz_controller_types::QueryRouting;
 use mz_repr::adt::interval::Interval;
 use mz_repr::bytes::ByteSize;
 use mz_repr::{CatalogItemId, RelationVersionSelector, strconv};
@@ -41,6 +42,34 @@ pub trait TryFromValue<T>: Sized {
 
 pub trait ImpliedValue: Sized {
     fn implied_value() -> Result<Self, PlanError>;
+}
+
+impl TryFromValue<WithOptionValue<Aug>> for QueryRouting {
+    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
+        match String::try_from_value(v)? {
+            s if s.eq_ignore_ascii_case("broadcast") => Ok(QueryRouting::Broadcast),
+            s if s.eq_ignore_ascii_case("balanced") => Ok(QueryRouting::Balanced),
+            _ => sql_bail!("invalid QUERY ROUTING: expected BROADCAST or BALANCED"),
+        }
+    }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        let mode = match self {
+            QueryRouting::Broadcast => "broadcast",
+            QueryRouting::Balanced => "balanced",
+        };
+        Some(WithOptionValue::Value(Value::String(mode.to_string())))
+    }
+
+    fn name() -> String {
+        "query routing".to_string()
+    }
+}
+
+impl ImpliedValue for QueryRouting {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide a QUERY ROUTING mode: BROADCAST or BALANCED")
+    }
 }
 
 impl TryFromValue<WithOptionValue<Aug>> for IcebergCatalogType {
