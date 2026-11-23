@@ -665,10 +665,10 @@ impl<R: ConnectionResolver> IntoInlineConnection<AwsConnectionReference, R>
 /// A process-wide cache of caching credentials providers for `AssumeRole` AWS
 /// connections. See [`AwsConnection::load_rds_iam_auth`].
 ///
-/// An entry that has not been looked up for an hour is dropped the next time
-/// an entry is inserted. That bounds how long an unused entry lives, not how
-/// many entries there are: connections created within the same hour all stay
-/// until they age out.
+/// An entry that no config holds and that has not been looked up for an hour
+/// is dropped the next time an entry is inserted. That bounds how long an
+/// unused entry lives, not how many entries there are: connections created
+/// within the same hour all stay until they age out.
 #[derive(Debug, Clone, Default)]
 pub struct AwsCredentialsCache {
     entries: Arc<Mutex<BTreeMap<AwsCredentialsCacheKey, AwsCredentialsCacheEntry>>>,
@@ -698,8 +698,13 @@ impl AwsCredentialsCache {
     ) -> LazyCredentialCache {
         let now = Instant::now();
         let mut entries = self.entries.lock().expect("lock poisoned");
+        // A config that holds an entry uses it without looking it up here, so
+        // `last_used` says nothing about such an entry. Evicting it would
+        // leave that config on the old entry and give the next config for the
+        // same connection a second one, with its own fetches.
         entries.retain(|_, entry| {
-            now.duration_since(entry.last_used) < CREDENTIAL_CACHE_IDLE_EVICTION
+            entry.cache.has_other_holders()
+                || now.duration_since(entry.last_used) < CREDENTIAL_CACHE_IDLE_EVICTION
         });
         let entry = entries.entry(key).or_insert(AwsCredentialsCacheEntry {
             cache,
@@ -728,8 +733,8 @@ struct AwsCredentialsCacheKey {
 /// credentials last an hour by default.
 const CREDENTIAL_CACHE_EXPIRY_BUFFER: Duration = Duration::from_mins(5);
 
-/// [`LazyCredentialCache::invalidate`] keeps credentials that are younger than
-/// this.
+/// [`LazyCredentialCache::invalidate`] does nothing if the credentials were
+/// fetched, or a refresh of them last failed, less than this long ago.
 ///
 /// Most authentication failures are not caused by the credentials: a missing
 /// database grant fails the same way on every retry. Without this floor, each
@@ -749,9 +754,8 @@ const CREDENTIAL_CACHE_MIN_REUSE: Duration = Duration::from_mins(5);
 /// SDK retry, which this cannot.
 const CREDENTIAL_CACHE_FETCH_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// An [`AwsCredentialsCache`] entry that has not been looked up for this long
-/// is dropped. A config in use keeps its own handle, so eviction only costs
-/// the next config one fetch.
+/// An [`AwsCredentialsCache`] entry that no config holds and that has not
+/// been looked up for this long is dropped.
 const CREDENTIAL_CACHE_IDLE_EVICTION: Duration = Duration::from_mins(60);
 
 /// A [`ProvideCredentials`] that fetches credentials from `inner` on demand
@@ -765,6 +769,10 @@ const CREDENTIAL_CACHE_IDLE_EVICTION: Duration = Duration::from_mins(60);
 /// A failed fetch is not cached, but callers that were already waiting for it
 /// receive its error. Credentials past the expiry buffer are never served,
 /// even if the fetch that would replace them fails.
+///
+/// The cache is shared by every user of an AWS connection, so one user's
+/// trouble must not take working credentials from the others. See
+/// [`LazyCredentialCache::invalidate`].
 #[derive(Debug, Clone)]
 struct LazyCredentialCache {
     inner: SharedCredentialsProvider,
@@ -778,7 +786,12 @@ struct LazyCredentialCache {
 struct LazyCredentialState {
     // AWS's `Debug` impl for `Credentials` sanitizes secrets.
     creds: Option<Credentials>,
+    /// When `creds` were fetched, or when a requested refresh of them last
+    /// failed. [`CREDENTIAL_CACHE_MIN_REUSE`] counts from here.
     fetched_at: Option<Instant>,
+    /// Set by [`LazyCredentialCache::invalidate`]. The next call fetches new
+    /// credentials even though `creds` have not expired.
+    refresh_requested: bool,
     /// The error of the most recent fetch, if it failed.
     last_error: Option<String>,
 }
@@ -792,13 +805,25 @@ impl LazyCredentialCache {
         }
     }
 
-    /// Drops the cached credentials if their access key ID is `access_key_id`
-    /// and they were fetched at least [`CREDENTIAL_CACHE_MIN_REUSE`] ago, so
-    /// that the next call fetches new ones.
+    /// Reports whether anything other than this handle shares the cached
+    /// credentials.
+    fn has_other_holders(&self) -> bool {
+        Arc::strong_count(&self.state) > 1
+    }
+
+    /// Asks for the cached credentials to be replaced, if their access key ID
+    /// is `access_key_id` and [`CREDENTIAL_CACHE_MIN_REUSE`] has passed. The
+    /// next call then fetches new credentials.
     ///
     /// Call this when a service rejects a request signed with those
     /// credentials. AWS can stop honoring credentials before they expire, for
     /// example when the role's active sessions are revoked.
+    ///
+    /// The credentials are not dropped. If the fetch that should replace them
+    /// fails, they keep being served. The rejection may have had another
+    /// cause, such as one database user lacking a grant, and other users of
+    /// the connection would otherwise lose credentials that still work for
+    /// them.
     ///
     /// NOTE: Until this is called and takes effect, the rejected credentials
     /// keep being served. With the floor above, a revocation can therefore
@@ -810,7 +835,7 @@ impl LazyCredentialCache {
             return;
         };
         // Comparing the access key ID keeps a caller that signed with older
-        // credentials from dropping the ones that replaced them.
+        // credentials from replacing the ones that replaced them.
         let is_current = state
             .creds
             .as_ref()
@@ -819,9 +844,8 @@ impl LazyCredentialCache {
             .fetched_at
             .is_some_and(|fetched_at| fetched_at.elapsed() >= CREDENTIAL_CACHE_MIN_REUSE);
         if is_current && is_old_enough {
-            debug!("dropping cached AWS credentials after an authentication failure");
-            state.creds = None;
-            state.fetched_at = None;
+            debug!("refreshing cached AWS credentials after an authentication failure");
+            state.refresh_requested = true;
         }
     }
 }
@@ -847,16 +871,19 @@ impl ProvideCredentials for LazyCredentialCache {
             // Holding the lock across the fetch makes concurrent callers wait
             // for it. Without that, each would start a fetch of its own.
             let mut state = self.state.lock().await;
-            match state.creds.as_ref() {
-                Some(creds) if credentials_are_fresh(creds, SystemTime::now()) => {
-                    return Ok(creds.clone());
-                }
+            let fresh = state
+                .creds
+                .clone()
+                .filter(|creds| credentials_are_fresh(creds, SystemTime::now()));
+            match &fresh {
+                Some(creds) if !state.refresh_requested => return Ok(creds.clone()),
                 _ => {}
             }
             // A fetch failed while this caller waited for the lock. Fetching
             // again here would make N callers that arrive together wait
             // through N failed fetches in a row.
-            if self.failed_fetches.load(Ordering::SeqCst) != failed_before
+            if fresh.is_none()
+                && self.failed_fetches.load(Ordering::SeqCst) != failed_before
                 && let Some(error) = &state.last_error
             {
                 return Err(CredentialsError::provider_error(format!(
@@ -864,25 +891,37 @@ impl ProvideCredentials for LazyCredentialCache {
                 )));
             }
             let fetch = self.inner.provide_credentials();
-            match tokio::time::timeout(CREDENTIAL_CACHE_FETCH_TIMEOUT, fetch).await {
-                Ok(Ok(creds)) => {
+            let fetched = match tokio::time::timeout(CREDENTIAL_CACHE_FETCH_TIMEOUT, fetch).await {
+                Ok(fetched) => fetched,
+                Err(_elapsed) => Err(CredentialsError::provider_error(format!(
+                    "credential fetch timed out after {CREDENTIAL_CACHE_FETCH_TIMEOUT:?}"
+                ))),
+            };
+            match (fetched, fresh) {
+                (Ok(creds), _) => {
                     state.creds = Some(creds.clone());
                     state.fetched_at = Some(Instant::now());
+                    state.refresh_requested = false;
                     state.last_error = None;
                     Ok(creds)
                 }
-                Ok(Err(error)) => {
+                // A requested refresh failed, and the credentials it should
+                // have replaced have not expired. Keep serving them, and
+                // restart the floor so that a failing STS is not asked again
+                // on every call.
+                (Err(error), Some(creds)) => {
+                    warn!(
+                        error = %error.display_with_causes(),
+                        "failed to refresh AWS credentials, keeping the cached ones"
+                    );
+                    state.fetched_at = Some(Instant::now());
+                    state.refresh_requested = false;
+                    Ok(creds)
+                }
+                (Err(error), None) => {
                     state.last_error = Some(error.display_with_causes().to_string());
                     self.failed_fetches.fetch_add(1, Ordering::SeqCst);
                     Err(error)
-                }
-                Err(_elapsed) => {
-                    let message = format!(
-                        "credential fetch timed out after {CREDENTIAL_CACHE_FETCH_TIMEOUT:?}"
-                    );
-                    state.last_error = Some(message.clone());
-                    self.failed_fetches.fetch_add(1, Ordering::SeqCst);
-                    Err(CredentialsError::provider_error(message))
                 }
             }
         })
@@ -1579,7 +1618,7 @@ mod tests {
     // pause, so these tests use credentials without expiry.
 
     #[mz_ore::test(tokio::test(start_paused = true))]
-    async fn invalidate_drops_matching_credentials_after_min_reuse() {
+    async fn invalidate_refreshes_matching_credentials_after_min_reuse() {
         let (calls, inner) = CountingProvider::shared(0, usize::MAX, None);
         let cache = LazyCredentialCache::new(inner);
 
@@ -1621,6 +1660,37 @@ mod tests {
         let creds = cache.provide_credentials().await.unwrap();
         assert_eq!(creds.access_key_id(), "akid-1");
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[mz_ore::test(tokio::test(start_paused = true))]
+    async fn invalidate_keeps_serving_credentials_when_the_refresh_fails() {
+        // Only the first fetch succeeds, so every refresh fails.
+        let (calls, inner) = CountingProvider::shared(0, 1, None);
+        let cache = LazyCredentialCache::new(inner);
+
+        cache.provide_credentials().await.unwrap();
+        tokio::time::sleep(CREDENTIAL_CACHE_MIN_REUSE).await;
+        cache.invalidate("akid-1");
+
+        // The refresh is attempted, fails, and the cached credentials are
+        // served.
+        let creds = cache.provide_credentials().await.unwrap();
+        assert_eq!(creds.access_key_id(), "akid-1");
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+        // The failed refresh restarts the floor, so neither another call nor
+        // another rejection asks the failing provider again right away.
+        cache.invalidate("akid-1");
+        let creds = cache.provide_credentials().await.unwrap();
+        assert_eq!(creds.access_key_id(), "akid-1");
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+        // Once the floor has passed, a rejection asks again.
+        tokio::time::sleep(CREDENTIAL_CACHE_MIN_REUSE).await;
+        cache.invalidate("akid-1");
+        let creds = cache.provide_credentials().await.unwrap();
+        assert_eq!(creds.access_key_id(), "akid-1");
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
     }
 
     fn cache_key(role_arn: &str) -> AwsCredentialsCacheKey {
@@ -1685,5 +1755,26 @@ mod tests {
         assert!(cache.get(&cache_key("role-a")).is_none());
         assert!(cache.get(&cache_key("role-b")).is_some());
         assert!(cache.get(&cache_key("role-c")).is_some());
+    }
+    #[mz_ore::test(tokio::test(start_paused = true))]
+    async fn credentials_cache_keeps_idle_entries_that_are_still_held() {
+        let cache = AwsCredentialsCache::default();
+        let (calls_a, provider_a) = CountingProvider::shared(0, usize::MAX, None);
+        let (_calls, provider_b) = CountingProvider::shared(0, usize::MAX, None);
+        let (calls_a2, provider_a2) = CountingProvider::shared(0, usize::MAX, None);
+
+        // A config holds the entry and uses it without looking it up again.
+        let held = cache.get_or_insert(cache_key("role-a"), LazyCredentialCache::new(provider_a));
+        held.provide_credentials().await.unwrap();
+        tokio::time::sleep(CREDENTIAL_CACHE_IDLE_EVICTION.saturating_mul(2)).await;
+
+        cache.get_or_insert(cache_key("role-b"), LazyCredentialCache::new(provider_b));
+
+        // The next config for the same connection shares the held entry and
+        // its cached credentials.
+        let next = cache.get_or_insert(cache_key("role-a"), LazyCredentialCache::new(provider_a2));
+        next.provide_credentials().await.unwrap();
+        assert_eq!(calls_a.load(Ordering::SeqCst), 1);
+        assert_eq!(calls_a2.load(Ordering::SeqCst), 0);
     }
 }
