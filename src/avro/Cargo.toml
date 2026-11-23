@@ -20,7 +20,6 @@ byteorder = { workspace = true, optional = true }
 chrono.workspace = true
 crc32fast = { workspace = true, optional = true }
 aws-lc-rs.workspace = true
-enum-kinds.workspace = true
 flate2.workspace = true
 itertools.workspace = true
 mz-ore = { path = "../ore", features = ["test"] }

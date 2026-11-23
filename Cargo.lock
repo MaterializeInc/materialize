@@ -6449,7 +6449,6 @@ dependencies = [
  "byteorder",
  "chrono",
  "crc32fast",
- "enum-kinds",
  "flate2",
  "itertools 0.15.0",
  "mz-ore",
