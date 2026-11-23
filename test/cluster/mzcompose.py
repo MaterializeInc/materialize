@@ -7836,6 +7836,13 @@ def workflow_test_replica_reconnect_keeps_read_holds(c: Composition) -> None:
             SELECT a FROM t;
             """)
 
+        # The controller publishes the new index's frontiers asynchronously.
+        for _ in ui.timeout_loop(30):
+            if c.sql_query(query):
+                break
+        else:
+            raise AssertionError("frontiers for idx did not appear before pausing")
+
         # A paused replica stops reporting frontiers, so the index's write
         # frontier stays put. The controller times out the connection after
         # `grpc_client_http2_keep_alive_timeout` and reconnects, which must
@@ -7843,17 +7850,14 @@ def workflow_test_replica_reconnect_keeps_read_holds(c: Composition) -> None:
         connects_before = reconnects()
         c.pause("clusterd1")
         try:
-            deadline = time.time() + 30
-            while time.time() < deadline:
-                # The controller publishes frontiers on a 1s tick, so the row
-                # of a just-created index may not exist yet.
-                for row in c.sql_query(query):
-                    read, write = (int(f) for f in row)
-                    assert read <= write, (
-                        f"read frontier of idx advanced to {read}, past its write"
-                        f" frontier {write}, while its replica was reconnecting"
-                    )
-                time.sleep(1)
+            for _ in ui.timeout_loop(30):
+                rows = c.sql_query(query)
+                assert rows, "frontiers for idx disappeared during the pause"
+                read, write = map(int, rows[0])
+                assert read <= write, (
+                    f"read frontier of idx advanced to {read}, past its write"
+                    f" frontier {write}, while its replica was reconnecting"
+                )
             assert (
                 reconnects() > connects_before
             ), "the controller did not reconnect to the paused replica"
