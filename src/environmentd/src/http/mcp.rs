@@ -29,9 +29,9 @@
 //!
 //! Data products are discovered via `mz_internal.mz_mcp_data_products` system view.
 
-use std::sync::Arc;
-
 use std::borrow::Cow;
+use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use anyhow::anyhow;
 use axum::Extension;
@@ -49,12 +49,15 @@ use mz_adapter_types::dyncfgs::{
 };
 use mz_ore::cast::CastLossy;
 use mz_repr::namespaces::{self, SYSTEM_SCHEMAS};
+use mz_sql::names::ResolvedDatabaseSpecifier;
 use mz_sql::parse::{parse_item_name_with_limit, parse_with_limit};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::{APPLICATION_NAME, Var, VarInput};
 use mz_sql_parser::ast::display::{AstDisplay, escaped_string_literal};
-use mz_sql_parser::ast::visit::{self, Visit};
-use mz_sql_parser::ast::{Raw, RawItemName};
+use mz_sql_parser::ast::visit_mut::{self, VisitMut};
+use mz_sql_parser::ast::{
+    CteBlock, Ident, Raw, RawItemName, SetExpr, Statement, TableFactor, UnresolvedItemName,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use thiserror::Error;
@@ -2206,6 +2209,16 @@ async fn execute_query(
     format_rows_response(rows, max_response_size)
 }
 
+/// The `search_path` of `query_system_catalog`, and the schemas an unqualified
+/// name binds to, in order. No database-local schema can take these names,
+/// since user schema names cannot start with `mz_` or `pg_`
+/// (`is_reserved_name`).
+const SYSTEM_CATALOG_SEARCH_PATH: [&str; 3] = [
+    namespaces::MZ_CATALOG_SCHEMA,
+    namespaces::MZ_INTERNAL_SCHEMA,
+    namespaces::PG_CATALOG_SCHEMA,
+];
+
 async fn query_system_catalog(
     client: &mut AuthedClient,
     sql_query: &str,
@@ -2213,186 +2226,213 @@ async fn query_system_catalog(
 ) -> Result<McpResult, McpRequestError> {
     debug!("Executing query_system_catalog");
 
-    // First validate it's a read-only query
     validate_readonly_query(sql_query)?;
 
-    // Then validate that query only references mz_* tables by parsing the SQL
-    validate_system_catalog_query(sql_query)?;
+    let catalog = client
+        .client
+        .catalog_snapshot("mcp_query_system_catalog")
+        .await;
+    let conn_id = client.client.session().conn_id().clone();
+    let bound_query = bind_system_catalog_query(sql_query, |schema, item| {
+        catalog
+            .resolve_schema_in_database(&ResolvedDatabaseSpecifier::Ambient, schema, &conn_id)
+            .ok()?
+            .items
+            .get(item)
+            .filter(|id| id.is_system())
+            .map(|id| id.to_string())
+    })?;
 
-    // Wrap the query in a READ ONLY transaction with a tight search_path
-    // restricted to system schemas. This prevents unqualified `mz_*` references
-    // from resolving to user-created objects (e.g. a view `public.mz_leak`) via
-    // the session's search_path (mirrors the `BEGIN READ ONLY; SET ...` pattern
-    // used by the agent `query` tool).
-    let combined_query = read_only_txn(
-        Some("SET search_path = mz_catalog, mz_internal, pg_catalog, information_schema"),
-        sql_query,
+    // An unqualified name matching a CTE stays unbound and resolves at
+    // execution: first in the session's temporary schema, which is empty
+    // because each request opens a new session, then through this search_path.
+    let set_search_path = format!(
+        "SET search_path = {}",
+        SYSTEM_CATALOG_SEARCH_PATH.join(", ")
     );
+    let combined_query = read_only_txn(Some(&set_search_path), &bound_query);
 
     let rows = execute_sql(client, &combined_query).await?;
 
     format_rows_response(rows, max_response_size)
 }
 
-/// Collects table references from SQL AST with their schema qualification.
-struct TableReferenceCollector {
-    /// Stores (schema, table_name) tuples. Schema is None if unqualified.
-    tables: Vec<(Option<String>, String)>,
-    /// CTE names to exclude from validation (they're not real tables)
-    cte_names: std::collections::BTreeSet<String>,
-    /// Item names written as `[<id> AS <name>]`. The planner resolves these by
-    /// ID and ignores the name, so the name cannot be checked.
-    id_references: Vec<String>,
-}
+/// Rewrites each relation the query reads to its system catalog ID, as
+/// `[<id> AS <name>]`, and rejects the query if one is not a system relation
+/// or if a SELECT reads none.
+///
+/// Names match by exact spelling, in the system schemas (`SYSTEM_SCHEMAS`
+/// without `mz_unsafe`). An unqualified name binds through
+/// [`SYSTEM_CATALOG_SEARCH_PATH`], except one matching a CTE, which stays
+/// unbound. Object names in SHOW, and in EXPLAIN of a named object, are not
+/// reads of rows and stay as written.
+///
+/// `sql` must hold exactly one statement, which `validate_readonly_query`
+/// checks. `resolve(schema, item)` returns the ID of the system relation
+/// `item` in `schema`.
+fn bind_system_catalog_query(
+    sql: &str,
+    resolve: impl Fn(&str, &str) -> Option<String>,
+) -> Result<String, McpRequestError> {
+    // `parse_with_limit` enforces the 1 MB guard shared with the SQL HTTP path
+    // (DEX-64).
+    let mut stmts = parse_with_limit(sql)
+        .map_err(McpRequestError::QueryValidationFailed)?
+        .map_err(|e| {
+            McpRequestError::QueryValidationFailed(format!("Failed to parse SQL: {}", e))
+        })?;
+    let stmt = &mut stmts[0].ast;
 
-impl TableReferenceCollector {
-    fn new() -> Self {
-        Self {
-            tables: Vec::new(),
-            cte_names: std::collections::BTreeSet::new(),
-            id_references: Vec::new(),
-        }
+    let mut binder = SystemRelationBinder {
+        resolve: &resolve,
+        cte_names: BTreeSet::new(),
+        id_references: Vec::new(),
+        rejected: Vec::new(),
+        unknown: Vec::new(),
+        bound: 0,
+    };
+    binder.visit_statement_mut(stmt);
+
+    if !binder.id_references.is_empty() {
+        return Err(McpRequestError::QueryValidationFailed(format!(
+            "Query references objects by ID: {}. Reference system catalog tables by name.",
+            binder.id_references.join(", ")
+        )));
+    }
+    if !binder.rejected.is_empty() {
+        return Err(McpRequestError::QueryValidationFailed(format!(
+            "Query references non-system tables: {}. Only system catalog tables (mz_*, pg_catalog, information_schema) are allowed.",
+            binder.rejected.join(", ")
+        )));
+    }
+    if !binder.unknown.is_empty() {
+        return Err(McpRequestError::QueryValidationFailed(format!(
+            "Query references unknown system catalog tables: {}. Check the name and its schema.",
+            binder.unknown.join(", ")
+        )));
+    }
+    if matches!(stmt, Statement::Select(_)) && binder.bound == 0 {
+        return Err(McpRequestError::QueryValidationFailed(
+            "Query must reference at least one system catalog table".to_string(),
+        ));
     }
 
-    fn record_table(&mut self, name: &RawItemName) {
-        let parts = &name.name().0;
-        let Some(last) = parts.last() else {
+    Ok(stmt.to_ast_string_stable())
+}
+
+struct SystemRelationBinder<'a, F> {
+    resolve: &'a F,
+    cte_names: BTreeSet<String>,
+    /// Names the caller wrote as `[<id> AS <name>]`, which resolve by ID.
+    id_references: Vec<String>,
+    /// Names outside the system schemas.
+    rejected: Vec<String>,
+    /// Names in a system schema, or with its `mz_`/`pg_` prefix, that match no
+    /// system relation.
+    unknown: Vec<String>,
+    bound: usize,
+}
+
+impl<F: Fn(&str, &str) -> Option<String>> SystemRelationBinder<'_, F> {
+    fn bind(&mut self, name: &mut RawItemName) {
+        let RawItemName::Name(unresolved) = name else {
             return;
         };
-        let table_name = last.as_str().to_lowercase();
-
-        // Only an unqualified name can refer to a CTE. `public.t` names a
-        // catalog item even when a CTE `t` is in scope.
-        if parts.len() == 1 && self.cte_names.contains(&table_name) {
+        let parts: Vec<&str> = unresolved.0.iter().map(|ident| ident.as_str()).collect();
+        let is_system_schema = |schema: &str| {
+            SYSTEM_SCHEMAS.contains(&schema) && schema != namespaces::MZ_UNSAFE_SCHEMA
+        };
+        let (item, schemas): (&str, &[&str]) = match parts.as_slice() {
+            [item] if self.cte_names.contains(*item) => return,
+            [item] => (item, &SYSTEM_CATALOG_SEARCH_PATH),
+            // System schemas are in no database, so a database part does not
+            // change what the name refers to.
+            [schema, item] | [_, schema, item] if is_system_schema(schema) => {
+                (item, std::slice::from_ref(schema))
+            }
+            _ => {
+                self.rejected.push(unresolved.to_ast_string_simple());
+                return;
+            }
+        };
+        let Some((schema, id)) = schemas
+            .iter()
+            .find_map(|schema| Some((*schema, (self.resolve)(schema, item)?)))
+        else {
+            if parts.len() > 1 || item.starts_with("mz_") || item.starts_with("pg_") {
+                self.unknown.push(unresolved.to_ast_string_simple());
+            } else {
+                self.rejected.push(unresolved.to_ast_string_simple());
+            }
             return;
-        }
-
-        // Extract schema if qualified (e.g., mz_catalog.mz_tables)
-        let schema = (parts.len() >= 2).then(|| parts[parts.len() - 2].as_str().to_lowercase());
-        self.tables.push((schema, table_name));
+        };
+        // The parser requires the name in `[<id> AS <name>]` to be qualified.
+        let qualified = UnresolvedItemName::qualified(&[
+            Ident::new_unchecked(schema),
+            Ident::new_unchecked(item),
+        ]);
+        *name = RawItemName::Id(id, qualified, None);
+        self.bound += 1;
     }
 }
 
-impl<'ast> Visit<'ast, Raw> for TableReferenceCollector {
-    fn visit_cte_block(&mut self, block: &'ast mz_sql_parser::ast::CteBlock<Raw>) {
+impl<'ast, F: Fn(&str, &str) -> Option<String>> VisitMut<'ast, Raw>
+    for SystemRelationBinder<'_, F>
+{
+    fn visit_cte_block_mut(&mut self, block: &'ast mut CteBlock<Raw>) {
         // Bindings are registered before any body is visited, because a
         // WITH MUTUALLY RECURSIVE body can reference any binding in its block.
         self.cte_names.extend(
             block
                 .bound_identifiers()
-                .map(|ident| ident.as_str().to_lowercase()),
+                .map(|ident| ident.as_str().to_owned()),
         );
-        visit::visit_cte_block(self, block);
+        visit_mut::visit_cte_block_mut(self, block);
     }
 
-    fn visit_table_factor(&mut self, table_factor: &'ast mz_sql_parser::ast::TableFactor<Raw>) {
-        // Only visit actual table references in FROM/JOIN clauses, not function names
-        if let mz_sql_parser::ast::TableFactor::Table { name, .. } = table_factor {
-            self.record_table(name);
+    // The table factor and set expression visitors descend before binding, so
+    // `visit_item_name_mut` sees each name as the caller wrote it.
+    fn visit_table_factor_mut(&mut self, table_factor: &'ast mut TableFactor<Raw>) {
+        visit_mut::visit_table_factor_mut(self, table_factor);
+        if let TableFactor::Table { name, .. } = table_factor {
+            self.bind(name);
         }
-        visit::visit_table_factor(self, table_factor);
     }
 
-    fn visit_set_expr(&mut self, set_expr: &'ast mz_sql_parser::ast::SetExpr<Raw>) {
+    fn visit_set_expr_mut(&mut self, set_expr: &'ast mut SetExpr<Raw>) {
+        visit_mut::visit_set_expr_mut(self, set_expr);
         // `TABLE t` parses to a set expression, not a table factor.
-        if let mz_sql_parser::ast::SetExpr::Table(name) = set_expr {
-            self.record_table(name);
+        if let SetExpr::Table(name) = set_expr {
+            self.bind(name);
         }
-        visit::visit_set_expr(self, set_expr);
     }
 
-    fn visit_item_name(&mut self, name: &'ast RawItemName) {
+    fn visit_item_name_mut(&mut self, name: &'ast mut RawItemName) {
         if let RawItemName::Id(..) = name {
             self.id_references.push(name.to_ast_string_simple());
         }
     }
 }
 
-/// Validates that a query only references system catalog tables.
-///
-/// For SELECT statements, all table references must be in system schemas
-/// (from `SYSTEM_SCHEMAS`, excluding `mz_unsafe`), and at least one system
-/// table must be referenced (constant queries like `SELECT 1` are rejected
-/// to prevent misuse of the developer endpoint for arbitrary computation).
-/// SHOW and EXPLAIN statements are allowed without table references.
-fn validate_system_catalog_query(sql: &str) -> Result<(), McpRequestError> {
-    // Parse the SQL to validate it. `parse_with_limit` enforces the 1 MB
-    // guard shared with the SQL HTTP path (DEX-64).
-    let stmts = parse_with_limit(sql)
-        .map_err(McpRequestError::QueryValidationFailed)?
-        .map_err(|e| {
-            McpRequestError::QueryValidationFailed(format!("Failed to parse SQL: {}", e))
-        })?;
-
-    if stmts.is_empty() {
-        return Err(McpRequestError::QueryValidationFailed(
-            "Empty query".to_string(),
-        ));
-    }
-
-    // Walk the AST to collect all table references
-    let mut collector = TableReferenceCollector::new();
-    for stmt in &stmts {
-        collector.visit_statement(&stmt.ast);
-    }
-
-    if !collector.id_references.is_empty() {
-        return Err(McpRequestError::QueryValidationFailed(format!(
-            "Query references objects by ID: {}. Reference system catalog tables by name.",
-            collector.id_references.join(", ")
-        )));
-    }
-
-    // Use the canonical system schema list, excluding mz_unsafe which contains
-    // internal-only objects that should not be exposed to MCP clients.
-    let is_allowed_schema =
-        |s: &str| SYSTEM_SCHEMAS.contains(&s) && s != namespaces::MZ_UNSAFE_SCHEMA;
-
-    // Helper to check if a table reference is allowed. Unqualified references
-    // are accepted when they carry an unambiguous system prefix (`mz_`/`pg_`);
-    // execution pins `search_path` to system schemas (see `query_system_catalog`),
-    // so a user view like `public.mz_leak` cannot be reached by an unqualified name.
-    let is_system_table = |(schema, table_name): &(Option<String>, String)| match schema {
-        Some(s) => is_allowed_schema(s.as_str()),
-        None => table_name.starts_with("mz_") || table_name.starts_with("pg_"),
-    };
-
-    // Check that all table references are system tables
-    let non_system_tables: Vec<String> = collector
-        .tables
-        .iter()
-        .filter(|t| !is_system_table(t))
-        .map(|(schema, table)| match schema {
-            Some(s) => format!("{}.{}", s, table),
-            None => table.clone(),
-        })
-        .collect();
-
-    if !non_system_tables.is_empty() {
-        return Err(McpRequestError::QueryValidationFailed(format!(
-            "Query references non-system tables: {}. Only system catalog tables (mz_*, pg_catalog, information_schema) are allowed.",
-            non_system_tables.join(", ")
-        )));
-    }
-
-    // SHOW and EXPLAIN statements don't reference tables in the AST, but are safe
-    // read-only operations. Only require system table references for SELECT.
-    use mz_sql_parser::ast::Statement;
-    let is_select = stmts.iter().any(|s| matches!(&s.ast, Statement::Select(_)));
-
-    if is_select && (collector.tables.is_empty() || !collector.tables.iter().any(is_system_table)) {
-        return Err(McpRequestError::QueryValidationFailed(
-            "Query must reference at least one system catalog table".to_string(),
-        ));
-    }
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::http::sql::{Description, SqlError};
+
+    /// Binds against a stand-in catalog where every system relation has ID
+    /// `s1`: `mz_`-prefixed names other than `mz_missing` in the `mz_` schemas,
+    /// `pg_`-prefixed names in `pg_catalog`, and `tables` and `columns` in
+    /// `information_schema`.
+    fn bind_with_stub_catalog(sql: &str) -> Result<String, McpRequestError> {
+        bind_system_catalog_query(sql, |schema, item| {
+            let exists = match schema {
+                namespaces::PG_CATALOG_SCHEMA => item.starts_with("pg_"),
+                namespaces::INFORMATION_SCHEMA => matches!(item, "tables" | "columns"),
+                _ => schema.starts_with("mz_") && item.starts_with("mz_") && item != "mz_missing",
+            };
+            exists.then(|| "s1".to_string())
+        })
+    }
 
     /// Serializes each row to a compact JSON array, matching how the HTTP SQL
     /// layer stores rows.
@@ -2641,7 +2681,7 @@ mod tests {
         use mz_sql_parser::parser::MAX_STATEMENT_BATCH_SIZE;
         let stmt = "SELECT * FROM mz_tables;";
         let oversized: String = stmt.repeat((MAX_STATEMENT_BATCH_SIZE / stmt.len()) + 1);
-        let err = validate_system_catalog_query(&oversized).expect_err("should be rejected");
+        let err = bind_with_stub_catalog(&oversized).expect_err("should be rejected");
         let msg = err.to_string();
         assert!(
             msg.contains("statement batch size cannot exceed"),
@@ -2651,13 +2691,11 @@ mod tests {
 
     #[mz_ore::test]
     fn test_validate_system_catalog_query_accepts_mz_tables() {
-        assert!(validate_system_catalog_query("SELECT * FROM mz_tables").is_ok());
-        assert!(validate_system_catalog_query("SELECT * FROM mz_internal.mz_comments").is_ok());
+        assert!(bind_with_stub_catalog("SELECT * FROM mz_tables").is_ok());
+        assert!(bind_with_stub_catalog("SELECT * FROM mz_internal.mz_comments").is_ok());
         assert!(
-            validate_system_catalog_query(
-                "SELECT * FROM mz_tables t JOIN mz_columns c ON t.id = c.id"
-            )
-            .is_ok()
+            bind_with_stub_catalog("SELECT * FROM mz_tables t JOIN mz_columns c ON t.id = c.id")
+                .is_ok()
         );
     }
 
@@ -2665,21 +2703,21 @@ mod tests {
     fn test_validate_system_catalog_query_subqueries() {
         // Subquery with mz_* tables
         assert!(
-            validate_system_catalog_query(
+            bind_with_stub_catalog(
                 "SELECT * FROM mz_tables WHERE id IN (SELECT id FROM mz_columns)"
             )
             .is_ok()
         );
 
         // Nested subqueries with mz_* tables
-        assert!(validate_system_catalog_query(
+        assert!(bind_with_stub_catalog(
             "SELECT * FROM mz_tables WHERE id IN (SELECT table_id FROM mz_columns WHERE type IN (SELECT id FROM mz_types))"
         )
         .is_ok());
 
         // Subquery in FROM clause
         assert!(
-            validate_system_catalog_query(
+            bind_with_stub_catalog(
                 "SELECT * FROM (SELECT * FROM mz_tables WHERE name LIKE 'test%') AS t"
             )
             .is_ok()
@@ -2687,14 +2725,14 @@ mod tests {
 
         // Reject subqueries that reference non-mz_* tables
         assert!(
-            validate_system_catalog_query(
+            bind_with_stub_catalog(
                 "SELECT * FROM mz_tables WHERE id IN (SELECT table_id FROM user_data)"
             )
             .is_err()
         );
 
         // Reject mixed references in nested subqueries
-        assert!(validate_system_catalog_query(
+        assert!(bind_with_stub_catalog(
             "SELECT * FROM mz_tables WHERE id IN (SELECT id FROM (SELECT id FROM user_table) AS t)"
         )
         .is_err());
@@ -2702,30 +2740,25 @@ mod tests {
 
     #[mz_ore::test]
     fn test_validate_system_catalog_query_rejects_user_tables() {
-        assert!(validate_system_catalog_query("SELECT * FROM user_data").is_err());
-        assert!(validate_system_catalog_query("SELECT * FROM my_table").is_err());
+        assert!(bind_with_stub_catalog("SELECT * FROM user_data").is_err());
+        assert!(bind_with_stub_catalog("SELECT * FROM my_table").is_err());
         // Security: reject queries that mention mz_ in a non-table context
-        assert!(
-            validate_system_catalog_query("SELECT * FROM user_data WHERE 'mz_' IS NOT NULL")
-                .is_err()
-        );
+        assert!(bind_with_stub_catalog("SELECT * FROM user_data WHERE 'mz_' IS NOT NULL").is_err());
     }
 
     #[mz_ore::test]
     fn test_validate_system_catalog_query_allows_functions() {
         // Function names should not be treated as table references
         assert!(
-            validate_system_catalog_query(
+            bind_with_stub_catalog(
                 "SELECT date_part('year', now())::int4 AS y FROM mz_tables LIMIT 1"
             )
             .is_ok()
         );
-        assert!(validate_system_catalog_query("SELECT length(name) FROM mz_tables").is_ok());
+        assert!(bind_with_stub_catalog("SELECT length(name) FROM mz_tables").is_ok());
         assert!(
-            validate_system_catalog_query(
-                "SELECT count(*) FROM mz_sources WHERE now() > created_at"
-            )
-            .is_ok()
+            bind_with_stub_catalog("SELECT count(*) FROM mz_sources WHERE now() > created_at")
+                .is_ok()
         );
     }
 
@@ -2733,31 +2766,31 @@ mod tests {
     fn test_validate_system_catalog_query_unqualified_pg_catalog() {
         // Unqualified `pg_`-prefixed names are as unambiguously system as `mz_`
         // ones, and resolve safely under the pinned search_path.
-        assert!(validate_system_catalog_query("SELECT * FROM pg_class").is_ok());
-        assert!(validate_system_catalog_query("SELECT nspname FROM pg_namespace").is_ok());
+        assert!(bind_with_stub_catalog("SELECT * FROM pg_class").is_ok());
+        assert!(bind_with_stub_catalog("SELECT nspname FROM pg_namespace").is_ok());
     }
 
     #[mz_ore::test]
     fn test_validate_system_catalog_query_schema_qualified() {
         // Qualified with allowed schemas should work
-        assert!(validate_system_catalog_query("SELECT * FROM mz_catalog.mz_tables").is_ok());
-        assert!(validate_system_catalog_query("SELECT * FROM mz_internal.mz_sessions").is_ok());
-        assert!(validate_system_catalog_query("SELECT * FROM pg_catalog.pg_type").is_ok());
-        assert!(validate_system_catalog_query("SELECT * FROM information_schema.tables").is_ok());
+        assert!(bind_with_stub_catalog("SELECT * FROM mz_catalog.mz_tables").is_ok());
+        assert!(bind_with_stub_catalog("SELECT * FROM mz_internal.mz_sessions").is_ok());
+        assert!(bind_with_stub_catalog("SELECT * FROM pg_catalog.pg_type").is_ok());
+        assert!(bind_with_stub_catalog("SELECT * FROM information_schema.tables").is_ok());
 
         // Qualified with disallowed schema should fail
-        assert!(validate_system_catalog_query("SELECT * FROM public.user_table").is_err());
-        assert!(validate_system_catalog_query("SELECT * FROM myschema.mytable").is_err());
+        assert!(bind_with_stub_catalog("SELECT * FROM public.user_table").is_err());
+        assert!(bind_with_stub_catalog("SELECT * FROM myschema.mytable").is_err());
 
         // mz_unsafe is a system schema but explicitly blocked for MCP
         assert!(
-            validate_system_catalog_query("SELECT * FROM mz_unsafe.mz_some_table").is_err(),
+            bind_with_stub_catalog("SELECT * FROM mz_unsafe.mz_some_table").is_err(),
             "mz_unsafe schema should be blocked even though it is a system schema"
         );
 
         // Mixed: system and user schemas should fail
         assert!(
-            validate_system_catalog_query(
+            bind_with_stub_catalog(
                 "SELECT * FROM mz_catalog.mz_tables JOIN public.user_data ON true"
             )
             .is_err()
@@ -2772,10 +2805,7 @@ mod tests {
              SELECT * FROM public.user_data, mz_catalog.mz_tables",
             "SELECT * FROM [u1 AS mz_catalog.mz_tables]",
         ] {
-            assert!(
-                validate_system_catalog_query(sql).is_err(),
-                "should reject {sql}"
-            );
+            assert!(bind_with_stub_catalog(sql).is_err(), "should reject {sql}");
         }
     }
 
@@ -2788,10 +2818,7 @@ mod tests {
                u (id text) AS (SELECT id FROM mz_catalog.mz_tables) \
              SELECT * FROM t",
         ] {
-            assert!(
-                validate_system_catalog_query(sql).is_ok(),
-                "should accept {sql}"
-            );
+            assert!(bind_with_stub_catalog(sql).is_ok(), "should accept {sql}");
         }
     }
 
@@ -2799,7 +2826,7 @@ mod tests {
     fn test_validate_system_catalog_query_adversarial_cases() {
         // Try to sneak in user table via CTE
         assert!(
-            validate_system_catalog_query(
+            bind_with_stub_catalog(
                 "WITH user_cte AS (SELECT * FROM user_data) \
                  SELECT * FROM mz_tables, user_cte"
             )
@@ -2809,7 +2836,7 @@ mod tests {
 
         // Complex multi-level CTE with user table buried deep
         assert!(
-            validate_system_catalog_query(
+            bind_with_stub_catalog(
                 "WITH \
                    cte1 AS (SELECT * FROM mz_tables), \
                    cte2 AS (SELECT * FROM cte1), \
@@ -2822,7 +2849,7 @@ mod tests {
 
         // Multiple joins - user table in the middle
         assert!(
-            validate_system_catalog_query(
+            bind_with_stub_catalog(
                 "SELECT * FROM mz_tables t1 \
                  JOIN user_data u ON t1.id = u.id \
                  JOIN mz_sources s ON t1.id = s.id"
@@ -2833,7 +2860,7 @@ mod tests {
 
         // LEFT JOIN trying to hide user table
         assert!(
-            validate_system_catalog_query(
+            bind_with_stub_catalog(
                 "SELECT * FROM mz_tables t \
                  LEFT JOIN user_data u ON t.id = u.table_id \
                  WHERE u.id IS NULL"
@@ -2844,7 +2871,7 @@ mod tests {
 
         // Nested subquery with user table in FROM
         assert!(
-            validate_system_catalog_query(
+            bind_with_stub_catalog(
                 "SELECT * FROM mz_tables WHERE id IN \
                  (SELECT table_id FROM (SELECT * FROM user_data) AS u)"
             )
@@ -2854,7 +2881,7 @@ mod tests {
 
         // UNION trying to mix system and user data
         assert!(
-            validate_system_catalog_query(
+            bind_with_stub_catalog(
                 "SELECT name FROM mz_tables \
                  UNION \
                  SELECT name FROM user_data"
@@ -2865,7 +2892,7 @@ mod tests {
 
         // UNION ALL variation
         assert!(
-            validate_system_catalog_query(
+            bind_with_stub_catalog(
                 "SELECT id FROM mz_sources \
                  UNION ALL \
                  SELECT id FROM products"
@@ -2876,13 +2903,13 @@ mod tests {
 
         // Cross join with user table
         assert!(
-            validate_system_catalog_query("SELECT * FROM mz_tables CROSS JOIN user_data").is_err(),
+            bind_with_stub_catalog("SELECT * FROM mz_tables CROSS JOIN user_data").is_err(),
             "Should reject CROSS JOIN with user table"
         );
 
         // Subquery in SELECT clause referencing user table
         assert!(
-            validate_system_catalog_query(
+            bind_with_stub_catalog(
                 "SELECT t.*, (SELECT COUNT(*) FROM user_data) AS cnt FROM mz_tables t"
             )
             .is_err(),
@@ -2891,17 +2918,17 @@ mod tests {
 
         // Try to use a schema name that looks similar to allowed ones
         assert!(
-            validate_system_catalog_query("SELECT * FROM mz_catalogg.fake_table").is_err(),
+            bind_with_stub_catalog("SELECT * FROM mz_catalogg.fake_table").is_err(),
             "Should reject typo-squatting schema name"
         );
         assert!(
-            validate_system_catalog_query("SELECT * FROM mz_catalog_hack.fake_table").is_err(),
+            bind_with_stub_catalog("SELECT * FROM mz_catalog_hack.fake_table").is_err(),
             "Should reject fake schema with mz_catalog prefix"
         );
 
         // Lateral join with user table
         assert!(
-            validate_system_catalog_query(
+            bind_with_stub_catalog(
                 "SELECT * FROM mz_tables t, LATERAL (SELECT * FROM user_data WHERE id = t.id) u"
             )
             .is_err(),
@@ -2910,7 +2937,7 @@ mod tests {
 
         // Valid complex query - all system tables
         assert!(
-            validate_system_catalog_query(
+            bind_with_stub_catalog(
                 "WITH \
                    tables AS (SELECT * FROM mz_tables), \
                    sources AS (SELECT * FROM mz_sources) \
@@ -2925,7 +2952,7 @@ mod tests {
 
         // Valid UNION of system tables
         assert!(
-            validate_system_catalog_query(
+            bind_with_stub_catalog(
                 "SELECT name FROM mz_tables \
                  UNION \
                  SELECT name FROM mz_sources"
@@ -2940,15 +2967,15 @@ mod tests {
         // SELECT without any table reference should be rejected — the developer
         // endpoint is for system catalog queries, not arbitrary computation.
         assert!(
-            validate_system_catalog_query("SELECT 1").is_err(),
+            bind_with_stub_catalog("SELECT 1").is_err(),
             "Should reject constant SELECT with no table references"
         );
         assert!(
-            validate_system_catalog_query("SELECT 1 + 2, 'hello'").is_err(),
+            bind_with_stub_catalog("SELECT 1 + 2, 'hello'").is_err(),
             "Should reject constant expression SELECT"
         );
         assert!(
-            validate_system_catalog_query("SELECT now()").is_err(),
+            bind_with_stub_catalog("SELECT now()").is_err(),
             "Should reject function-only SELECT with no table references"
         );
     }
@@ -2956,7 +2983,7 @@ mod tests {
     #[mz_ore::test]
     fn test_validate_system_catalog_query_rejects_mixed_tables() {
         assert!(
-            validate_system_catalog_query(
+            bind_with_stub_catalog(
                 "SELECT * FROM mz_tables t JOIN user_data u ON t.id = u.table_id"
             )
             .is_err()
@@ -2967,23 +2994,23 @@ mod tests {
     fn test_validate_system_catalog_query_allows_show() {
         // SHOW queries don't reference tables in the AST but are safe read-only ops
         assert!(
-            validate_system_catalog_query("SHOW TABLES FROM mz_internal").is_ok(),
+            bind_with_stub_catalog("SHOW TABLES FROM mz_internal").is_ok(),
             "SHOW TABLES FROM mz_internal should be allowed"
         );
         assert!(
-            validate_system_catalog_query("SHOW TABLES FROM mz_catalog").is_ok(),
+            bind_with_stub_catalog("SHOW TABLES FROM mz_catalog").is_ok(),
             "SHOW TABLES FROM mz_catalog should be allowed"
         );
         assert!(
-            validate_system_catalog_query("SHOW CLUSTERS").is_ok(),
+            bind_with_stub_catalog("SHOW CLUSTERS").is_ok(),
             "SHOW CLUSTERS should be allowed"
         );
         assert!(
-            validate_system_catalog_query("SHOW SOURCES").is_ok(),
+            bind_with_stub_catalog("SHOW SOURCES").is_ok(),
             "SHOW SOURCES should be allowed"
         );
         assert!(
-            validate_system_catalog_query("SHOW TABLES").is_ok(),
+            bind_with_stub_catalog("SHOW TABLES").is_ok(),
             "SHOW TABLES should be allowed"
         );
     }
@@ -2991,13 +3018,91 @@ mod tests {
     #[mz_ore::test]
     fn test_validate_system_catalog_query_allows_explain() {
         assert!(
-            validate_system_catalog_query("EXPLAIN SELECT * FROM mz_tables").is_ok(),
+            bind_with_stub_catalog("EXPLAIN SELECT * FROM mz_tables").is_ok(),
             "EXPLAIN of system table query should be allowed"
         );
         assert!(
-            validate_system_catalog_query("EXPLAIN SELECT 1").is_ok(),
+            bind_with_stub_catalog("EXPLAIN SELECT 1").is_ok(),
             "EXPLAIN SELECT 1 should be allowed"
         );
+    }
+
+    #[mz_ore::test]
+    fn test_bind_system_catalog_query_binds_relations_by_id() {
+        for (sql, bound) in [
+            (
+                "SELECT name FROM mz_catalog.mz_tables",
+                r#"SELECT "name" FROM [s1 AS "mz_catalog"."mz_tables"]"#,
+            ),
+            (
+                "SELECT * FROM mz_tables",
+                r#"SELECT * FROM [s1 AS "mz_catalog"."mz_tables"]"#,
+            ),
+            (
+                "SELECT * FROM information_schema.tables t",
+                r#"SELECT * FROM [s1 AS "information_schema"."tables"] AS "t""#,
+            ),
+            (
+                "WITH mz_x AS (SELECT 1) SELECT * FROM mz_x, mz_tables",
+                r#"WITH "mz_x" AS (SELECT 1) SELECT * FROM "mz_x", [s1 AS "mz_catalog"."mz_tables"]"#,
+            ),
+            (
+                "EXPLAIN SELECT * FROM mz_tables",
+                r#"EXPLAIN SELECT * FROM [s1 AS "mz_catalog"."mz_tables"]"#,
+            ),
+            (
+                "SELECT * FROM materialize.mz_catalog.mz_tables",
+                r#"SELECT * FROM [s1 AS "mz_catalog"."mz_tables"]"#,
+            ),
+            (
+                "TABLE mz_tables",
+                r#"TABLE [s1 AS "mz_catalog"."mz_tables"]"#,
+            ),
+            (
+                "SELECT * FROM mz_introspection.mz_dataflows",
+                r#"SELECT * FROM [s1 AS "mz_introspection"."mz_dataflows"]"#,
+            ),
+        ] {
+            let bound_sql = bind_with_stub_catalog(sql).expect(sql);
+            assert_eq!(bound_sql, bound, "binding {sql}");
+            assert!(
+                matches!(parse_with_limit(&bound_sql), Ok(Ok(_))),
+                "{bound_sql} should parse"
+            );
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_bind_system_catalog_query_matches_exact_spelling() {
+        // Quoted names keep their case, and user schemas such as "MZ_CATALOG"
+        // or "INFORMATION_SCHEMA" may exist.
+        for sql in [
+            r#"SELECT * FROM "MZ_CATALOG".mz_tables"#,
+            r#"SELECT * FROM "INFORMATION_SCHEMA".tables"#,
+            r#"SELECT * FROM "MZ_TABLES""#,
+            "SHOW TABLES WHERE name IN (SELECT name FROM public.t)",
+            "SELECT * FROM [u1 AS mz_catalog.mz_tables]",
+        ] {
+            assert!(
+                bind_with_stub_catalog(sql).is_err(),
+                "{sql} should be rejected"
+            );
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_bind_system_catalog_query_reports_unknown_names() {
+        for (sql, message) in [
+            (
+                "SELECT * FROM mz_catalog.mz_missing",
+                "unknown system catalog tables",
+            ),
+            ("SELECT * FROM mz_missing", "unknown system catalog tables"),
+            ("SELECT * FROM user_table", "non-system tables"),
+        ] {
+            let err = bind_with_stub_catalog(sql).expect_err(sql).to_string();
+            assert!(err.contains(message), "{sql}: {err}");
+        }
     }
 
     // ── Query tool feature flag tests ──────────────────────────────────────
