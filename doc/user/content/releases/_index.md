@@ -20,6 +20,83 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.52.0
+*Scheduled for release to Materialize Cloud: 2026-12-03* <br>
+*Released to Materialize Self-Managed: 2026-11-24* <br>
+
+### Almost 10x better query throughput, compared to v26.48 {#v26.52-qps}
+
+Read-only queries now register and retire in the session that runs them, and sessions now record [statement logging](/self-managed-deployments/query-history/) themselves instead of sending every event to the coordinator. Together with the improvements in [v26.49](#v26.49-qps) and [v26.51](#v26.51-qps), Materialize now serves almost 10 times as many queries per second as v26.48 with statement logging on and 128 or more concurrent clients, and more than 4 times as many as v26.51.
+
+![Queries per second from 16 to 512 concurrent clients against environmentd running 32 CPUs, v26.48 versus v26.51 versus v26.52: with statement logging on, v26.52 improves QPS over v26.48 by 116% to 893%, for example from 3,302 to 32,179 at 512 clients, and with statement logging off, by 70% to 507%, for example from 5,918 to 32,553 at 512 clients](/images/releases/v2652_qps.png)
+
+We tested v26.48, v26.51, and v26.52, running `environmentd` with 32 CPUs and between 16 and 512 concurrent clients issuing point lookups against an indexed view. At 512 clients, we observed throughput in v26.52 improve over v26.48 by 874% with statement logging on, and by 450% with statement logging off. With statement logging on, v26.52 now serves nearly as many queries per second as with it off: 32,179 compared to 32,553 at 512 clients.
+
+### AWS IAM authentication for PostgreSQL connections {#v26.52-aws-iam-authentication-for-postgresql-connections}
+
+`CREATE CONNECTION ... TO POSTGRES` now accepts an `AWS CONNECTION` option, which authenticates to Amazon RDS and Aurora PostgreSQL with a short-lived IAM token instead of a password. Materialize signs a fresh token every time it opens a connection.
+
+The option cannot be combined with `PASSWORD` and requires SSL. For setup steps, see [`CREATE CONNECTION`: PostgreSQL](/sql/create-connection/#postgres-aws-connection-example).
+
+### Query policies, to reject unindexed queries on a cluster {#v26.52-query-policies}
+
+{{< private-preview />}}
+
+Query policies let you reject unindexed queries on a cluster that serves an application, so that ad hoc queries can't compete with it for memory and CPU. This means improved stability for your applications.
+
+For example, to reject unindexed queries:
+
+```mzsql
+CREATE QUERY POLICY indexed_reads_only (
+  MODE = 'enforce',
+  RULES (
+    no_temporary_dataflows (action = 'reject', metric = 'query_plan_includes', value = 'temporary_dataflow'),
+    no_storage_reads (action = 'reject', metric = 'query_plan_includes', value = 'storage_read')
+  )
+);
+
+ALTER CLUSTER serving SET (QUERY POLICY = indexed_reads_only);
+```
+
+If an unindexed query is run against the serving cluster, it will be rejected:
+```mzsql
+SET cluster = serving;
+SELECT customer_id, sum(amount) FROM orders GROUP BY customer_id;
+```
+```nofmt
+ERROR:  query rejected: this query would build a temporary dataflow
+DETAIL:  Query policy "indexed_reads_only" rule "no_temporary_dataflows" applies to this query on cluster "serving".
+HINT:  Run EXPLAIN to inspect the query plan. Create an index that serves the query on this cluster, or use a cluster whose query policy permits this plan.
+```
+
+To enable query policies, [contact our team](https://materialize.com/support/). For more information, see [Query policies](/clusters/query-policies/).
+
+### Improvements {#v26.52-improvements}
+- **`FAILOVER` option for PostgreSQL sources** (private preview): PostgreSQL 17 and later only synchronize a logical replication slot to standby servers if it was created with `FAILOVER`, and you can now set `FAILOVER` when you create a PostgreSQL source so its slot is created that way, for example `CREATE SOURCE pg_source FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source', FAILOVER)`. The upstream database must be a PostgreSQL 17 or later primary.
+- **Faster catalog column lookups**: `pg_attribute` is now indexed on `attrelid`, so the column-introspection queries that `psql \d`, SQLAlchemy, and the PostgreSQL JDBC driver issue become index lookups instead of full scans — in a local measurement with 6,400 objects, `pg_attribute WHERE attrelid = ...` went from 14.6 ms to 3.0 ms at p50 and a mixed catalog workload from 711 to 3,742 queries per second.
+- **Smaller source and sink status indexes**: `mz_source_statuses` and `mz_sink_statuses` now keep roughly one copy of the status history rather than nine, so an object that reports a large error no longer inflates the indexes on `mz_catalog_server`.
+
+### Guides {#v26.52-guides}
+- [Query policies](/clusters/query-policies/)
+- [Backup and restore](/self-managed-deployments/backup-and-restore/) (<red>*Materialize Self-Managed only*</red>)
+
+### Bug Fixes {#v26.52-bug-fixes}
+- Fixed a strict serializable read staying pending for the length of a sustained write flood, even after those same writes had advanced the timestamp oracle past the timestamp the read was waiting for.
+- Fixed `ALTER CONNECTION` restoring the old public keys of a connection whose keys a concurrent `ROTATE KEYS` had already written to the secret store; connection statements are now replanned against the current catalog when their external validation finishes, and a rotation that conflicts with a catalog change is rejected instead of published.
+- Fixed a panic when creating an index shortly after `ALTER TABLE ... ADD COLUMN`, where a writer could see the evolved schema as unregistered because it answered from cached state.
+- Fixed a panic when committing writes whose timestamps are rewritten, including table writes and `COPY FROM STDIN`, if the batch being committed had spilled part of its contents into a nested run.
+- Fixed `ALTER SYSTEM SET` and `RESET` emitting a misleading "no effect on the current session" notice for parameters that do take effect in the current session; the notice is now limited to the defaults copied into new sessions.
+- Fixed any user being able to crash `environmentd`, and to keep it crash-looping through a role default, by setting the `failpoints` session variable; the variable is now `unsafe_failpoints` and is only visible in unsafe mode, and role defaults saved under the old name are dropped at boot.
+- Fixed `SUBSCRIBE ... AS OF` on a query with no timeline, such as `SUBSCRIBE (SELECT 1) AS OF 5`, starting at the maximum timestamp instead of the requested one, which also made it fail with an absurd-bounds error when combined with `UP TO`.
+- Fixed queries, indexes, and materialized views that filter the output of a window function silently dropping rows whose predicate failed to evaluate; errors such as an invalid cast or a division by zero are now reported as PostgreSQL does, which means an index or materialized view that hits this bug and currently looks healthy will start returning an error after upgrading, until the offending data or predicate is fixed.
+- Fixed an Iceberg sink whose target table has an incompatible schema restarting every few seconds and failing the same way each time; it now reports `stalled` once and suspends its dataflow.
+- Fixed `records_indexed` and `bytes_indexed` in the source statistics settling above the real key count after an upsert ingestion restarted, because the previous dataflow kept counting while it drained.
+- Fixed an input that has never produced data, such as a materialized view on a cluster with no replicas, pinning the startup `as of` of the dataflows that read alongside it, which made indexes on shared inputs replay history they could not use and slowed the read-only phase of a zero-downtime upgrade.
+- Fixed the MCP `query` tool requiring a cluster, which left a data product unreadable when discovery reported a null cluster because the role lacks `USAGE` on the product's index cluster; on the agent endpoint `cluster` is now optional and the read runs on the session's default cluster.
+- Fixed the MCP server describing the hidden index cluster of a materialized view when reporting hydration, so a working read could be reported as `replica_count: 0`; hydration now follows the cluster the read actually uses.
+- Fixed `drop_cluster` in `dbt-materialize` not quoting the cluster name, so a cluster created with a mixed-case name was logged as dropped and left running.
+- Fixed installing `dbt-materialize` from PyPI with pip 26.3 or later failing with "Distributions from PyPI cannot declare direct URL dependencies", released as `dbt-materialize` 1.9.14.
+
 ## v26.51.1
 *Released to Materialize Cloud: 2026-11-19 (v26.51.0)* <br>
 *Released to Materialize Self-Managed: 2026-11-20* <br>
