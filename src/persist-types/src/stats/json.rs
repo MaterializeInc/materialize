@@ -19,7 +19,7 @@ use serde_json::json;
 use crate::stats::primitive::{PrimitiveStats, any_primitive_stats};
 use crate::stats::{
     DynStats, ProtoJsonMapElementStats, ProtoJsonMapStats, ProtoJsonStats, TrimStats,
-    proto_json_stats,
+    proto_json_stats, redact_json_object_keys,
 };
 
 // Aggregate statistics about a column of Json elements.
@@ -99,11 +99,9 @@ impl JsonStats {
             JsonStats::Strings(x) => x.debug_json(),
             JsonStats::Numerics(x) => x.debug_json(),
             JsonStats::Lists => "json_lists".into(),
-            JsonStats::Maps(x) => x
-                .iter()
-                .map(|(k, v)| (k.clone(), v.debug_json()))
-                .collect::<serde_json::Map<_, _>>()
-                .into(),
+            JsonStats::Maps(x) => {
+                redact_json_object_keys(x.iter().map(|(k, v)| (k.clone(), v.debug_json())))
+            }
         }
     }
 }
