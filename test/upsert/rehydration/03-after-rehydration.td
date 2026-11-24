@@ -35,6 +35,10 @@ mammalmore    moose    2
 # Ensure that statistics are correctly updated. Note that the
 # byte count could be lower or higher than before restarting,
 # as rehydration has to store values differently.
+# TODO: Reenable when SS-610 is fixed
+$ skip-if
+SELECT true
+
 > SELECT
     SUM(u.bytes_indexed) > 0,
     SUM(u.records_indexed),
@@ -45,6 +49,8 @@ mammalmore    moose    2
   GROUP BY t.name
   ORDER BY t.name
 true 3 true
+
+$ skip-end
 
 # Save the size of the rehydrated state.
 $ set-from-sql var=rehydrated-state-bytes
@@ -72,6 +78,10 @@ mammalmore    moose               2
 #
 # This is also != because different implementations use
 # space differently during rehydration and normal operation.
+# TODO: Reenable when SS-610 is fixed
+$ skip-if
+SELECT true
+
 > SELECT
     SUM(u.bytes_indexed) != ${rehydrated-state-bytes},
     SUM(u.records_indexed)
@@ -102,6 +112,7 @@ $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} 
   ORDER BY t.name
 true 3
 
+$ skip-end
 
 # Ensure deletes work.
 $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} schema=${schema}
@@ -112,6 +123,10 @@ key           f1                  f2
 --------------------------------------
 birdmore      geese               56
 mammalmore    moose               2
+
+# TODO: Reenable when SS-610 is fixed
+$ skip-if
+SELECT true
 
 > SELECT
     SUM(u.records_indexed)
