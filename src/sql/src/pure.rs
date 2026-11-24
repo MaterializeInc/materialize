@@ -2667,6 +2667,8 @@ struct CsrProtobufPreparation {
     connection: mz_storage_types::connections::CsrConnection,
     topic: String,
     require_key: bool,
+    /// Whether this is the explicit `KEY FORMAT` of a key/value format.
+    key_format: bool,
 }
 
 impl CsrProtobufPreparation {
@@ -2678,6 +2680,7 @@ impl CsrProtobufPreparation {
             connection: ccsr_connection,
             topic,
             require_key,
+            key_format,
         } = self;
         let ccsr_client = ccsr_connection
             .connect(storage_configuration, InTask::No)
@@ -2685,9 +2688,9 @@ impl CsrProtobufPreparation {
             .map_err(|e| CsrPurificationError::ClientError(Arc::new(e)))?;
 
         let value = compile_proto(&format!("{}-value", topic), &ccsr_client).await?;
-        // Only a missing key subject means there is no key schema. An explicit
-        // KEY FORMAT falls back to the value schema when the key is absent, so
-        // swallowing other errors would decode keys with the wrong schema.
+        // An explicit KEY FORMAT decodes keys with the value schema when the key
+        // schema is absent, so there only a missing key subject may leave it
+        // out. Elsewhere the key subject may hold another format, such as Avro.
         let key = match compile_proto(&format!("{}-key", topic), &ccsr_client).await {
             Ok(key) => Some(key),
             Err(PlanError::FetchingCsrSchemaFailed { cause, .. })
@@ -2700,7 +2703,8 @@ impl CsrProtobufPreparation {
             {
                 None
             }
-            Err(e) => return Err(e),
+            Err(e) if key_format => return Err(e),
+            Err(_) => None,
         };
 
         if require_key && key.is_none() {
@@ -2831,6 +2835,7 @@ fn prepare_csr_connection_proto(
     options: &SourceFormatOptions,
     csr_connection: &CsrConnectionProtobuf<Aug>,
     envelope: &Option<SourceEnvelope>,
+    key_format: bool,
 ) -> Result<Option<CsrProtobufPreparation>, PlanError> {
     let SourceFormatOptions::Kafka { topic } = options else {
         sql_bail!("Confluent Schema Registry is only supported with Kafka sources")
@@ -2856,6 +2861,7 @@ fn prepare_csr_connection_proto(
                 connection: ccsr_connection,
                 topic: topic.clone(),
                 require_key: matches!(envelope, Some(SourceEnvelope::Debezium)),
+                key_format,
             }));
         }
         Some(_) => (),
