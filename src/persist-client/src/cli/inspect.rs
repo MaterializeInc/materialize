@@ -41,7 +41,9 @@ use crate::internal::encoding::{Rollup, UntypedState};
 use crate::internal::paths::{
     BlobKey, BlobKeyPrefix, PartialBatchKey, PartialBlobKey, PartialRollupKey, WriterKey,
 };
-use crate::internal::state::{BatchPart, ProtoRollup, ProtoStateDiff, RunPart, State};
+use crate::internal::state::{
+    BatchPart, HollowBlobRef, HollowRunRef, ProtoRollup, ProtoStateDiff, RunPart, State,
+};
 use crate::internal::state_diff::StateDiff;
 use crate::internal::state_versions::{StateVersions, UntypedStateVersionsIter};
 use crate::rpc::NoopPubSubSender;
@@ -706,25 +708,26 @@ pub async fn blob_usage(args: &StateArgs) -> Result<(), anyhow::Error> {
 struct LiveShard {
     diffs: Vec<VersionedData>,
     earliest: UntypedState<u64>,
-    current: UntypedState<u64>,
+    current: State<u64>,
 }
 
-enum LoadedShard {
+/// What a load of shard state found. The loads of [StateVersions] retry a
+/// missing rollup indefinitely, which would hide data loss.
+enum Loaded<T> {
     Uninitialized,
-    Live(LiveShard),
+    Live(T),
     /// A rollup referenced by the head of consensus is absent from blob.
     MissingRollup(PartialRollupKey),
 }
 
-/// Reconstructs the endpoints of a single consensus scan. The ordinary state
-/// iterator retries a missing rollup indefinitely, which would hide data loss.
+/// Reconstructs the endpoints of a single consensus scan.
 async fn load_live_shard(
     versions: &StateVersions,
     shard_id: ShardId,
-) -> Result<LoadedShard, anyhow::Error> {
+) -> Result<Loaded<LiveShard>, anyhow::Error> {
     let diffs = versions.fetch_all_live_diffs(&shard_id).await;
     let (Some(first), Some(last)) = (diffs.first(), diffs.last()) else {
-        return Ok(LoadedShard::Uninitialized);
+        return Ok(Loaded::Uninitialized);
     };
     let earliest_seqno = first.seqno;
     let latest_rollup_key =
@@ -733,7 +736,7 @@ async fn load_live_shard(
         .fetch_rollup_at_key::<u64>(&shard_id, &latest_rollup_key)
         .await
     else {
-        return Ok(LoadedShard::MissingRollup(latest_rollup_key));
+        return Ok(Loaded::MissingRollup(latest_rollup_key));
     };
     current.apply_encoded_diffs(&versions.cfg, &versions.metrics, &diffs);
     // GC removes a rollup from state only after truncating consensus past it,
@@ -749,27 +752,46 @@ async fn load_live_shard(
         .fetch_rollup_at_key::<u64>(&shard_id, &earliest_rollup_key)
         .await
     else {
-        return Ok(LoadedShard::MissingRollup(earliest_rollup_key));
+        return Ok(Loaded::MissingRollup(earliest_rollup_key));
     };
-    Ok(LoadedShard::Live(LiveShard {
+    Ok(Loaded::Live(LiveShard {
         diffs,
         earliest,
-        current,
+        current: current.check_ts_codec(&shard_id)?,
     }))
+}
+
+/// Reconstructs the head of consensus from the diffs since its latest rollup.
+async fn load_head(
+    versions: &StateVersions,
+    shard_id: ShardId,
+) -> Result<Loaded<State<u64>>, anyhow::Error> {
+    let diffs = versions.fetch_recent_live_diffs::<u64>(&shard_id).await.0;
+    let Some(last) = diffs.last() else {
+        return Ok(Loaded::Uninitialized);
+    };
+    let key =
+        StateDiff::<u64>::decode(&versions.cfg.build_version, last.data.clone()).latest_rollup_key;
+    let Some(mut head) = versions.fetch_rollup_at_key::<u64>(&shard_id, &key).await else {
+        return Ok(Loaded::MissingRollup(key));
+    };
+    head.apply_encoded_diffs(&versions.cfg, &versions.metrics, &diffs);
+    Ok(Loaded::Live(head.check_ts_codec(&shard_id)?))
 }
 
 /// Rollup keys are never re-added. A key still referenced and missing on a
 /// second load could not have been deleted by a concurrent GC.
-async fn load_live_shard_confirmed(
-    versions: &StateVersions,
-    shard_id: ShardId,
-) -> Result<LoadedShard, anyhow::Error> {
+async fn confirmed<T, F, Fut>(shard_id: ShardId, mut load: F) -> Result<Loaded<T>, anyhow::Error>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<Loaded<T>, anyhow::Error>>,
+{
     let mut previous_missing = None;
     for _ in 0..5 {
-        match load_live_shard(versions, shard_id).await? {
-            LoadedShard::MissingRollup(key) => {
+        match load().await? {
+            Loaded::MissingRollup(key) => {
                 if previous_missing.as_ref() == Some(&key) {
-                    return Ok(LoadedShard::MissingRollup(key));
+                    return Ok(Loaded::MissingRollup(key));
                 }
                 previous_missing = Some(key);
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
@@ -788,27 +810,45 @@ struct BlobAuditReport {
     missing: Vec<String>,
 }
 
-/// Checks every batch part, hollow run and rollup referenced at or above
-/// seqno_since without taking a read hold that would prevent GC.
-async fn audit_blobs(
+fn add_part(
+    shard_id: ShardId,
+    part: &RunPart<u64>,
+    keys: &mut BTreeSet<String>,
+    runs: &mut Vec<HollowRunRef<u64>>,
+) {
+    match part {
+        RunPart::Single(BatchPart::Hollow(part)) => {
+            keys.insert(part.key.complete(&shard_id).to_string());
+        }
+        RunPart::Single(BatchPart::Inline { .. }) => {}
+        RunPart::Many(run) => {
+            if keys.insert(run.key.complete(&shard_id).to_string()) {
+                runs.push(run.clone());
+            }
+        }
+    }
+}
+
+/// The key of every blob that a state version at or above seqno_since
+/// references, including the parts of hollow runs.
+async fn referenced_blobs(
     versions: &StateVersions,
     shard_id: ShardId,
-) -> Result<BlobAuditReport, anyhow::Error> {
-    let mut report = BlobAuditReport::default();
-    let live = match load_live_shard_confirmed(versions, shard_id).await? {
-        LoadedShard::Uninitialized => return Ok(report),
-        LoadedShard::MissingRollup(key) => {
-            report.missing.push(key.complete(&shard_id).to_string());
-            return Ok(report);
+    live: LiveShard,
+) -> Result<BTreeSet<String>, anyhow::Error> {
+    let seqno_since = live.current.seqno_since();
+    let mut keys = BTreeSet::new();
+    let mut runs = Vec::new();
+    let mut add = |blob: HollowBlobRef<'_, u64>| match blob {
+        HollowBlobRef::Batch(batch) => {
+            for part in &batch.parts {
+                add_part(shard_id, part, &mut keys, &mut runs);
+            }
         }
-        LoadedShard::Live(live) => live,
+        HollowBlobRef::Rollup(rollup) => {
+            keys.insert(rollup.key.complete(&shard_id).to_string());
+        }
     };
-    let current = live.current.check_ts_codec(&shard_id)?;
-    let seqno_since = current.seqno_since();
-    report.since = Some(current.collections.trace.since().elements().to_vec());
-
-    let mut referenced = BTreeMap::new();
-    let mut runs = BTreeMap::new();
     let mut states = UntypedStateVersionsIter::new(
         shard_id,
         versions.cfg.clone(),
@@ -817,76 +857,83 @@ async fn audit_blobs(
         live.diffs,
     )
     .check_ts_codec()?;
-    while let Some(state) = states.next(|_| {}) {
-        if state.seqno < seqno_since {
-            continue;
+    // NOTE: Visiting every part of every version would multiply the work by
+    // the number of versions that a long read hold retains. Like GC, this
+    // takes the first version in full and then only what each diff adds.
+    let mut seeded = false;
+    while let Some(state) = states.next(|diff| {
+        if seeded {
+            diff.referenced_blobs().for_each(&mut add);
         }
-        for rollup in state.collections.rollups.values() {
-            referenced.insert(rollup.key.complete(&shard_id).to_string(), state.seqno);
+    }) {
+        if !seeded && state.seqno >= seqno_since {
+            state.blobs().for_each(&mut add);
+            seeded = true;
         }
-        for part in state.collections.trace.batches().flat_map(|b| &b.parts) {
-            match part {
-                RunPart::Single(BatchPart::Hollow(part)) => {
-                    referenced.insert(part.key.complete(&shard_id).to_string(), state.seqno);
-                }
-                RunPart::Single(BatchPart::Inline { .. }) => {}
-                RunPart::Many(run) => {
-                    runs.insert(run.key.clone(), (part.clone(), state.seqno));
-                }
+    }
+    // A missing run is reported by its own key.
+    while let Some(run) = runs.pop() {
+        if let Some(run) = run.get(shard_id, &*versions.blob, &versions.metrics).await {
+            for part in &run.parts {
+                add_part(shard_id, part, &mut keys, &mut runs);
             }
         }
     }
+    Ok(keys)
+}
 
-    let mut absent = Vec::new();
-    for (run, seqno) in runs.into_values() {
-        let mut parts = pin!(run.part_stream(shard_id, &*versions.blob, &versions.metrics));
-        while let Some(part) = parts.next().await {
-            match part {
-                Ok(part) => {
-                    if let BatchPart::Hollow(part) = part.as_ref() {
-                        let last = referenced
-                            .entry(part.key.complete(&shard_id).to_string())
-                            .or_insert(seqno);
-                        *last = (*last).max(seqno);
-                    }
-                }
-                Err(missing_run) => absent.push((missing_run.to_string(), seqno)),
-            }
+/// Checks every batch part, hollow run and rollup referenced at or above
+/// seqno_since without taking a read hold that would prevent GC.
+async fn audit_blobs(
+    versions: &StateVersions,
+    shard_id: ShardId,
+) -> Result<BlobAuditReport, anyhow::Error> {
+    let mut report = BlobAuditReport::default();
+    let live = match confirmed(shard_id, || load_live_shard(versions, shard_id)).await? {
+        Loaded::Uninitialized => return Ok(report),
+        Loaded::MissingRollup(key) => {
+            report.missing.push(key.complete(&shard_id).to_string());
+            return Ok(report);
         }
-    }
+        Loaded::Live(live) => live,
+    };
+    report.since = Some(live.current.collections.trace.since().elements().to_vec());
+    let mut unlisted = referenced_blobs(versions, shard_id, live).await?;
     // Listing avoids fetching the contents of every referenced part.
     versions
         .blob
         .list_keys_and_metadata(&BlobKeyPrefix::Shard(&shard_id).to_string(), &mut |m| {
-            referenced.remove(m.key);
+            unlisted.remove(m.key);
         })
         .await?;
-    for (key, seqno) in referenced {
+    let mut absent = Vec::new();
+    for key in unlisted {
         if versions.blob.get(&key).await?.is_none() {
-            absent.push((key, seqno));
+            absent.push(key);
         }
     }
     if absent.is_empty() {
         return Ok(report);
     }
-    // GC may have released state versions between the scan and the missing GETs.
-    let fresh_seqno_since = match load_live_shard_confirmed(versions, shard_id).await? {
-        LoadedShard::Live(fresh) => fresh.current.check_ts_codec(&shard_id)?.seqno_since(),
-        LoadedShard::MissingRollup(key) => {
+    // GC may have released every version that referenced a key between the
+    // scan and the GETs. Keys are never referenced again once released, so a
+    // key that a fresh scan still references is lost.
+    let referenced = match confirmed(shard_id, || load_live_shard(versions, shard_id)).await? {
+        Loaded::Live(fresh) => referenced_blobs(versions, shard_id, fresh).await?,
+        Loaded::MissingRollup(key) => {
             report.missing.push(key.complete(&shard_id).to_string());
             return Ok(report);
         }
-        LoadedShard::Uninitialized => {
+        Loaded::Uninitialized => {
             return Err(anyhow!(
                 "{shard_id} lost all of its live diffs during the audit"
             ));
         }
     };
-    report.missing.extend(
-        absent
-            .into_iter()
-            .filter_map(|(key, seqno)| (seqno >= fresh_seqno_since).then_some(key)),
-    );
+    report.missing = absent
+        .into_iter()
+        .filter(|key| referenced.contains(key))
+        .collect();
     Ok(report)
 }
 
@@ -903,14 +950,13 @@ async fn audit_frontiers(
     versions: &StateVersions,
     shard_id: ShardId,
 ) -> anyhow::Result<Option<FrontierAuditReport>> {
-    let diffs = versions.fetch_recent_live_diffs::<u64>(&shard_id).await;
-    if diffs.0.is_empty() {
-        return Ok(None);
-    }
-    let state = versions
-        .fetch_current_state::<u64>(&shard_id, diffs.0)
-        .await
-        .check_ts_codec(&shard_id)?;
+    let state = match confirmed(shard_id, || load_head(versions, shard_id)).await? {
+        Loaded::Uninitialized => return Ok(None),
+        Loaded::MissingRollup(key) => {
+            return Err(anyhow!("{shard_id} references missing rollup {key}"));
+        }
+        Loaded::Live(state) => state,
+    };
     let trace = &state.collections.trace;
     if state.collections.is_tombstone() {
         return Ok(None);
@@ -1105,7 +1151,7 @@ mod tests {
 
     #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn audit_blobs_reports_deleted_head_rollup(dyncfgs: ConfigUpdates) {
+    async fn audits_report_deleted_head_rollup(dyncfgs: ConfigUpdates) {
         let (client, shard_id) = shard_with_parts(&dyncfgs).await;
         let mut deleted = BTreeSet::new();
         for (key, partial) in shard_keys(&client, shard_id).await {
@@ -1120,6 +1166,11 @@ mod tests {
             .expect("audit succeeds");
         assert_eq!(report.missing.len(), 1, "{report:?}");
         assert!(deleted.contains(&report.missing[0]));
+        assert!(
+            audit_frontiers(&state_versions(&client), shard_id)
+                .await
+                .is_err()
+        );
     }
 
     #[mz_persist_proc::test(tokio::test)]

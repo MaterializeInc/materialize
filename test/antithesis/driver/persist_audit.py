@@ -36,14 +36,40 @@ WHERE t.id LIKE 'u%'
 """
 
 
+def pick[T](rnd: AntithesisRandom, items: list[T], count: int) -> list[T]:
+    return rnd.sample(items, min(count, len(items)))
+
+
+def sample(
+    mz: Callable[[str], list[Any]],
+    consensus: str,
+    rnd: AntithesisRandom,
+    recovered: bool,
+) -> list[str]:
+    live = {s: obj for s, obj, _ in mz(LIVE)}
+    with psycopg.connect(consensus, connect_timeout=10, autocommit=True) as conn:
+        conn.execute("SET statement_timeout = '10s'")
+        known = {s for (s,) in conn.execute("SELECT DISTINCT shard FROM consensus")}
+    user = {s for s, obj in live.items() if obj.startswith("u")}
+    n = 25 if recovered else rnd.randint(1, 3)
+    shards = pick(rnd, sorted(user), n) + pick(
+        rnd, sorted(live.keys() - user), 5 if recovered else 3 - n
+    )
+    # Consensus also contains system and dropped shards that have no live catalog entry.
+    return shards + pick(rnd, sorted(known - live.keys()), 10 if recovered else 1)
+
+
 def audit(
     mz: Callable[[str], list[Any]],
     consensus: str,
     blob: str,
+    shards: list[str],
     rnd: AntithesisRandom,
     stopped: Callable[[], bool],
     deadline: float | None = None,
 ) -> str | None:
+    """After faults stop (with a deadline), each of the shards that is still
+    live must be audited, or the audit returns a problem."""
     recovered = deadline is not None
     end = deadline if deadline is not None else time.monotonic() + 180
     env = {**os.environ, "CONSENSUS_URI": consensus, "BLOB_URI": blob}
@@ -70,23 +96,14 @@ def audit(
             return None
         return json.loads(proc.stdout.splitlines()[-1])
 
-    def pick[T](items: list[T], count: int) -> list[T]:
-        return rnd.sample(items, min(count, len(items)))
-
     live = {s: (obj, name) for s, obj, name in mz(LIVE)}
-    with psycopg.connect(consensus, connect_timeout=10, autocommit=True) as conn:
-        conn.execute("SET statement_timeout = '10s'")
-        known = {s for (s,) in conn.execute("SELECT DISTINCT shard FROM consensus")}
-    user = {s for s, (obj, _) in live.items() if obj.startswith("u")}
-    n = 25 if recovered else rnd.randint(1, 3)
-    shards = pick(sorted(user), n) + pick(
-        sorted(live.keys() - user), 5 if recovered else 3 - n
-    )
-    # Consensus also contains system and dropped shards that have no live catalog entry.
-    shards += pick(sorted(known - live.keys()), 10 if recovered else 1)
+    unaudited = []
     checked_shards = checked_pairs = 0
     for shard in shards:
         blobs = inspect("audit-blobs", shard)
+        # The storage controller opens a shard before it maps it to a collection.
+        if shard in live and (blobs is None or blobs["since"] is None):
+            unaudited.append(shard)
         if blobs is None:
             continue
         details = {
@@ -109,7 +126,7 @@ def audit(
                 )
                 checked_shards += 1
 
-    for pair in pick(sorted(mz(PAIRS)), 20 if recovered else 2):
+    for pair in pick(rnd, sorted(mz(PAIRS)), 20 if recovered else 2):
         source, remap, table, export = pair
         # An advancing remap since can establish a violation only against an
         # export upper read later, while the same dependency still exists.
@@ -138,6 +155,10 @@ def audit(
             },
         )
         checked_pairs += 1
+    if recovered and unaudited:
+        current = mz(LIVE)
+        if unaudited := [s for s in unaudited if (s, *live[s]) in current]:
+            return f"could not audit the live shards {unaudited}"
     if checked_shards and checked_pairs:
         reachable("persist audited live shards and a writable source export", {})
         return None

@@ -26,7 +26,7 @@ import psycopg
 from antithesis.assertions import always, reachable, unreachable  # pyright: ignore
 from antithesis.lifecycle import setup_complete  # pyright: ignore
 from antithesis.random import AntithesisRandom  # pyright: ignore
-from persist_audit import audit
+from persist_audit import audit, sample
 
 KUBERNETES = "KUBERNETES_SERVICE_HOST" in os.environ
 NAMESPACE = "materialize-environment"
@@ -60,6 +60,8 @@ quiesced = threading.Event()
 mz_host = os.environ.get("MZ_HOST", "materialized")
 
 next_id = 0
+written: dict[int, tuple[int, int, int]] = {}
+"""Every ledger row that a write sent, by id."""
 acked: set[int] = set()
 sent = [0] * KEYS
 counted = [0] * KEYS
@@ -232,11 +234,14 @@ def write(w: Worker) -> None:
     with lock:
         ids = range(next_id, next_id + count)
         next_id += count
-    rows = ", ".join(f"({i}, {rnd.randrange(KEYS)}, {rnd.randrange(100)})" for i in ids)
+    rows = [(i, rnd.randrange(KEYS), rnd.randrange(100)) for i in ids]
+    values = ", ".join(map(str, rows))
     try:
         w.mz("BEGIN")
-        w.mz(f"INSERT INTO ledger VALUES {rows}")
-        w.mz(f"INSERT INTO ledger2 VALUES {rows}")
+        with lock:
+            written.update((row[0], row) for row in rows)
+        w.mz(f"INSERT INTO ledger VALUES {values}")
+        w.mz(f"INSERT INTO ledger2 VALUES {values}")
         w.mz("COMMIT")
     except Exception:
         reachable("a write failed or its outcome stayed unknown", {})
@@ -248,12 +253,12 @@ def write(w: Worker) -> None:
 def read(w: Worker) -> None:
     with lock:
         before = set(acked)
-    ids = [row[0] for row in w.mz("SELECT id FROM ledger")]
+    rows = w.mz("SELECT id, k, v FROM ledger")
     with lock:
-        limit = next_id
-    seen = set(ids)
-    d = {"rows": len(ids), "distinct": len(seen), "limit": limit}
-    valid = len(seen) == len(ids) and all(0 <= i < limit for i in seen)
+        unsent = [row for row in rows if written.get(row[0]) != row]
+    seen = {row[0] for row in rows}
+    d = {"rows": len(rows), "distinct": len(seen), "unsent": unsent[:20]}
+    valid = len(seen) == len(rows) and not unsent
     always(valid, "a read shows only rows the workload wrote, each once", d)
     missing = sorted(before - seen)
     d = {"missing": missing[:20], "count": len(missing)}
@@ -645,13 +650,21 @@ def recover(workers: list[threading.Thread], backends: tuple[str, str]) -> None:
                 return f"pg_{table} differs from the upstream"
 
     def kafka() -> Any:
-        return mz_session()(f"SELECT {differ(f'({ROUND_TRIP})', 'sums')}")[0][0]
+        # Equality after a write of its own shows that the sink delivers again.
+        w = Worker(WORKERS)
+        write(w)
+        query = f"SELECT {differ(f'({ROUND_TRIP})', 'sums')}"
+        while differing := w.mz(query)[0][0]:
+            if time.monotonic() > deadline:
+                return differing
+            time.sleep(2)
 
     def replicas() -> Any:
+        # A replica that has not reported a status yet is not online either.
         return mz_session()(
             "SELECT r.name, s.status FROM mz_cluster_replicas r"
-            " JOIN mz_internal.mz_cluster_replica_statuses s ON s.replica_id = r.id"
-            " WHERE s.status <> 'online'"
+            " LEFT JOIN mz_internal.mz_cluster_replica_statuses s ON s.replica_id = r.id"
+            " WHERE s.status IS DISTINCT FROM 'online'"
         )
 
     def applied() -> Any:
@@ -664,46 +677,81 @@ def recover(workers: list[threading.Thread], backends: tuple[str, str]) -> None:
             request_rollout()
         return not up_to_date(cr) and f"not up to date: {phase(cr)}"
 
+    shards: list[str] = []
+
     def persist() -> Any:
-        return audit(
-            mz_session("mz_system", "-c cluster=mz_catalog_server"),
-            *backends,
-            rnd,
-            lambda: False,
-            deadline,
-        )
+        mz = mz_session("mz_system", "-c cluster=mz_catalog_server")
+        # The same shards in every attempt, so that a later sample cannot skip
+        # one that fails.
+        if not shards:
+            shards.extend(sample(mz, backends[0], rnd, True))
+        return audit(mz, *backends, shards, rnd, lambda: False, deadline)
 
-    def recovers(check: Callable[[], Any]) -> None:
-        # Until the check neither raises nor returns a problem.
-        while True:
-            try:
-                problem = check()
-            except Exception as e:
-                problem = repr(e)
-            if not problem or time.monotonic() > deadline:
-                problems[check.__name__] = {"problem": str(problem)} if problem else {}
-                return
-            time.sleep(2)
+    def start(checks: list[Callable[[], Any]]) -> Callable[[], list[dict[str, str]]]:
+        """Runs each check until it neither raises nor returns a problem, side
+        by side, as a timeline seldom lives for minutes once faults stop.
+        Returns a function that waits for the checks' problems."""
+        problems: dict[str, dict[str, str]] = {}
 
-    # Side by side: a timeline seldom lives for minutes once faults stop.
-    problems: dict[str, dict[str, str]] = {}
-    checks = [tables, pg_source, kafka, replicas, persist, applied]
-    threads = [threading.Thread(target=recovers, args=(check,)) for check in checks]
-    for thread in threads:
-        thread.start()
+        def recovers(check: Callable[[], Any]) -> None:
+            while True:
+                try:
+                    problem = check()
+                except Exception as e:
+                    problem = repr(e)
+                if time.monotonic() > deadline:
+                    problem = problem or "passed only after the deadline"
+                    problems[check.__name__] = {"problem": str(problem)}
+                    return
+                if not problem:
+                    problems[check.__name__] = {}
+                    return
+                time.sleep(2)
+
+        threads = [
+            threading.Thread(target=recovers, args=(check,), daemon=True)
+            for check in checks
+        ]
+        for thread in threads:
+            thread.start()
+
+        def wait() -> list[dict[str, str]]:
+            # Past the deadline a check fails either way. The extra minute lets
+            # its last attempt report what it saw.
+            for thread in threads:
+                thread.join(max(0, deadline - time.monotonic()) + 60)
+            hung = {"problem": "did not return by the deadline"}
+            results = [problems.get(check.__name__, hung) for check in checks]
+            log(
+                f"after faults stopped: {dict(zip((c.__name__ for c in checks), results))}"
+            )
+            return results
+
+        return wait
+
+    def assert_data(t: Any, p: Any, k: Any, r: Any) -> None:
+        always(not t, "every check passes again after faults stop", t)
+        always(not p, "the Postgres source catches up after faults stop", p)
+        always(not k, "the Kafka sink read back equals its view after faults stop", k)
+        always(not r, "every replica is online after faults stop", r)
+
+    data = [tables, pg_source, kafka, replicas]
+    wait_data, wait_applied = start([*data, persist]), start([applied])
     # A rollout in progress takes minutes, so the others are asserted first.
-    for thread in threads[:-1]:
-        thread.join()
-    t, p, k, r, shards = (problems[check.__name__] for check in checks[:-1])
-    always(not t, "every check passes again after faults stop", t)
-    always(not p, "the Postgres source catches up after faults stop", p)
-    always(not k, "the Kafka sink read back equals its view after faults stop", k)
-    always(not r, "every replica is online after faults stop", r)
-    always(not shards, "persist shards can be audited after faults stop", shards)
-    threads[-1].join()
-    a = problems["applied"]
+    *results, shards_problem = wait_data()
+    assert_data(*results)
+    always(
+        not shards_problem,
+        "persist shards can be audited after faults stop",
+        shards_problem,
+    )
+    (a,) = wait_applied()
     always(not a, "the resource is up to date after faults stop", a)
-    log(f"after faults stopped: {problems}")
+    if KUBERNETES:
+        # The data checks can have passed on a generation that `applied` then
+        # promoted away.
+        deadline = time.monotonic() + RECOVERY_SECONDS
+        assert_data(*start(data)())
     reachable("the checks after faults stop ran to completion", {})
 
 
@@ -756,12 +804,9 @@ def main() -> None:
     rules = [weights] * WORKERS + ([{roll: 1}] if KUBERNETES else [])
 
     def audit_shards(w: Worker) -> None:
-        audit(
-            mz_session("mz_system", "-c cluster=mz_catalog_server"),
-            *backends,
-            rnd,
-            quiesced.is_set,
-        )
+        mz = mz_session("mz_system", "-c cluster=mz_catalog_server")
+        shards = sample(mz, backends[0], rnd, False)
+        audit(mz, *backends, shards, rnd, quiesced.is_set)
 
     rules.append({audit_shards: 1})
     workers = [
