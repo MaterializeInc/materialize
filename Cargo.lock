@@ -8242,6 +8242,7 @@ dependencies = [
  "tokio",
  "tokio-metrics",
  "tokio-openssl",
+ "tokio-postgres",
  "tokio-util",
  "tracing",
  "uuid",

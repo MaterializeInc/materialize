@@ -41,6 +41,10 @@ tokio-metrics.workspace = true
 tracing.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 
+[dev-dependencies]
+mz-ore = { path = "../ore", features = ["test"] }
+tokio-postgres.workspace = true
+
 [features]
 default = []
 # Re-exports internal types (`codec::Codec` etc.) so the fuzz crate can
