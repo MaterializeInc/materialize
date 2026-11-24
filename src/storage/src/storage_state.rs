@@ -1152,7 +1152,12 @@ impl<'w> Worker<'w> {
                     }
                 }
                 StorageCommand::RunIngestion(ingestion) => {
-                    info!(%worker_id, ?ingestion, "reconcile: received RunIngestion command");
+                    info!(
+                        %worker_id,
+                        id = %ingestion.id,
+                        "reconcile: received RunIngestion command"
+                    );
+                    debug!(%worker_id, ?ingestion, "reconcile: received RunIngestion command");
 
                     // Ensure that ingestions are forward-rolling alter compatible.
                     let prev = running_ingestion_descriptions
