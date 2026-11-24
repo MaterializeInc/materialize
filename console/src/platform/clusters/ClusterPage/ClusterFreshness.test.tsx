@@ -12,7 +12,7 @@ import userEvent from "@testing-library/user-event";
 import { delay, http } from "msw";
 import React from "react";
 import { Route, Routes } from "react-router-dom";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import server from "~/api/mocks/server";
 import { allObjects } from "~/store/allObjects";
@@ -36,9 +36,46 @@ const OBJECTS = {
   snapshotComplete: true,
 };
 
+const STORAGE_KEY = "mz-cluster-freshness-time-period";
+
+const renderTab = () =>
+  renderComponent(
+    <Routes>
+      <Route
+        path=":clusterId/:clusterName/freshness"
+        element={<ClusterFreshness />}
+      />
+    </Routes>,
+    {
+      initializeState: (store) => store.set(allObjects, OBJECTS),
+      initialRouterEntries: ["/u1/quickstart/freshness"],
+    },
+  );
+
 describe("ClusterFreshness", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  it("opens on the time range it last showed", async () => {
+    neverAnswerSql();
+    window.localStorage.setItem(STORAGE_KEY, "180");
+    await renderTab();
+
+    expect(await screen.findByLabelText("Time range")).toHaveValue("180");
+  });
+
+  it("keeps its time range apart from the Metrics tab's", async () => {
+    neverAnswerSql();
+    window.localStorage.setItem("mz-cluster-graph-time-period", "180");
+    await renderTab();
+
+    expect(await screen.findByLabelText("Time range")).toHaveValue("60");
+  });
+
   it("restores its controls from a bookmarked URL", async () => {
     neverAnswerSql();
+    window.localStorage.setItem(STORAGE_KEY, "60");
     await renderComponent(
       <Routes>
         <Route
@@ -60,6 +97,8 @@ describe("ClusterFreshness", () => {
     expect(screen.getByLabelText("Freshness threshold in seconds")).toHaveValue(
       5,
     );
+    // Saved, as the Metrics tab saves a range from its URL.
+    expect(window.localStorage.getItem(STORAGE_KEY)).toBe("360");
   });
 
   it("keeps its controls when the user leaves the tab and comes back", async () => {

@@ -23,14 +23,24 @@ import {
 } from "~/platform/freshness/FreshnessPage";
 import {
   freshnessControlsSearch,
+  parseTimePeriod,
   useFreshnessParams,
 } from "~/platform/freshness/useFreshnessParams";
 import { absoluteFreshnessPath } from "~/platform/routeHelpers";
 import { useRegionSlug } from "~/store/environments";
 import { MaterializeTheme } from "~/theme";
 import { assert } from "~/util";
+import storageAvailable from "~/utils/storageAvailable";
 
 import { freshnessTabSearchAtom } from "./tabLinks";
+
+const TIME_PERIOD_STORAGE_KEY = "mz-cluster-freshness-time-period";
+
+const readSavedTimePeriod = () =>
+  storageAvailable("localStorage")
+    ? (parseTimePeriod(window.localStorage.getItem(TIME_PERIOD_STORAGE_KEY)) ??
+      undefined)
+    : undefined;
 
 /**
  * The Freshness page fixed to this cluster. Its schema links open the Freshness
@@ -41,6 +51,7 @@ export const ClusterFreshness = () => {
   const { clusterId } = useParams<ClusterParams>();
   assert(clusterId);
   const regionSlug = useRegionSlug();
+  const [savedTimePeriod] = React.useState(readSavedTimePeriod);
   const {
     threshold,
     timePeriodMinutes,
@@ -50,7 +61,17 @@ export const ClusterFreshness = () => {
     setTimePeriodMinutes,
     setPredicate,
     setObjectTypes,
-  } = useFreshnessParams();
+  } = useFreshnessParams({ defaultTimePeriodMinutes: savedTimePeriod });
+  // Saves whatever range is shown, one from the URL included, as the Metrics
+  // tab does with its own.
+  React.useEffect(() => {
+    if (storageAvailable("localStorage")) {
+      window.localStorage.setItem(
+        TIME_PERIOD_STORAGE_KEY,
+        timePeriodMinutes.toString(),
+      );
+    }
+  }, [timePeriodMinutes]);
   const thresholdControl = useThresholdControl(threshold, setThreshold);
 
   // Only the Freshness settings, because the URL can also carry the
