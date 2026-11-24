@@ -5269,6 +5269,11 @@ def workflow_leader_failover(
             assert pods and all(
                 pod["status"]["phase"] == "Running" for pod in pods
             ), f"expected all {name} pods to be running, got {[(pod['metadata']['name'], pod['status']['phase']) for pod in pods]}"
+            for pod in pods:
+                security_context = pod["spec"]["containers"][0]["securityContext"]
+                assert security_context.get(
+                    "readOnlyRootFilesystem"
+                ), f"expected {name} to run with a read-only root filesystem, got {security_context}"
 
     retry(balancer_and_console_running, 300)
     print("Balancerd and console pods are running")
