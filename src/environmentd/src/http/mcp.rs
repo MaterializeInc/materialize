@@ -883,8 +883,6 @@ impl From<McpRequestError> for McpError {
 enum McpEndpointType {
     Agent,
     Developer,
-    /// Serves its own tool list, and the agent endpoint's instructions.
-    // TODO(DEX-110): give it its own instructions.
     Unified,
 }
 
@@ -1438,7 +1436,10 @@ fn endpoint_instructions(
     read_data_product_tool_enabled: bool,
 ) -> Option<String> {
     match endpoint_type {
-        McpEndpointType::Agent | McpEndpointType::Unified => {
+        // `/api/mcp` serves its three tools whatever the agent and developer
+        // tool flags say, so its text names all three.
+        McpEndpointType::Unified => Some(UNIFIED_INSTRUCTIONS.to_string()),
+        McpEndpointType::Agent => {
             // Only reference tools that are actually exposed by tools/list.
             // Both flags off is a valid (if unusual) config where the agent
             // can only discover products, not read them — we say so instead
@@ -1520,9 +1521,34 @@ fn endpoint_instructions(
     }
 }
 
+const UNIFIED_INSTRUCTIONS: &str = "\
+You are connected to the Materialize MCP server. It reads data products and the system catalog.
+
+Tools:
+- list_data_products: the data products your role can read. Start here.
+- get_data_product_details: one data product's columns, its cluster, and its `hydration`.
+- query: read-only SELECT, SHOW, or EXPLAIN against anything your role can read, data products and system catalog alike.
+
+Reading data products:
+- Pass the `cluster` from get_data_product_details to query, so indexed reads hit the arrangement. Prefer indexed objects (served from memory) over unindexed materialized views (read from persistent storage).
+- A null `cluster` means your role lacks USAGE on that cluster. Omit `cluster`, and the query runs on your session's default cluster.
+- Check `hydration` before reading. Reads never return partial data: a read of a product that is not hydrated blocks until the dataflow catches up, and may hit the request timeout. If `hydrated` is false and `replica_count` is greater than 0, wait and retry. If `replica_count` is 0, the cluster has no replicas and the read cannot make progress until one is added.
+
+System catalog:
+- Write system object names with their schema, for example mz_internal.mz_source_statuses. query does not add the system schemas to the search path.
+- Before writing catalog queries, find tables, columns, and join paths in mz_internal.mz_ontology_entity_types, mz_internal.mz_ontology_link_types, mz_internal.mz_ontology_properties, and mz_internal.mz_ontology_semantic_types.
+- mz_introspection relations (for example mz_introspection.mz_dataflow_arrangement_sizes) are cluster-scoped: query them with `cluster` set, and `cluster_replica` on a cluster with more than one replica.
+- mz_internal.mz_source_statuses and mz_internal.mz_sink_statuses use `last_status_change_at`, not `updated_at`.
+- mz_internal.mz_cluster_replica_utilization only has `replica_id`: join mz_catalog.mz_cluster_replicas and mz_catalog.mz_clusters for names.
+- mz_introspection.mz_dataflow_arrangement_sizes.id and mz_introspection.mz_dataflows.id are dataflow ids (uint8), not catalog ids: join through mz_introspection.mz_compute_exports (dataflow_id to export_id), or match the name column, which reads Dataflow: <database>.<schema>.<object>.";
+
 fn server_info(endpoint_type: McpEndpointType) -> ServerInfo {
+    let name = match endpoint_type {
+        McpEndpointType::Unified => "materialize-mcp".to_string(),
+        other => format!("materialize-mcp-{other}"),
+    };
     ServerInfo {
-        name: format!("materialize-mcp-{}", endpoint_type),
+        name,
         version: env!("CARGO_PKG_VERSION").to_string(),
     }
 }
