@@ -380,10 +380,10 @@ impl Config {
 /// Reports whether the server refused the connection's credentials, which is
 /// SQLSTATE class 28.
 ///
-/// NOTE: Amazon RDS was observed to answer a refused IAM connection with
-/// `28P01`. That was with IAM authentication disabled for replication. A
-/// token signed by a revoked role session has not been tried, so that case
-/// producing a class 28 error is an assumption.
+/// Amazon RDS was observed to answer two kinds of refused IAM connection
+/// with an error in this class. With IAM authentication disabled for
+/// replication, it reports `password authentication failed`. With a token
+/// signed by a revoked role session, it reports `PAM authentication failed`.
 fn is_authentication_failure(error: &PostgresError) -> bool {
     match error {
         PostgresError::Postgres(e) => {
@@ -435,6 +435,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `getauxval` on OS `linux`
     async fn refused_login_reports_the_token() {
         let Ok(url) = std::env::var("POSTGRES_URL") else {
+            println!("skipped: POSTGRES_URL is not set, so there is no server to connect to");
             return;
         };
         let mut inner: tokio_postgres::Config = url.parse().expect("valid POSTGRES_URL");
