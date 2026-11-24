@@ -298,7 +298,12 @@ class ObservedError(ObservedBaseError):
     occurrences: int = 1
 
     def error_message_as_markdown(self) -> str:
-        return format_message_as_code_block(self.error_message, self.max_error_length)
+        message = self.error_message
+        if os.getenv("BUILDKITE_STEP_KEY") == "cargo-deny-check-advisories":
+            lines = message.splitlines()
+            if len(lines) > 20:
+                message = "\n".join([*lines[:20], "[...]"])
+        return format_message_as_code_block(message, self.max_error_length)
 
     def error_details_as_markdown(self) -> str:
         if self.error_details is None:
@@ -622,9 +627,10 @@ def annotate_unexplained_failure(
         )
         markdown = annotation.to_markdown()
         if log_file:
+            markdown += "\n    [...]"
             with open(log_file, errors="replace") as f:
-                tail = "\n".join(line.rstrip()[:500] for line in deque(f, 30))
-            markdown += f"The end of its log:\n<pre>{html.escape(tail)}</pre>"
+                for line in deque(f, 20):
+                    markdown += f"\n    {line.rstrip()[:500]}"
         add_annotation_raw(style="error", markdown=markdown)
 
         store_annotation_in_test_analytics(test_analytics, annotation)
