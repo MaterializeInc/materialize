@@ -81,5 +81,6 @@ deployment can be cleaned up without affecting production.
 - [Deployments](/developer-tools/mz-deploy/deployments/)
 - [Stable APIs](/developer-tools/mz-deploy/stable-apis/)
 - [Profiles](/developer-tools/mz-deploy/profiles/)
+- [Environments and CI/CD](/developer-tools/mz-deploy/environments/)
 {{</ linkbox >}}
 {{</ multilinkbox >}}
