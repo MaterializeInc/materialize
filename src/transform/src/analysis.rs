@@ -11,6 +11,7 @@
 
 pub mod equivalences;
 pub mod monotonic;
+pub mod sub_multiset;
 
 use mz_expr::MirRelationExpr;
 
@@ -21,6 +22,7 @@ pub use common::{Derived, DerivedBuilder, DerivedView};
 pub use explain::annotate_plan;
 pub use non_negative::NonNegative;
 pub use repr_types::ReprRelationType;
+pub use sub_multiset::SubMultiset;
 pub use subtree::SubtreeSize;
 pub use unique_keys::UniqueKeys;
 
