@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { HStack, Tooltip } from "@chakra-ui/react";
+import { HStack, Skeleton, Tooltip } from "@chakra-ui/react";
 import React from "react";
 import { Link as RouterLink } from "react-router-dom";
 
@@ -79,5 +79,19 @@ export const ClusterActionsCell = ({
         ),
       },
     ]}
+  />
+);
+
+/**
+ * Stands in for a metric cell's value while the query that feeds it is
+ * pending, so a dash only means the metric is absent or failed to load.
+ */
+export const MetricSkeleton = () => (
+  <Skeleton
+    data-testid="metric-loading"
+    display="inline-block"
+    verticalAlign="middle"
+    height="3"
+    width="14"
   />
 );

@@ -58,6 +58,7 @@ import { assert } from "~/util";
 import { formatMemoryUsage } from "~/utils/format";
 
 import { ClusterParams } from "./ClusterRoutes";
+import { MetricSkeleton } from "./clusterTableCells";
 import { formatTableLagInfo } from "./format";
 import {
   ArrangmentsMemoryUsageMap,
@@ -153,14 +154,15 @@ const IndexListInner = ({
     [indexes],
   );
 
-  const { data: sortedReplicas } = useReplicasBySize({
-    clusterId,
-    orderBy: "heapLimit",
-  });
+  const { data: sortedReplicas, isPending: isReplicasPending } =
+    useReplicasBySize({
+      clusterId,
+      orderBy: "heapLimit",
+    });
   const replicaName = sortedReplicas?.rows[0]?.name;
   const replicaHeapLimit = sortedReplicas?.rows[0]?.heapLimit;
 
-  const { data } = useArrangmentsMemory({
+  const { data, isPending: isMemoryQueryPending } = useArrangmentsMemory({
     arrangmentIds,
     // bigint is not serializable. This conversion is lossy, but shouldn't matter in
     // practice.
@@ -170,9 +172,10 @@ const IndexListInner = ({
   });
   const memoryUsageById = data?.memoryUsageById;
 
-  const { data: materializationLagData } = useMaterializationLag({
-    objectIds: arrangmentIds,
-  });
+  const { data: materializationLagData, isPending: isLagPending } =
+    useMaterializationLag({
+      objectIds: arrangmentIds,
+    });
 
   const { lagMap } = materializationLagData ?? {};
 
@@ -186,7 +189,9 @@ const IndexListInner = ({
       indexes={indexes?.rows ?? []}
       replicas={cluster?.replicas ?? []}
       memoryUsageMap={memoryUsageById}
+      isMemoryUsagePending={isReplicasPending || isMemoryQueryPending}
       lagMap={lagMap}
+      isLagPending={isLagPending}
     />
   );
 };
@@ -195,7 +200,9 @@ interface IndexTableProps {
   indexes: Index[];
   replicas: Replica[];
   memoryUsageMap: ArrangmentsMemoryUsageMap | undefined;
+  isMemoryUsagePending: boolean;
   lagMap?: LagMap;
+  isLagPending: boolean;
 }
 
 const IndexTable = (props: IndexTableProps) => {
@@ -267,14 +274,20 @@ const IndexTable = (props: IndexTableProps) => {
                 </Td>
                 <Td>{i.relationType}</Td>
                 <Td data-testid="memory-usage">
-                  {formatMemoryUsage(memoryStats)}{" "}
+                  {props.isMemoryUsagePending ? (
+                    <MetricSkeleton />
+                  ) : (
+                    formatMemoryUsage(memoryStats)
+                  )}{" "}
                   {lagInfo && !lagInfo.hydrated && (
                     <Tooltip label="Memory usage will continue increase until hydration is complete.">
                       <InfoIcon />
                     </Tooltip>
                   )}
                 </Td>
-                <Td>{formattedLag}</Td>
+                <Td data-testid="freshness">
+                  {props.isLagPending ? <MetricSkeleton /> : formattedLag}
+                </Td>
                 {dataflowVisualizerEnabled && (
                   <Td width="16">
                     <OverflowMenu
