@@ -216,24 +216,22 @@ impl AwsAssumeRole {
         // used. With such a provider, a key rotated in the shared credentials
         // file is never picked up, and every fetch fails once the old key is
         // disabled.
-        let provider = RebuildingProvider {
-            build: move || {
-                let role = role.clone();
-                let connection_role_arn = connection_role_arn.clone();
-                let environment_id = environment_id.clone();
-                let external_id = Some(external_id.clone());
-                async move {
-                    role.assume_through_connection_role(
-                        &connection_role_arn,
-                        &environment_id,
-                        connection_id,
-                        external_id,
-                        None,
-                    )
-                    .await
-                }
-            },
-        };
+        let provider = RebuildingProvider::new(move || {
+            let role = role.clone();
+            let connection_role_arn = connection_role_arn.clone();
+            let environment_id = environment_id.clone();
+            let external_id = Some(external_id.clone());
+            async move {
+                role.assume_through_connection_role(
+                    &connection_role_arn,
+                    &environment_id,
+                    connection_id,
+                    external_id,
+                    None,
+                )
+                .await
+            }
+        });
         let cache = LazyCredentialCache::new(SharedCredentialsProvider::new(provider));
         Ok(connection_context
             .aws_credentials_cache
@@ -740,10 +738,20 @@ impl AwsCredentialsCache {
     }
 }
 
-/// A [`ProvideCredentials`] that builds a new provider for every fetch, so
-/// that nothing a provider read when it was built is reused.
+/// A [`ProvideCredentials`] that replaces its provider after a failed fetch.
 struct RebuildingProvider<F> {
     build: F,
+    /// `None` before the first fetch and after a failed one.
+    current: Mutex<Option<SharedCredentialsProvider>>,
+}
+
+impl<F> RebuildingProvider<F> {
+    fn new(build: F) -> RebuildingProvider<F> {
+        RebuildingProvider {
+            build,
+            current: Mutex::new(None),
+        }
+    }
 }
 
 impl<F> std::fmt::Debug for RebuildingProvider<F> {
@@ -755,8 +763,8 @@ impl<F> std::fmt::Debug for RebuildingProvider<F> {
 impl<F, Fut, P> ProvideCredentials for RebuildingProvider<F>
 where
     F: Fn() -> Fut + Send + Sync,
-    Fut: Future<Output = P> + Send,
-    P: ProvideCredentials,
+    Fut: Future<Output = P> + Send + 'static,
+    P: ProvideCredentials + 'static,
 {
     fn provide_credentials<'a>(
         &'a self,
@@ -765,8 +773,33 @@ where
         Self: 'a,
     {
         aws_credential_types::provider::future::ProvideCredentials::new(async move {
-            let provider = (self.build)().await;
-            provider.provide_credentials().await
+            let current = self.current.lock().expect("lock poisoned").clone();
+            let provider = match current {
+                Some(provider) => provider,
+                None => {
+                    // NOTE: Building a provider from the default SDK
+                    // configuration reads the shared profile files with
+                    // blocking I/O, and the caller can be a Timely worker.
+                    let name = || "build_aws_credentials_provider";
+                    let built = mz_ore::task::spawn(name, (self.build)()).await;
+                    let provider = SharedCredentialsProvider::new(built);
+                    let mut slot = self.current.lock().expect("lock poisoned");
+                    *slot = Some(provider.clone());
+                    provider
+                }
+            };
+            let result = provider.provide_credentials().await;
+            if result.is_err() {
+                // The provider might have failed because of something that it
+                // read when it was built, such as an access key that has
+                // since been rotated in the shared credentials file. A
+                // provider that works is kept, because the SDK's providers
+                // hold state that a new one lacks. The instance metadata
+                // provider, for one, serves its last credentials while the
+                // metadata service is unreachable.
+                *self.current.lock().expect("lock poisoned") = None;
+            }
+            result
         })
     }
 }
@@ -1731,24 +1764,37 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    async fn rebuilding_provider_builds_a_provider_for_every_fetch() {
+    async fn rebuilding_provider_rebuilds_only_after_a_failed_fetch() {
         let builds = Arc::new(AtomicUsize::new(0));
-        let provider = RebuildingProvider {
-            build: {
-                let builds = Arc::clone(&builds);
-                move || {
-                    let n = builds.fetch_add(1, Ordering::SeqCst) + 1;
-                    let key = format!("akid-{n}");
-                    async move { Credentials::new(key, "secret", None, None, "test") }
-                }
-            },
-        };
+        let provider = RebuildingProvider::new({
+            let builds = Arc::clone(&builds);
+            move || {
+                builds.fetch_add(1, Ordering::SeqCst);
+                // Each built provider serves two fetches and then fails.
+                async move { CountingProvider::shared(0, 2, None).1 }
+            }
+        });
+
+        for key in ["akid-1", "akid-2"] {
+            let creds = provider.provide_credentials().await.unwrap();
+            assert_eq!(creds.access_key_id(), key);
+        }
+        assert_eq!(
+            builds.load(Ordering::SeqCst),
+            1,
+            "a provider that works must be reused"
+        );
+
+        provider.provide_credentials().await.unwrap_err();
+        assert_eq!(builds.load(Ordering::SeqCst), 1);
 
         let creds = provider.provide_credentials().await.unwrap();
         assert_eq!(creds.access_key_id(), "akid-1");
-        let creds = provider.provide_credentials().await.unwrap();
-        assert_eq!(creds.access_key_id(), "akid-2");
-        assert_eq!(builds.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            builds.load(Ordering::SeqCst),
+            2,
+            "the fetch after a failure must use a new provider"
+        );
     }
 
     #[mz_ore::test(tokio::test(start_paused = true))]
