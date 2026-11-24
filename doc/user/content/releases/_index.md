@@ -38,11 +38,11 @@ We tested v26.48, v26.51, and v26.52, running `environmentd` with 32 CPUs and be
 
 The option cannot be combined with `PASSWORD` and requires SSL. For setup steps, see [`CREATE CONNECTION`: PostgreSQL](/sql/create-connection/#postgres-aws-connection-example).
 
-### Query policies, to reject unindexed queries on a cluster {#v26.52-query-policies}
+### Query policies, to protect your cluster against runaway ad hoc queries {#v26.52-query-policies}
 
 {{< private-preview />}}
 
-Query policies let you reject unindexed queries on a cluster that serves an application, so that ad hoc queries can't compete with it for memory and CPU. This means improved stability for your applications.
+Ad hoc queries can build temporary dataflows or read from object storage on a cluster that serves an application. These queries compete for memory and CPU with the queries your application depends on, and can cause the cluster to run out of memory. A query policy lets you warn about or reject these queries on a cluster, while the indexes and materialized views on the cluster keep running.
 
 For example, to reject unindexed queries:
 
