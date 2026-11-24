@@ -542,6 +542,32 @@ address  text  The␠address␠the␠rule␠will␠take␠action␠on.
 direction  text  The␠direction␠of␠traffic␠the␠rule␠applies␠to.␠`ingress`␠is␠the␠only␠supported␠direction.
 
 query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_query_policies' ORDER BY position
+----
+id  text  The␠ID␠of␠the␠query␠policy.
+name  text  The␠name␠of␠the␠query␠policy.
+mode  text  Whether␠matching␠rules␠warn␠or␠enforce␠rejection:␠`warn`␠or␠`enforce`.
+owner_id  text  The␠role␠ID␠of␠the␠policy␠owner.␠Corresponds␠to␠`mz_catalog.mz_roles.id`.
+privileges  mz_aclitem[]  The␠privileges␠belonging␠to␠the␠query␠policy.
+oid  oid  A␠PostgreSQL-compatible␠OID␠for␠the␠query␠policy.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_query_policy_rules' ORDER BY position
+----
+policy_id  text  The␠policy␠containing␠this␠rule.␠Corresponds␠to␠`mz_internal.mz_query_policies.id`.
+name  text  The␠name␠of␠the␠rule␠within␠its␠policy.
+action  text  The␠rule␠action:␠`reject`.
+metric  text  The␠inspected␠metric:␠`query_plan_includes`.
+value  text  The␠prohibited␠plan␠feature:␠`temporary_dataflow`␠or␠`storage_read`.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_query_policy_attachments' ORDER BY position
+----
+policy_id  text  The␠attached␠policy.␠Corresponds␠to␠`mz_internal.mz_query_policies.id`.
+object_type  text  The␠attachment␠target␠type:␠`cluster`.
+object_id  text  The␠attached␠cluster.␠Corresponds␠to␠`mz_catalog.mz_clusters.id`.
+
+query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_all_privileges' ORDER BY position
 ----
 grantor  text  The␠role␠that␠granted␠the␠privilege.

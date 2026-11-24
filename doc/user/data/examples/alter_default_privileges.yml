@@ -5,6 +5,7 @@
       [IN SCHEMA <schema_name> [, ...] | IN DATABASE <database_name> [, ...]]
       GRANT [<privilege> [, ...] | ALL [PRIVILEGES]]
       ON TABLES | TYPES | SECRETS | CONNECTIONS | DATABASES | SCHEMAS | CLUSTERS
+        | QUERY POLICIES
       TO <target_role> [, ...]
     ;
   syntax_elements:
@@ -37,6 +38,7 @@
       [IN SCHEMA <schema_name> [, ...] | IN DATABASE <database_name> [, ...]]
       REVOKE [<privilege> [, ...] | ALL [PRIVILEGES]]
       ON TABLES | TYPES | SECRETS | CONNECTIONS | DATABASES | SCHEMAS | CLUSTERS
+        | QUERY POLICIES
       FROM <target_role> [, ...]
     ;
   syntax_elements:

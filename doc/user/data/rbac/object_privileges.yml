@@ -21,6 +21,10 @@ rows:
     Privileges: |
       - `SELECT`
 
+  - Object: "`QUERY POLICY`"
+    Privileges: |
+      - `USAGE`
+
   - Object: "`SCHEMA`"
     Privileges: |
       - `USAGE`
@@ -40,6 +44,7 @@ rows:
       - `CREATEDB`
       - `CREATECLUSTER`
       - `CREATENETWORKPOLICY`
+      - `CREATEQUERYPOLICY`
 
   - Object: "`TABLE`"
     Privileges: |
