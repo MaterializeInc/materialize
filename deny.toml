@@ -261,6 +261,8 @@ wrappers = [
     "tracing-log",
     "tracing",
     "tungstenite",
+    "ureq",
+    "ureq-proto",
 ]
 
 # once_cell is going to be added to std, and doesn't use macros

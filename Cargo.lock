@@ -1582,7 +1582,7 @@ dependencies = [
  "bitflags 2.13.2",
  "cexpr",
  "clang-sys",
- "itertools 0.13.0",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "regex",
@@ -4843,7 +4843,7 @@ dependencies = [
 [[package]]
 name = "iceberg"
 version = "0.10.1"
-source = "git+https://github.com/MaterializeInc/iceberg-rust.git?rev=ef394b5baf04a7a634097aecf88ac9da42ff850d#ef394b5baf04a7a634097aecf88ac9da42ff850d"
+source = "git+https://github.com/MaterializeInc/iceberg-rust.git?rev=8b77a68e675d7a6cae1c5cc730bc1502a39c73fe#8b77a68e675d7a6cae1c5cc730bc1502a39c73fe"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -4900,7 +4900,7 @@ dependencies = [
 [[package]]
 name = "iceberg-catalog-rest"
 version = "0.10.1"
-source = "git+https://github.com/MaterializeInc/iceberg-rust.git?rev=ef394b5baf04a7a634097aecf88ac9da42ff850d#ef394b5baf04a7a634097aecf88ac9da42ff850d"
+source = "git+https://github.com/MaterializeInc/iceberg-rust.git?rev=8b77a68e675d7a6cae1c5cc730bc1502a39c73fe#8b77a68e675d7a6cae1c5cc730bc1502a39c73fe"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4919,7 +4919,7 @@ dependencies = [
 [[package]]
 name = "iceberg-storage-opendal"
 version = "0.10.1"
-source = "git+https://github.com/MaterializeInc/iceberg-rust.git?rev=ef394b5baf04a7a634097aecf88ac9da42ff850d#ef394b5baf04a7a634097aecf88ac9da42ff850d"
+source = "git+https://github.com/MaterializeInc/iceberg-rust.git?rev=8b77a68e675d7a6cae1c5cc730bc1502a39c73fe#8b77a68e675d7a6cae1c5cc730bc1502a39c73fe"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5774,6 +5774,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tar",
+ "ureq",
 ]
 
 [[package]]

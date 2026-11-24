@@ -362,7 +362,7 @@ differential-dataflow = "0.26.0"
 differential-dogs3 = "0.26.0"
 digest = "0.11.3"
 dirs = "7.0.0"
-duckdb = { version = "1.20001.0", default-features = false }
+duckdb = { version = "1.20001.0", default-features = false, features = ["download-lib"] }
 dynfmt = { version = "0.2.0", features = ["curly"] }
 either = "1.18.0"
 encoding = "0.2.0"
@@ -710,9 +710,9 @@ tiberius = { git = "https://github.com/MaterializeInc/tiberius", rev="64ca594cc2
 # NOTE: The `[workspace.dependencies]` version requirement above must stay
 # semver-compatible with this revision's crate version, otherwise Cargo drops
 # these patches into `[[patch.unused]]` and silently builds against crates.io.
-iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "ef394b5baf04a7a634097aecf88ac9da42ff850d" }
-iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "ef394b5baf04a7a634097aecf88ac9da42ff850d" }
-iceberg-storage-opendal = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "ef394b5baf04a7a634097aecf88ac9da42ff850d" }
+iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "8b77a68e675d7a6cae1c5cc730bc1502a39c73fe" }
+iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "8b77a68e675d7a6cae1c5cc730bc1502a39c73fe" }
+iceberg-storage-opendal = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "8b77a68e675d7a6cae1c5cc730bc1502a39c73fe" }
 
 
 # BEGIN LINT CONFIG
