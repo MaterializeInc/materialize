@@ -121,6 +121,13 @@ case "$arch_gcc" in
     *) die "unknown host architecture \"$arch\"" ;;
 esac
 
+# Return address signing for the C and C++ dependencies, appended to CFLAGS
+# and CXXFLAGS in ci/builder/Dockerfile. Only aarch64 has it.
+c_branch_protection=""
+if [[ "$arch_gcc" = aarch64 ]]; then
+    c_branch_protection="-mbranch-protection=standard"
+fi
+
 docker_build_args="\
 --build-arg ARCH_GCC=$arch_gcc \
 --build-arg ARCH_GO=$arch_go \
@@ -128,7 +135,8 @@ docker_build_args="\
 --build-arg RUST_DATE=$rust_date \
 --build-arg RUST_COMPONENTS=$rust_components \
 --build-arg RUST_CPU_TARGET=$rust_cpu_target \
---build-arg RUST_TARGET_FEATURES=$rust_target_features"
+--build-arg RUST_TARGET_FEATURES=$rust_target_features \
+--build-arg C_BRANCH_PROTECTION=$c_branch_protection"
 
 uid=$(id -u)
 gid=$(id -g)
