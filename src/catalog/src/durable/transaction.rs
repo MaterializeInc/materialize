@@ -4403,16 +4403,20 @@ mod tests {
 
     #[mz_ore::test]
     fn empty_key_verification_preserves_full_soft_check() {
-        // Duplicate base names must still trip the optional full check when no key is live.
+        // Distinct values with the same name must trip the full check when no key is live.
         let table: TableTransaction<Vec<u8>, String> = TableTransaction::new_with_uniqueness_fn(
             BTreeMap::from([
-                (1i64.to_le_bytes().to_vec(), "duplicate".to_string()),
-                (2i64.to_le_bytes().to_vec(), "duplicate".to_string()),
+                (1i64.to_le_bytes().to_vec(), "a1".to_string()),
+                (2i64.to_le_bytes().to_vec(), "a2".to_string()),
             ]),
-            |a, b| a == b,
-            |a, b| a == b,
+            |a, b| a.chars().next() == b.chars().next(),
+            |a, b| a.chars().next() == b.chars().next(),
         )
         .unwrap();
+        assert!(matches!(
+            table.verify(),
+            Err(DurableCatalogError::UniquenessViolation)
+        ));
         for keys in [vec![], vec![3i64.to_le_bytes().to_vec()]] {
             let result = std::panic::catch_unwind(|| table.verify_keys(&keys));
             if mz_ore::assert::soft_assertions_enabled() {
