@@ -291,8 +291,8 @@ antithesis-instrumentation = "0.1.1"
 anyhow = "1.0.102"
 array-concat = "0.5.5"
 arrayvec = "0.7.6"
-arrow = { version = "58.4.1", default-features = false }
-arrow-ipc = "58.4.1"
+arrow = { version = "60.2.0", default-features = false }
+arrow-ipc = "60.2.0"
 askama = { version = "0.16.1", default-features = false, features = ["config", "derive", "serde_json", "std"] }
 assert_cmd = "2.2.2"
 async-compression = { version = "0.4.27", features = ["bzip2", "gzip", "tokio", "xz", "zstd"] }
@@ -362,7 +362,7 @@ differential-dataflow = "0.26.0"
 differential-dogs3 = "0.26.0"
 digest = "0.11.3"
 dirs = "7.0.0"
-duckdb = { version = "1.10506.1", default-features = false }
+duckdb = { version = "1.20001.0", default-features = false }
 dynfmt = { version = "0.2.0", features = ["curly"] }
 either = "1.18.0"
 encoding = "0.2.0"
@@ -460,7 +460,7 @@ opentelemetry_sdk = { version = "0.33.0", features = ["experimental_trace_batch_
 ordered-float = { version = "5.1.0", features = ["serde"] }
 os_info = "3.11.0"
 owo-colors = "4.3.0"
-parquet = { version = "58.4.1", default-features = false, features = ["arrow", "async", "brotli", "flate2", "flate2-zlib-rs", "lz4", "snap", "zstd"] }
+parquet = { version = "60.2.0", default-features = false, features = ["arrow", "async", "brotli", "flate2", "flate2-zlib-rs", "lz4", "snap", "zstd"] }
 paste = "1.0.15"
 pem = "4.0.0"
 phf = { version = "0.14.0", features = ["uncased"] }
@@ -710,9 +710,9 @@ tiberius = { git = "https://github.com/MaterializeInc/tiberius", rev="64ca594cc2
 # NOTE: The `[workspace.dependencies]` version requirement above must stay
 # semver-compatible with this revision's crate version, otherwise Cargo drops
 # these patches into `[[patch.unused]]` and silently builds against crates.io.
-iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "9e252ad09e27950d2f3cbc7e2da0d1f5255731a0" }
-iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "9e252ad09e27950d2f3cbc7e2da0d1f5255731a0" }
-iceberg-storage-opendal = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "9e252ad09e27950d2f3cbc7e2da0d1f5255731a0" }
+iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "ef394b5baf04a7a634097aecf88ac9da42ff850d" }
+iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "ef394b5baf04a7a634097aecf88ac9da42ff850d" }
+iceberg-storage-opendal = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "ef394b5baf04a7a634097aecf88ac9da42ff850d" }
 
 
 # BEGIN LINT CONFIG
