@@ -66,7 +66,9 @@ use mz_storage_types::connections::{
     SqlServerConnectionDetails, SshConnection,
 };
 use mz_storage_types::instances::StorageInstanceId;
-use mz_storage_types::sinks::{S3SinkFormat, SinkEnvelope, StorageSinkConnection};
+use mz_storage_types::sinks::{
+    S3SinkFormat, SinkCreationVersion, SinkEnvelope, StorageSinkConnection,
+};
 use mz_storage_types::sources::{
     SourceDesc, SourceExportDataConfig, SourceExportDetails, Timeline,
 };
@@ -2051,6 +2053,7 @@ pub struct Sink {
     // TODO(guswynn): this probably should just be in the `connection`.
     pub envelope: SinkEnvelope,
     pub version: u64,
+    pub creation_version: SinkCreationVersion,
     pub commit_interval: Option<Duration>,
 }
 

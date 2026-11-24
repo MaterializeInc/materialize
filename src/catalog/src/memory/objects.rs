@@ -61,7 +61,7 @@ use mz_sql::rbac;
 use mz_sql::session::vars::OwnedVarInput;
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_types::connections::inline::ReferencedConnection;
-use mz_storage_types::sinks::{SinkEnvelope, StorageSinkConnection};
+use mz_storage_types::sinks::{SinkCreationVersion, SinkEnvelope, StorageSinkConnection};
 use mz_storage_types::sources::load_generator::LoadGenerator;
 use mz_storage_types::sources::{
     GenericSourceConnection, SourceConnection, SourceDesc, SourceEnvelope, SourceExportDataConfig,
@@ -1380,6 +1380,7 @@ pub struct Sink {
     pub with_snapshot: bool,
     /// Used to fence other writes into this sink as we evolve the upstream materialized view.
     pub version: u64,
+    pub creation_version: SinkCreationVersion,
     /// Other catalog objects this sink references.
     pub resolved_ids: ResolvedIds,
     /// Cluster this sink runs on.

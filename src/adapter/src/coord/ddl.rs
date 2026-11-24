@@ -1717,6 +1717,7 @@ impl Coordinator {
             as_of,
             with_snapshot: sink.with_snapshot,
             version: sink.version,
+            creation_version: sink.creation_version.clone(),
             from_storage_metadata: (),
             to_storage_metadata: (),
             commit_interval: sink.commit_interval,

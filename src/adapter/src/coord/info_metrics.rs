@@ -449,6 +449,7 @@ mod tests {
             envelope: SinkEnvelope::Upsert,
             with_snapshot: true,
             version: 0,
+            creation_version: Default::default(),
             resolved_ids: ResolvedIds::empty(),
             cluster_id,
             commit_interval: None,

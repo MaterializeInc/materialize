@@ -1392,8 +1392,9 @@ fn humanize_sql_for_show_create(
                     CreateSinkOptionName::CommitInterval => true,
                     CreateSinkOptionName::PartitionStrategy => true,
                     CreateSinkOptionName::Snapshot => true,
-                    // Drop version, which does not roundtrip.
+                    // Drop the options purification rejects from users.
                     CreateSinkOptionName::Version => false,
+                    CreateSinkOptionName::CreationVersion => false,
                 }
             });
         }

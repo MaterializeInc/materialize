@@ -1925,6 +1925,7 @@ impl CatalogState {
                 connection: sink.connection,
                 envelope: sink.envelope,
                 version: sink.version,
+                creation_version: sink.creation_version,
                 with_snapshot,
                 resolved_ids,
                 cluster_id: in_cluster,

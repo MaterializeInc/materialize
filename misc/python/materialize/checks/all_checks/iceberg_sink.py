@@ -707,3 +707,85 @@ class AlterIcebergSinkOrder(Check):
                 12 cc
                 102 ccc
             """))
+
+
+@externally_idempotent(False)
+class IcebergSinkJsonbStringEncoding(Check):
+    """A sink keeps the jsonb string encoding it was created with (SS-611).
+
+    Sinks created before v26.53 wrote a jsonb string scalar as its bare
+    contents. Later sinks write JSON text. An existing sink must not switch on
+    upgrade. Its equality deletes (the upsert sink is keyed on the jsonb
+    column) and its append-mode retractions are matched by value against rows
+    already in the table, so a switch leaves deleted rows visible.
+    """
+
+    def _can_run(self, e: Executor) -> bool:
+        # MODE APPEND and jsonb key columns both date from v26.19.
+        return self.base_version >= MzVersion.parse_mz("v26.19.0-dev")
+
+    def initialize(self) -> Testdrive:
+        return Testdrive(dedent("""
+                > CREATE TABLE iceberg_jsonb_table (id int, j jsonb)
+                > INSERT INTO iceberg_jsonb_table VALUES (1, '"a"'), (2, '"b"'), (3, '{"k": "v"}')
+                > CREATE SINK iceberg_jsonb_upsert FROM iceberg_jsonb_table
+                  INTO ICEBERG CATALOG CONNECTION polaris_conn (
+                    NAMESPACE 'default_namespace',
+                    TABLE 'iceberg_jsonb_upsert'
+                  )
+                  USING AWS CONNECTION aws_conn
+                  KEY (j) NOT ENFORCED
+                  MODE UPSERT
+                  WITH (COMMIT INTERVAL '1s');
+                > CREATE SINK iceberg_jsonb_append FROM iceberg_jsonb_table
+                  INTO ICEBERG CATALOG CONNECTION polaris_conn (
+                    NAMESPACE 'default_namespace',
+                    TABLE 'iceberg_jsonb_append'
+                  )
+                  USING AWS CONNECTION aws_conn
+                  MODE APPEND
+                  WITH (COMMIT INTERVAL '1s');
+                """))
+
+    def manipulate(self) -> list[Testdrive]:
+        # No sinks are created here. The version running during these phases
+        # varies by scenario, and with it the encoding a new sink would get.
+        return [
+            Testdrive(dedent(s))
+            for s in [
+                """
+                > DELETE FROM iceberg_jsonb_table WHERE id = 1
+                > INSERT INTO iceberg_jsonb_table VALUES (4, '"d"')
+                """,
+                """
+                > UPDATE iceberg_jsonb_table SET id = 20 WHERE id = 2
+                > INSERT INTO iceberg_jsonb_table VALUES (5, '"e"')
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        q = "" if self.base_version < MzVersion.parse_mz("v26.53.0-dev") else '"'
+        rows = f"""3 {{"k":"v"}}
+                4 {q}d{q}
+                5 {q}e{q}
+                20 {q}b{q}"""
+        return Testdrive(dedent(f"""
+                $ set-from-sql var=iceberg_user
+                SELECT user FROM iceberg_credentials
+
+                $ set-from-sql var=iceberg_key
+                SELECT key FROM iceberg_credentials
+
+                $ duckdb-execute name=iceberg
+                CREATE SECRET s3_secret (TYPE S3, KEY_ID '${{iceberg_user}}', SECRET '${{iceberg_key}}', ENDPOINT 'minio:9000', URL_STYLE 'path', USE_SSL false, REGION 'minio');
+                SET unsafe_enable_version_guessing = true;
+
+                $ duckdb-query name=iceberg
+                SELECT id, j FROM iceberg_scan('s3://test-bucket/default_namespace/iceberg_jsonb_upsert') ORDER BY 1
+                {rows}
+
+                $ duckdb-query name=iceberg
+                SELECT id, j FROM iceberg_scan('s3://test-bucket/default_namespace/iceberg_jsonb_append') GROUP BY id, j HAVING sum(_mz_diff) <> 0 ORDER BY 1
+                {rows}
+            """))

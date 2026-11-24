@@ -98,7 +98,7 @@ use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::{Connection, KafkaTopicOptions};
 use mz_storage_types::sinks::{
     IcebergSinkConnection, KafkaIdStyle, KafkaSinkConnection, KafkaSinkFormat, KafkaSinkFormatType,
-    SinkEnvelope, StorageSinkConnection, iceberg_type_overrides,
+    SinkCreationVersion, SinkEnvelope, StorageSinkConnection, iceberg_type_overrides,
 };
 use mz_storage_types::sources::encoding::{
     AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, ProtobufEncoding, RegexEncoding,
@@ -3259,7 +3259,8 @@ generate_extracted_config!(
     (Snapshot, bool),
     (PartitionStrategy, String),
     (Version, u64),
-    (CommitInterval, Duration)
+    (CommitInterval, Duration),
+    (CreationVersion, String)
 );
 
 pub fn plan_create_sink(
@@ -3577,7 +3578,17 @@ fn plan_sink(
         partition_strategy: _,
         seen: _,
         commit_interval,
+        creation_version,
     } = with_options.try_into()?;
+
+    let creation_version = creation_version
+        .map(|version| {
+            semver::Version::parse(&version)
+                .map(SinkCreationVersion::new)
+                .map_err(|e| sql_err!("invalid CREATION VERSION {}: {}", version.quoted(), e))
+        })
+        .transpose()?
+        .unwrap_or_default();
 
     let connection_builder = match connection {
         CreateSinkConnection::Kafka {
@@ -3633,6 +3644,7 @@ fn plan_sink(
             connection: connection_builder,
             envelope,
             version,
+            creation_version,
             commit_interval,
         },
         with_snapshot,
