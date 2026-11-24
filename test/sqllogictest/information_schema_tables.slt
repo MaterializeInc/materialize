@@ -473,6 +473,10 @@ mz_mcp_data_product_details
 VIEW
 materialize
 mz_internal
+mz_mcp_data_product_reads
+VIEW
+materialize
+mz_internal
 mz_mcp_data_products
 VIEW
 materialize

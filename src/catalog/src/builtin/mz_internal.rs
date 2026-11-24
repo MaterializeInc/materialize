@@ -7152,6 +7152,262 @@ LEFT JOIN hydration h
     ontology: None,
 });
 
+/// One row per MCP data product, with the single place the server picks to
+/// read it from. Used by the `/api/mcp` route's `list_data_products` and
+/// `get_data_product_details` tools.
+pub static MZ_MCP_DATA_PRODUCT_READS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_mcp_data_product_reads",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_MCP_DATA_PRODUCT_READS_OID,
+    desc: RelationDesc::builder()
+        .with_column("object_name", SqlScalarType::String.nullable(false))
+        .with_column("object_type", SqlScalarType::String.nullable(false))
+        .with_column("description", SqlScalarType::String.nullable(true))
+        .with_column("columns", SqlScalarType::Jsonb.nullable(false))
+        .with_column("cluster", SqlScalarType::String.nullable(true))
+        .with_column("uses_index", SqlScalarType::Bool.nullable(false))
+        .with_column("indexed_columns", SqlScalarType::Jsonb.nullable(false))
+        .with_column("hydration", SqlScalarType::Jsonb.nullable(false))
+        .with_column("faster_read_available", SqlScalarType::Bool.nullable(false))
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        (
+            "object_name",
+            "Fully qualified object name (database.schema.name).",
+        ),
+        ("object_type", "`materialized-view` or `view`."),
+        (
+            "description",
+            "Object comment, otherwise the comment of an index on `cluster`.",
+        ),
+        (
+            "columns",
+            "Each column's JSON Schema type and comment, keyed by column name.",
+        ),
+        (
+            "cluster",
+            "Cluster to read the object on: the cluster you can use with an index on the object, preferring a hydrated index. Null for a materialized view with no such index: run the read on any cluster, and it returns the stored results.",
+        ),
+        (
+            "uses_index",
+            "Whether a read on `cluster` is served from an index.",
+        ),
+        (
+            "indexed_columns",
+            "Key columns of the indexes on `cluster`, as a JSON array. Empty when `uses_index` is false.",
+        ),
+        (
+            "hydration",
+            "Readiness of the read as a JSON object with `hydrated` (bool), `replica_count` (int), and `hydrated_replica_count` (int). It describes the indexes on `cluster`, or, when `cluster` is null, the materialized view's own cluster, which keeps the stored results current. `hydrated` is true only when that cluster has at least one replica and every replica is hydrated. A read that is not hydrated blocks until it is. If `replica_count` is 0, the read cannot make progress until a replica is added.",
+        ),
+        (
+            "faster_read_available",
+            "True when the read does not use an index, but an index on the object exists on a cluster your role cannot use.",
+        ),
+    ]),
+    // The object set and privilege checks match `mz_mcp_data_products`. A view
+    // is readable only through an index on a cluster the role can use, since a
+    // read anywhere else recomputes it. A materialized view also reads its
+    // stored results from any cluster.
+    sql: r#"
+WITH products AS (
+    SELECT DISTINCT
+        '"' || op.database || '"."' || op.schema || '"."' || op.name || '"' AS object_name,
+        o.id AS object_id,
+        o.type AS object_type,
+        o.cluster_id AS object_cluster_id
+    FROM mz_internal.mz_show_my_object_privileges op
+    JOIN mz_objects o ON op.name = o.name AND op.object_type = o.type
+    JOIN mz_schemas s ON s.name = op.schema AND s.id = o.schema_id
+    JOIN mz_databases d ON d.name = op.database AND d.id = s.database_id
+    WHERE op.privilege_type = 'SELECT'
+      AND o.type IN ('materialized-view', 'view')
+      AND s.name NOT IN ('mz_catalog', 'mz_internal', 'pg_catalog', 'information_schema', 'mz_introspection')
+),
+indexes AS (
+    SELECT
+        p.object_id,
+        i.id AS index_id,
+        i.cluster_id,
+        EXISTS (
+            SELECT 1 FROM mz_internal.mz_show_my_cluster_privileges cp
+            WHERE cp.name = c.name AND cp.privilege_type = 'USAGE'
+        ) AS usable
+    FROM products p
+    JOIN mz_indexes i ON i.on_id = p.object_id
+    JOIN mz_clusters c ON c.id = i.cluster_id
+),
+-- Each place a read can run, keyed by (object_id, uses_index, cluster_id),
+-- with the dataflows the read waits on there.
+read_dataflows AS (
+    SELECT object_id, true AS uses_index, cluster_id, index_id AS dataflow_id
+    FROM indexes
+    WHERE usable
+    UNION ALL
+    SELECT object_id, false, object_cluster_id, object_id
+    FROM products
+    WHERE object_type = 'materialized-view'
+),
+read_replicas AS (
+    SELECT
+        rd.object_id,
+        rd.uses_index,
+        rd.cluster_id,
+        r.id AS replica_id,
+        bool_and(COALESCE(h.hydrated, false)) AS hydrated
+    FROM read_dataflows rd
+    JOIN mz_cluster_replicas r ON r.cluster_id = rd.cluster_id
+    LEFT JOIN mz_internal.mz_hydration_statuses h
+        ON h.object_id = rd.dataflow_id AND h.replica_id = r.id
+    GROUP BY 1, 2, 3, 4
+),
+reads AS (
+    SELECT
+        rd.object_id,
+        rd.uses_index,
+        rd.cluster_id,
+        COUNT(rr.replica_id)::int AS replica_count,
+        COUNT(rr.replica_id) FILTER (WHERE rr.hydrated)::int AS hydrated_replica_count
+    FROM (SELECT DISTINCT object_id, uses_index, cluster_id FROM read_dataflows) rd
+    LEFT JOIN read_replicas rr
+        ON rr.object_id = rd.object_id
+       AND rr.uses_index = rd.uses_index
+       AND rr.cluster_id = rd.cluster_id
+    GROUP BY 1, 2, 3
+),
+-- A hydrated index beats a hydrating one, and either beats the stored
+-- results of a materialized view. An index on a cluster with no replicas
+-- never makes progress, so it comes last. Ties break by cluster name.
+picked AS (
+    SELECT DISTINCT ON (r.object_id)
+        r.object_id,
+        r.uses_index,
+        r.cluster_id,
+        CASE WHEN r.uses_index THEN c.name END AS cluster,
+        r.replica_count,
+        r.hydrated_replica_count
+    FROM reads r
+    JOIN mz_clusters c ON c.id = r.cluster_id
+    ORDER BY
+        r.object_id,
+        CASE
+            WHEN r.uses_index AND r.replica_count > 0 AND r.hydrated_replica_count = r.replica_count THEN 1
+            WHEN r.uses_index AND r.replica_count > 0 THEN 2
+            WHEN NOT r.uses_index THEN 3
+            ELSE 4
+        END,
+        c.name
+),
+indexed_columns AS (
+    SELECT object_id, cluster_id, jsonb_agg(name ORDER BY position, name) AS indexed_columns
+    FROM (
+        SELECT i.object_id, i.cluster_id, col.name, min(ic.index_position) AS position
+        FROM indexes i
+        JOIN mz_index_columns ic ON ic.index_id = i.index_id
+        JOIN mz_columns col ON col.id = i.object_id AND col.position = ic.on_position
+        WHERE i.usable
+        GROUP BY 1, 2, 3
+    )
+    GROUP BY 1, 2
+),
+index_comments AS (
+    SELECT i.object_id, i.cluster_id, min(cm.comment) AS comment
+    FROM indexes i
+    JOIN mz_internal.mz_comments cm
+        ON cm.id = i.index_id AND cm.object_type = 'index' AND cm.object_sub_id IS NULL
+    WHERE i.usable
+    GROUP BY 1, 2
+),
+columns AS (
+    SELECT
+        p.object_id,
+        jsonb_strip_nulls(jsonb_object_agg(
+            col.name,
+            CASE
+                WHEN col.type IN (
+                    'uint2', 'uint4','uint8', 'int', 'integer', 'smallint',
+                    'double', 'double precision', 'bigint', 'float',
+                    'numeric', 'real'
+                ) THEN jsonb_build_object(
+                    'type', 'number',
+                    'description', cm.comment
+                )
+                WHEN col.type = 'boolean' THEN jsonb_build_object(
+                    'type', 'boolean',
+                    'description', cm.comment
+                )
+                WHEN col.type = 'bytea' THEN jsonb_build_object(
+                    'type', 'string',
+                    'description', cm.comment,
+                    'contentEncoding', 'base64',
+                    'contentMediaType', 'application/octet-stream'
+                )
+                WHEN col.type = 'date' THEN jsonb_build_object(
+                    'type', 'string',
+                    'format', 'date',
+                    'description', cm.comment
+                )
+                WHEN col.type = 'time' THEN jsonb_build_object(
+                    'type', 'string',
+                    'format', 'time',
+                    'description', cm.comment
+                )
+                WHEN col.type ilike 'timestamp%' THEN jsonb_build_object(
+                    'type', 'string',
+                    'format', 'date-time',
+                    'description', cm.comment
+                )
+                WHEN col.type = 'jsonb' THEN jsonb_build_object(
+                    'type', 'object',
+                    'description', cm.comment
+                )
+                WHEN col.type = 'uuid' THEN jsonb_build_object(
+                    'type', 'string',
+                    'format', 'uuid',
+                    'description', cm.comment
+                )
+                ELSE jsonb_build_object(
+                    'type', 'string',
+                    'description', cm.comment
+                )
+            END
+        )) AS columns
+    FROM products p
+    JOIN mz_columns col ON col.id = p.object_id
+    LEFT JOIN mz_internal.mz_comments cm
+        ON cm.id = p.object_id AND cm.object_type = p.object_type AND cm.object_sub_id = col.position
+    GROUP BY 1
+)
+SELECT
+    p.object_name,
+    p.object_type,
+    COALESCE(oc.comment, ixc.comment) AS description,
+    COALESCE(cols.columns, '{}'::jsonb) AS columns,
+    pk.cluster,
+    pk.uses_index,
+    COALESCE(ixcol.indexed_columns, '[]'::jsonb) AS indexed_columns,
+    jsonb_build_object(
+        'hydrated', pk.replica_count > 0 AND pk.hydrated_replica_count = pk.replica_count,
+        'replica_count', pk.replica_count,
+        'hydrated_replica_count', pk.hydrated_replica_count
+    ) AS hydration,
+    NOT pk.uses_index AND EXISTS (
+        SELECT 1 FROM indexes i WHERE i.object_id = p.object_id AND NOT i.usable
+    ) AS faster_read_available
+FROM products p
+JOIN picked pk ON pk.object_id = p.object_id
+LEFT JOIN mz_internal.mz_comments oc
+    ON oc.id = p.object_id AND oc.object_type = p.object_type AND oc.object_sub_id IS NULL
+LEFT JOIN columns cols ON cols.object_id = p.object_id
+LEFT JOIN indexed_columns ixcol
+    ON pk.uses_index AND ixcol.object_id = pk.object_id AND ixcol.cluster_id = pk.cluster_id
+LEFT JOIN index_comments ixc
+    ON pk.uses_index AND ixc.object_id = pk.object_id AND ixc.cluster_id = pk.cluster_id
+"#,
+    access: vec![PUBLIC_SELECT],
+    ontology: None,
+});
+
 pub static MZ_SHOW_ROLE_MEMBERS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_show_role_members",
     schema: MZ_INTERNAL_SCHEMA,
