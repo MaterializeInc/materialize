@@ -192,6 +192,46 @@ parameter](/sql/set/#other-configuration-parameters) makes a query fail if its
 result exceeds the limit. It doesn't limit the memory that the temporary
 dataflow uses to compute the result.
 
+### Limit query memory
+
+{{< private-preview />}}
+
+A query that reads more data than you expected can grow its temporary dataflow
+until the replica runs out of memory, which takes every other query and index
+on the replica down with it. Set the `max_query_heap_size` [configuration
+parameter](/sql/set/#other-configuration-parameters) to bound how much memory
+such a query may use:
+
+```mzsql
+SET max_query_heap_size = '4GB';
+```
+
+The limit applies to `SELECT`, `SUBSCRIBE`, and the read side of `INSERT`,
+`UPDATE`, and `DELETE` statements that build a temporary dataflow. A query whose
+dataflow reaches the limit fails with an error instead of growing further:
+
+```nofmt
+ERROR:  query exceeded the max_query_heap_size limit of 4294967296 bytes
+DETAIL:  The query's dataflow was observed holding at least 4302568448 bytes
+across the cluster replica. The measurement covers the dataflow's internal state
+and is taken periodically, so the query may have grown past the limit by more
+than this.
+```
+
+The limit applies per replica and covers all of a replica's workers, so it
+bounds what one query costs the replica as a whole. Left unset, or set to `0`,
+it imposes no limit, which is the default. A query that Materialize serves
+directly from an index is never subject to the limit, because it reads an
+arrangement that outlives the query rather than building a dataflow of its own.
+On a cluster created with `INTROSPECTION INTERVAL = 0`, Materialize does not
+measure dataflow memory, so the limit has no effect.
+
+Treat the limit as a guardrail against a runaway query rather than as an exact
+ceiling. Materialize measures the memory a dataflow holds in its internal
+state, but not every allocation the query makes, and it takes that measurement
+periodically rather than on every allocation. A query can therefore exceed its
+limit briefly before Materialize stops it.
+
 ### Size up the cluster
 
 If the queries are already optimized, [size up the
