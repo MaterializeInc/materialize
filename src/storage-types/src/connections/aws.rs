@@ -720,10 +720,6 @@ const CREDENTIAL_CACHE_MIN_REUSE: Duration = Duration::from_mins(5);
 /// The fetch holds the cache's lock, and the AWS SDK bounds only the connect
 /// phase of an `AssumeRole` call. A call that connects and then stalls would
 /// otherwise block every user of the connection.
-///
-/// TODO: This wraps the whole provider call from outside. Setting an
-/// operation timeout on the STS client would bound each attempt and let the
-/// SDK retry, which this cannot.
 const CREDENTIAL_CACHE_FETCH_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// A [`ProvideCredentials`] that fetches credentials from `inner` on demand
