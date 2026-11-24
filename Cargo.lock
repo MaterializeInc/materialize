@@ -4799,7 +4799,7 @@ dependencies = [
 [[package]]
 name = "iceberg"
 version = "0.10.1"
-source = "git+https://github.com/MaterializeInc/iceberg-rust.git?rev=9e252ad09e27950d2f3cbc7e2da0d1f5255731a0#9e252ad09e27950d2f3cbc7e2da0d1f5255731a0"
+source = "git+https://github.com/MaterializeInc/iceberg-rust.git?rev=09ccef4f2669acb5b6fa971b095a0ad06cc1ea51#09ccef4f2669acb5b6fa971b095a0ad06cc1ea51"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -4856,7 +4856,7 @@ dependencies = [
 [[package]]
 name = "iceberg-catalog-rest"
 version = "0.10.1"
-source = "git+https://github.com/MaterializeInc/iceberg-rust.git?rev=9e252ad09e27950d2f3cbc7e2da0d1f5255731a0#9e252ad09e27950d2f3cbc7e2da0d1f5255731a0"
+source = "git+https://github.com/MaterializeInc/iceberg-rust.git?rev=09ccef4f2669acb5b6fa971b095a0ad06cc1ea51#09ccef4f2669acb5b6fa971b095a0ad06cc1ea51"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4875,7 +4875,7 @@ dependencies = [
 [[package]]
 name = "iceberg-storage-opendal"
 version = "0.10.1"
-source = "git+https://github.com/MaterializeInc/iceberg-rust.git?rev=9e252ad09e27950d2f3cbc7e2da0d1f5255731a0#9e252ad09e27950d2f3cbc7e2da0d1f5255731a0"
+source = "git+https://github.com/MaterializeInc/iceberg-rust.git?rev=09ccef4f2669acb5b6fa971b095a0ad06cc1ea51#09ccef4f2669acb5b6fa971b095a0ad06cc1ea51"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -11830,21 +11830,21 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-rustls",
- "hyper-tls",
  "hyper-util",
  "js-sys",
  "log",
  "mime",
- "native-tls",
  "percent-encoding",
  "pin-project-lite",
+ "rustls",
+ "rustls-native-certs",
  "rustls-pki-types",
  "serde",
  "serde_json",
  "serde_urlencoded",
  "sync_wrapper",
  "tokio",
- "tokio-native-tls",
+ "tokio-rustls",
  "tower 0.5.3",
  "tower-http 0.6.11",
  "tower-service",
