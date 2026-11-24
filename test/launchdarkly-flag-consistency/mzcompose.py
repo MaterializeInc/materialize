@@ -537,6 +537,9 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
     "persist_validate_part_bounds_on_write",
     "storage_enforce_external_addresses",
     "timely_zero_copy_limit",
+    # Cloud serves the jq function only to vetted customers, while self-managed
+    # gets it by default.
+    "enable_jq",
     # Production serves the compiled-in default through a build-version rule,
     # while the fallthrough this check compares against keeps the old value for
     # builds that predate the default.

@@ -1222,7 +1222,7 @@
     {
       "name": "enable_jq",
       "typeName": "boolean",
-      "default": "off",
+      "default": "on",
       "description": "Whether the jq function is allowed (Materialize).",
       "scope": "environment",
       "userVisible": false,
