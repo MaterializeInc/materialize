@@ -219,14 +219,17 @@ Include only `temporary_dataflow`. Queries cannot build a temporary dataflow,
 but some reads from unindexed tables, sources, and materialized views still run
 as [direct storage reads](#how-materialize-runs-a-query):
 
-- Queries with no filter and a `LIMIT` below 25, for example
+- Queries with no filter where `LIMIT` plus `OFFSET` is below 25, for example
   `SELECT * FROM my_mv LIMIT 10`. Most `ORDER BY` clauses build a temporary
   dataflow and are rejected.
-- Equality lookups on a unique key of the object.
+- Equality lookups on a unique key, if the key columns are the leading columns
+  of the object.
 
 Other filters on unindexed objects build a temporary dataflow and are rejected.
 Use this to block joins, aggregations, and filtered scans while still allowing
-small samples and key lookups.
+small samples and key lookups. Before you enforce this rule, run
+[`EXPLAIN`](/sql/explain-plan/) on the queries your application depends on to
+check that they use the fast path.
 
 ```mzsql
 CREATE QUERY POLICY no_ad_hoc_dataflows (
