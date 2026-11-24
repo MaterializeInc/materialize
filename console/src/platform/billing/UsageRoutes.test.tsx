@@ -23,6 +23,8 @@ import type {
   ITeamUserPermission,
   User,
 } from "~/external-library-wrappers/frontegg";
+import { invoiceQueryKeys } from "~/platform/billing/queries";
+import { getQueryClient } from "~/queryClient";
 import {
   createProviderWrapper,
   healthyEnvironment,
@@ -46,6 +48,9 @@ vi.mock("./UsagePage", () => ({
 vi.mock("./BillingPage", () => ({
   default: () => <div>Billing Page</div>,
 }));
+vi.mock("./PricingPage", () => ({
+  default: () => <div>Pricing Page</div>,
+}));
 
 const billingAdminUser: User = {
   ...dummyValidUser,
@@ -53,6 +58,7 @@ const billingAdminUser: User = {
     { key: "materialize.invoice.read" } as ITeamUserPermission,
     { key: "materialize.billing.write" } as ITeamUserPermission,
   ],
+  roles: [],
 };
 
 const noBillingWriteUser: User = {
@@ -148,10 +154,26 @@ describe("UsageRoutes", () => {
       buildCloudOrganizationsResponse({ payload: buildOrganization() }),
       buildInvoicesResponse({ invoices: oneInvoice }),
     );
+    // Seeded so Billing's invoice gate is already open on first render.
+    getQueryClient().setQueryData(invoiceQueryKeys.all(), oneInvoice);
     await renderAt("/usage/overview", noBillingWriteUser);
 
     expect(await screen.findByRole("link", { name: "Overview" })).toBeVisible();
     expect(screen.queryByRole("link", { name: "Billing" })).toBeNull();
+  });
+
+  it("lands an evaluation org without Billing on Pricing", async () => {
+    server.use(
+      buildCloudOrganizationsResponse({
+        payload: buildOrganization({
+          subscription: { type: "evaluation", marketplace: "direct" },
+        }),
+      }),
+      buildInvoicesResponse({ invoices: [] }),
+    );
+    await renderAt("/usage", noBillingWriteUser);
+
+    expect(await screen.findByText("Pricing Page")).toBeVisible();
   });
 
   it("shows Billing for an evaluation org even with no invoices yet", async () => {

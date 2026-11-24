@@ -85,6 +85,11 @@ export function hasBillingWritePermission(user: User | null): boolean {
   return hasPermission(user, "materialize.billing.write");
 }
 
+/** Whether the user can open `/usage/billing`, which also requires invoice read. */
+export function canManageBilling(user: User | null): boolean {
+  return hasBillingWritePermission(user) && hasInvoiceReadPermission(user);
+}
+
 export function isSuperUser(user: User | null): boolean {
   return !!user && Boolean(user.roles.find((r) => r.key === ADMIN_ROLE_KEY));
 }

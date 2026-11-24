@@ -126,15 +126,14 @@ const EnvironmentNotReadyRoutesWrapper = () => {
         // unreachable. Send them to usage instead. Requiring invoice read
         // avoids a loop, since the usage routes redirect home without it.
         const { user } = runtimeConfig;
-        if (
-          !hasEnvironmentReadPermission(user) &&
-          hasInvoiceReadPermission(user)
-        ) {
-          return <Navigate to="/usage" replace />;
-        }
         return (
           <RestrictIfBlocked>
-            <EnvironmentNotReadyRoutes user={runtimeConfig.user} />
+            {!hasEnvironmentReadPermission(user) &&
+            hasInvoiceReadPermission(user) ? (
+              <Navigate to="/usage" replace />
+            ) : (
+              <EnvironmentNotReadyRoutes user={user} />
+            )}
           </RestrictIfBlocked>
         );
       }}

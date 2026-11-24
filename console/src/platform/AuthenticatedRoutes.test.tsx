@@ -10,6 +10,8 @@
 import { screen } from "@testing-library/react";
 import React from "react";
 
+import { buildCloudOrganizationsResponse } from "~/api/mocks/cloudGlobalApiHandlers";
+import server from "~/api/mocks/server";
 import { CloudAppConfig, SelfManagedAppConfig } from "~/config/AppConfig";
 import { appConfigAtom } from "~/config/store";
 import { dummyValidUser } from "~/external-library-wrappers/__mocks__/frontegg";
@@ -54,15 +56,16 @@ describe("AuthenticatedRoutes", () => {
     vi.mocked(useAuthUser).mockReset();
   });
 
-  it("sends a Billing Admin without environment access to usage", async () => {
+  const renderAsBillingAdmin = () => {
     vi.mocked(useAuthUser).mockReturnValue({
       ...dummyValidUser,
       permissions: [
         { key: "materialize.invoice.read" },
         { key: "materialize.billing.write" },
       ] as ITeamUserPermission[],
+      roles: [],
     });
-    await renderComponent(<AuthenticatedRoutes />, {
+    return renderComponent(<AuthenticatedRoutes />, {
       initialRouterEntries: ["/"],
       initializeState: async ({ set }) => {
         set(appConfigAtom, new CloudAppConfig());
@@ -72,8 +75,35 @@ describe("AuthenticatedRoutes", () => {
         });
       },
     });
+  };
+
+  it("sends a Billing Admin without environment access to usage", async () => {
+    await renderAsBillingAdmin();
 
     expect(await screen.findByText("Usage page")).toBeVisible();
+  });
+
+  it("shows a Billing Admin the blocked notice for a blocked organization", async () => {
+    server.use(
+      buildCloudOrganizationsResponse({
+        payload: {
+          id: "org_id",
+          name: "Test Organization",
+          blocked: true,
+          onboarded: true,
+          trialExpiresAt: null,
+          subscription: { type: "capacity", marketplace: "direct" },
+        },
+      }),
+    );
+    await renderAsBillingAdmin();
+
+    expect(
+      await screen.findByText(
+        "Your Materialize plan has lapsed or is upgrading",
+      ),
+    ).toBeVisible();
+    expect(screen.queryByText("Usage page")).not.toBeInTheDocument();
   });
 
   it("renders query history in self-managed deployments", async () => {

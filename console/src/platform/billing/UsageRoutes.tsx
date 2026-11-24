@@ -146,12 +146,19 @@ const UsageRoutes = ({
         <Route
           index
           element={
-            <Navigate
-              to={
-                shouldRedirectToBilling ? "/usage/billing" : "/usage/overview"
-              }
-              replace
-            />
+            // The plan type decides which routes exist, so wait for it.
+            organization ? (
+              <Navigate
+                to={
+                  shouldRedirectToBilling
+                    ? "/usage/billing"
+                    : isUpgradedPlan
+                      ? "/usage/overview"
+                      : "/usage/pricing"
+                }
+                replace
+              />
+            ) : null
           }
         />
       </Route>

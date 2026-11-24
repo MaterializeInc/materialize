@@ -28,6 +28,7 @@ const billingAdminUser: User = {
     { key: "materialize.invoice.read" } as ITeamUserPermission,
     { key: "materialize.billing.write" } as ITeamUserPermission,
   ],
+  roles: [],
 };
 
 const nonAdminUser: User = {
