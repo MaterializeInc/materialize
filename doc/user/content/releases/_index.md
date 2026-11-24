@@ -20,6 +20,39 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.52.0
+*Released to Materialize Cloud: 2026-11-26* <br>
+*Released to Materialize Self-Managed: 2026-11-27* <br>
+
+### AWS IAM Authentication for PostgreSQL Connections {#v26.52-aws-iam-authentication-for-postgresql-connections}
+
+`CREATE CONNECTION ... TO POSTGRES` now accepts an `AWS CONNECTION` option, which authenticates to Amazon RDS and Aurora PostgreSQL with a short-lived IAM token instead of a password. Materialize signs a fresh token every time it opens a connection, including through an SSH tunnel or AWS PrivateLink, so PostgreSQL sources on RDS and Aurora no longer need a stored database password to manage and rotate. The option cannot be combined with `PASSWORD` and requires SSL, the same rules MySQL connections already follow.
+
+### Improvements {#v26.52-improvements}
+- **Higher fast-path query throughput**: Fast-path reads now register and retire in the session that executes them instead of making a round trip through the coordinator, which in a staging benchmark at 128 concurrent clients raised throughput from 7,827 to 9,010 queries per second at the default statement-logging sample rate, and from 24,011 to 35,282 with statement logging off.
+- **Statement logging costs much less throughput**: Sessions now record statement logging directly rather than sending every lifecycle event to the coordinator, skip the coordinator round trip for statements whose inputs are already current, and write a single row for an execution that begins and ends between log drains, which in a staging benchmark at 128 concurrent clients raised throughput with logging on from 8,900 to 33,800 queries per second, close to what the same workload reaches with logging off.
+- **Faster catalog column lookups**: `pg_attribute` is now indexed on `attrelid`, so the column-introspection queries that `psql \d`, SQLAlchemy, and the PostgreSQL JDBC driver issue become index lookups instead of full scans — in a local measurement with 6,400 objects, `pg_attribute WHERE attrelid = ...` went from 14.6 ms to 3.0 ms at p50 and a mixed catalog workload from 711 to 3,742 queries per second.
+- **Smaller source and sink status indexes**: `mz_source_statuses` and `mz_sink_statuses` now keep roughly one copy of the status history rather than nine, so an object that reports a large error no longer inflates the indexes on `mz_catalog_server` the way one sink restarting on a 240 KiB error did, growing its status index from 0.4 GiB to 29 GiB.
+- **MCP protocol 2026-07-28 is always on**: The protocol revision an MCP client gets is now decided by the `MCP-Protocol-Version` header alone, so the 2026-07-28 revision, served by default since v26.50, can no longer be turned off.
+
+### Bug Fixes {#v26.52-bug-fixes}
+- Fixed a strict serializable read staying pending for the length of a sustained write flood, even after those same writes had advanced the timestamp oracle past the timestamp the read was waiting for.
+- Fixed `ALTER CONNECTION` restoring the old public keys of a connection whose keys a concurrent `ROTATE KEYS` had already written to the secret store; connection statements are now replanned against the current catalog when their external validation finishes, and a rotation that conflicts with a catalog change is rejected instead of published.
+- Fixed a panic when creating an index shortly after `ALTER TABLE ... ADD COLUMN`, where a writer could see the evolved schema as unregistered because it answered from cached state.
+- Fixed a panic when committing writes whose timestamps are rewritten, including table writes and `COPY FROM STDIN`, if the batch being committed had spilled part of its contents into a nested run.
+- Fixed `ALTER SYSTEM SET` and `RESET` emitting a misleading "no effect on the current session" notice for parameters that do take effect in the current session; the notice is now limited to the defaults copied into new sessions.
+- Fixed `environmentd` evaluating `jq` expressions in contexts such as `LIMIT` and `EXECUTE` parameters, where a program that loops or recurses without bound could stall or abort the whole environment; those expressions are now refused with an error naming the function.
+- Fixed any user being able to crash `environmentd`, and to keep it crash-looping through a role default, by setting the `failpoints` session variable; the variable is now `unsafe_failpoints` and is only visible in unsafe mode, and role defaults saved under the old name are dropped at boot.
+- Fixed `SUBSCRIBE ... AS OF` on a query with no timeline, such as `SUBSCRIBE (SELECT 1) AS OF 5`, starting at the maximum timestamp instead of the requested one, which also made it fail with an absurd-bounds error when combined with `UP TO`.
+- Fixed queries, indexes, and materialized views that filter the output of a window function silently dropping rows whose predicate failed to evaluate; errors such as an invalid cast or a division by zero are now reported as PostgreSQL does, which means an index or materialized view that hits this bug and currently looks healthy will start returning an error after upgrading, until the offending data or predicate is fixed.
+- Fixed an Iceberg sink whose target table has an incompatible schema restarting every few seconds and failing the same way each time; it now reports `stalled` once and suspends its dataflow.
+- Fixed `records_indexed` and `bytes_indexed` in the source statistics settling above the real key count after an upsert ingestion restarted, because the previous dataflow kept counting while it drained.
+- Fixed an input that has never produced data, such as a materialized view on a cluster with no replicas, pinning the startup `as of` of the dataflows that read alongside it, which made indexes on shared inputs replay history they could not use and slowed the read-only phase of a zero-downtime upgrade.
+- Fixed the MCP `query` tool requiring a cluster, which left a data product unreadable when discovery reported a null cluster because the role lacks `USAGE` on the product's index cluster; on the agent endpoint `cluster` is now optional and the read runs on the session's default cluster.
+- Fixed the MCP server describing the hidden index cluster of a materialized view when reporting hydration, so a working read could be reported as `replica_count: 0`; hydration now follows the cluster the read actually uses.
+- Fixed `drop_cluster` in `dbt-materialize` not quoting the cluster name, so a cluster created with a mixed-case name was logged as dropped and left running.
+- Fixed installing `dbt-materialize` from PyPI with pip 26.3 or later failing with "Distributions from PyPI cannot declare direct URL dependencies", released as `dbt-materialize` 1.9.14.
+
 ## v26.51.1
 *Released to Materialize Cloud: 2026-11-19 (v26.51.0)* <br>
 *Released to Materialize Self-Managed: 2026-11-20* <br>
