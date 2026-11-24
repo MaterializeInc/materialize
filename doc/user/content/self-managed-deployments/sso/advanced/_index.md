@@ -12,6 +12,8 @@ menu:
 
 {{< public-preview />}}
 
+*Introduced in version 26.44*
+
 Self-Managed Materialize supports OIDC sign-in directly, as described in
 [Simple SSO (OIDC)](/self-managed-deployments/sso/oidc/). For **SAML**, **SCIM
 provisioning**, or **federation through an IdP-agnostic proxy**, Materialize
