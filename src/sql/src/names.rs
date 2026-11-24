@@ -2371,6 +2371,7 @@ pub fn resolve<N>(
 where
     N: FoldNode<Raw, Aug>,
 {
+    catalog.record_plan_operation(crate::catalog::PlanOperation::Resolve);
     let mut resolver = NameResolver::new(catalog);
     let result = node.fold(&mut resolver);
     resolver.status?;
