@@ -105,7 +105,7 @@ true
 $ set-from-sql var=sink-id
 SELECT labels -> 'sink' FROM mz_introspection.mz_cluster_prometheus_metrics
 WHERE metric_name = 'mz_compute_metric_sink_frontier_ms'
-  AND labels -> 'sink' NOT IN ('mz_metric_arrangement_sizes', 'mz_metric_dataflow_errors')
+  AND labels -> 'sink' NOT IN ('mz_metric_arrangement_sizes', 'mz_metric_dataflow_errors', 'mz_metric_dataflow_elapsed', 'mz_metric_worker_parks', 'mz_metric_pending_peeks')
 LIMIT 1
 
 # The companion gauges exist, are labeled with this sink's id, and read healthy
@@ -225,7 +225,7 @@ contains:still depended upon by metric sink "s"
 # `s_skip` is the only user sink here, but the curated sinks stamp this gauge too, so exclude them.
 > SELECT value FROM mz_introspection.mz_cluster_prometheus_metrics
   WHERE metric_name = 'mz_compute_metric_sink_skipped'
-    AND labels -> 'sink' NOT IN ('mz_metric_arrangement_sizes', 'mz_metric_dataflow_errors')
+    AND labels -> 'sink' NOT IN ('mz_metric_arrangement_sizes', 'mz_metric_dataflow_errors', 'mz_metric_dataflow_elapsed', 'mz_metric_worker_parks', 'mz_metric_pending_peeks')
 2
 
 # Neither row publishes a series under the sink's metric name.
@@ -266,6 +266,21 @@ true
     AND metric_type = 'gauge' AND labels -> 'id' IS NOT NULL
 true
 
+> SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_curated_arrangement_capacity_bytes'
+    AND metric_type = 'gauge' AND labels -> 'id' IS NOT NULL
+true
+
+> SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_curated_arrangement_allocations'
+    AND metric_type = 'gauge' AND labels -> 'id' IS NOT NULL
+true
+
+> SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_curated_arrangement_count'
+    AND metric_type = 'gauge' AND labels -> 'id' IS NOT NULL
+true
+
 # The attributable path, on the index's own catalog id rather than any `u%` label:
 # an index is a dataflow export, so its arrangement bytes carry its id.
 $ set-from-sql var=arr-idx-id
@@ -273,6 +288,12 @@ SELECT id FROM mz_catalog.mz_indexes WHERE name = 'arr_idx'
 
 > SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
   WHERE metric_name = 'mz_metric_sink_curated_arrangement_size_bytes'
+    AND labels -> 'id' = '${arr-idx-id}'
+true
+
+# The count is of arrangements, not records: the two-row index holds at least one.
+> SELECT value >= 1 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_curated_arrangement_count'
     AND labels -> 'id' = '${arr-idx-id}'
 true
 
@@ -341,6 +362,60 @@ true
     AND labels -> 'sink' = 'mz_metric_dataflow_errors'
 true
 
+> SELECT value > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_compute_metric_sink_frontier_ms'
+    AND labels -> 'sink' = 'mz_metric_dataflow_elapsed'
+true
+
+> SELECT value = 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_compute_metric_sink_errors'
+    AND labels -> 'sink' = 'mz_metric_dataflow_elapsed'
+true
+
+# The elapsed sink publishes a counter per dataflow that exports a catalog object, and the
+# index's dataflow has run by now.
+> SELECT value > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_curated_dataflow_elapsed_seconds_total'
+    AND metric_type = 'counter' AND labels -> 'id' = '${arr-idx-id}'
+true
+
+> SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_curated_dataflow_elapsed_seconds_total'
+    AND labels -> 'id' LIKE 't%'
+0
+
+> SELECT value > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_compute_metric_sink_frontier_ms'
+    AND labels -> 'sink' = 'mz_metric_worker_parks'
+true
+
+> SELECT value = 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_compute_metric_sink_errors'
+    AND labels -> 'sink' = 'mz_metric_worker_parks'
+true
+
+# One unlabeled counter for the whole replica. Idle workers park, so it has grown by now.
+> SELECT value > 0, map_length(labels) = 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_curated_park_duration_seconds_total'
+    AND metric_type = 'counter'
+true true
+
+> SELECT value > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_compute_metric_sink_frontier_ms'
+    AND labels -> 'sink' = 'mz_metric_pending_peeks'
+true
+
+> SELECT value = 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_compute_metric_sink_errors'
+    AND labels -> 'sink' = 'mz_metric_pending_peeks'
+true
+
+# One unlabeled gauge for the whole replica, present even with no peek in flight.
+> SELECT value >= 0, map_length(labels) = 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_curated_pending_peeks'
+    AND metric_type = 'gauge'
+true true
+
 # The errors sink's HAVING drops zero-error exports, so a healthy cluster
 # publishes no error series.
 > SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
@@ -391,9 +466,13 @@ true
 
 > CREATE INDEX dbg_ix IN CLUSTER dbg_c ON dbg_t (x)
 
-# Proves the sink publishes here at all, so the zero below is the filter and not silence.
+# Proves the sinks publish here at all, so the zero below is the filter and not silence.
 > SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
   WHERE metric_name = 'mz_metric_sink_curated_arrangement_size_bytes'
+true
+
+> SELECT count(*) > 0 FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_curated_dataflow_elapsed_seconds_total'
 true
 
 # Both dataflows the sink must not measure are visible on this replica. The logging one is
@@ -414,7 +493,8 @@ true
   FROM mz_introspection.mz_cluster_prometheus_metrics m
   JOIN mz_introspection.mz_compute_exports e ON e.export_id = m.labels -> 'id'
   JOIN mz_introspection.mz_dataflows d ON d.id = e.dataflow_id
-  WHERE m.metric_name LIKE 'mz_metric_sink_curated_arrangement_%'
+  WHERE (m.metric_name LIKE 'mz_metric_sink_curated_arrangement_%'
+         OR m.metric_name = 'mz_metric_sink_curated_dataflow_elapsed_seconds_total')
     AND (d.name = 'Dataflow: logging' OR d.name LIKE 'Dataflow: metric-sink-%')
 0
 
