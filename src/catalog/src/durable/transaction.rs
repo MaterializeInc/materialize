@@ -4409,8 +4409,8 @@ mod tests {
                 (1i64.to_le_bytes().to_vec(), "a1".to_string()),
                 (2i64.to_le_bytes().to_vec(), "a2".to_string()),
             ]),
-            |a, b| a.chars().next() == b.chars().next(),
-            |a, b| a.chars().next() == b.chars().next(),
+            |a: &String, b: &String| a.chars().next() == b.chars().next(),
+            |a: &String, b: &String| a.chars().next() == b.chars().next(),
         )
         .unwrap();
         assert!(matches!(
