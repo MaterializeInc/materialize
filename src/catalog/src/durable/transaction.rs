@@ -164,10 +164,14 @@ impl<'a> DryRunTransaction<'a> {
 
 /// Durable catalog collections decoded into Rust key/value maps for transaction reads.
 ///
-/// These are the protobuf [`Snapshot`] collections, not the adapter's derived
-/// planning objects and lookup indexes. Transactions can share these immutable
-/// base maps while keeping their pending writes separate. Cloning shares the
-/// maps without copying their entries.
+/// The durable handle retains this base across transactions. It represents the same
+/// collections as the protobuf [`Snapshot`], not the adapter's derived planning
+/// objects and lookup indexes. Each [`Transaction`] shares the base maps and keeps
+/// its pending writes separate.
+///
+/// Cloning shares the maps without copying their entries. Applying updates requires
+/// exclusive ownership of the affected maps, checked by [`Arc::get_mut`]. Transaction
+/// commit consumes its base references before returning the durable handle.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct DecodedCatalogState {
     databases: Arc<BTreeMap<DatabaseKey, DatabaseValue>>,
@@ -249,6 +253,147 @@ impl TryFrom<Snapshot> for DecodedCatalogState {
             unfinalized_shards: decode(snapshot.unfinalized_shards)?,
             txn_wal_shard: decode(snapshot.txn_wal_shard)?,
         })
+    }
+}
+
+impl DecodedCatalogState {
+    /// Applies an insertion or retraction to an exclusively owned decoded base.
+    ///
+    /// Retractions must precede replacement insertions and match the existing value.
+    /// Returns decoding errors and panics on violated ownership or update invariants.
+    pub(super) fn apply(
+        &mut self,
+        kind: &crate::durable::objects::state_update::StateUpdateKind,
+        diff: Diff,
+    ) -> Result<(), TryFromProtoError> {
+        use crate::durable::objects::state_update::StateUpdateKind;
+
+        fn apply<K, V, KP, VP>(
+            map: &mut Arc<BTreeMap<K, V>>,
+            key: &KP,
+            value: &VP,
+            diff: Diff,
+        ) -> Result<(), TryFromProtoError>
+        where
+            K: RustType<KP> + Ord + Clone + Debug,
+            KP: Clone,
+            VP: Clone,
+            V: RustType<VP> + Eq + Clone + Debug,
+        {
+            let key = K::from_proto(key.clone())?;
+            let value = V::from_proto(value.clone())?;
+            // Transaction::into_parts consumes the table bases before handing back
+            // the durable handle. Do not silently copy a full collection if an
+            // owner is accidentally retained across cache refresh.
+            let map = Arc::get_mut(map)
+                .expect("transaction base must be released before refreshing durable state");
+            if diff == Diff::ONE {
+                let prev = map.insert(key, value);
+                assert_eq!(
+                    prev, None,
+                    "values must be explicitly retracted before inserting a new value"
+                );
+            } else {
+                assert_eq!(diff, Diff::MINUS_ONE);
+                let prev = map.remove(&key);
+                assert_eq!(
+                    prev,
+                    Some(value),
+                    "retraction does not match existing value"
+                );
+            }
+            Ok(())
+        }
+        match kind {
+            StateUpdateKind::AuditLog(_key, ()) => {
+                // Ignore for snapshots.
+            }
+            StateUpdateKind::Cluster(key, value) => {
+                apply(&mut self.clusters, key, value, diff)?;
+            }
+            StateUpdateKind::ClusterReplica(key, value) => {
+                apply(&mut self.cluster_replicas, key, value, diff)?;
+            }
+            StateUpdateKind::ClusterReplicaSize(key, value) => {
+                apply(&mut self.cluster_replica_sizes, key, value, diff)?;
+            }
+            StateUpdateKind::Comment(key, value) => {
+                apply(&mut self.comments, key, value, diff)?;
+            }
+            StateUpdateKind::IndexColumns(key, value) => {
+                apply(&mut self.index_columns, key, value, diff)?;
+            }
+            StateUpdateKind::ItemColumns(key, value) => {
+                apply(&mut self.item_columns, key, value, diff)?;
+            }
+            StateUpdateKind::Config(key, value) => {
+                apply(&mut self.configs, key, value, diff)?;
+            }
+            StateUpdateKind::Database(key, value) => {
+                apply(&mut self.databases, key, value, diff)?;
+            }
+            StateUpdateKind::DefaultPrivilege(key, value) => {
+                apply(&mut self.default_privileges, key, value, diff)?;
+            }
+            StateUpdateKind::FenceToken(_token) => {
+                // Ignore for snapshots.
+            }
+            StateUpdateKind::IdAllocator(key, value) => {
+                apply(&mut self.id_allocator, key, value, diff)?;
+            }
+            StateUpdateKind::IntrospectionSourceIndex(key, value) => {
+                apply(&mut self.introspection_sources, key, value, diff)?;
+            }
+            StateUpdateKind::Item(key, value) => {
+                apply(&mut self.items, key, value, diff)?;
+            }
+            StateUpdateKind::NetworkPolicy(key, value) => {
+                apply(&mut self.network_policies, key, value, diff)?;
+            }
+            StateUpdateKind::QueryPolicy(key, value) => {
+                apply(&mut self.query_policies, key, value, diff)?;
+            }
+            StateUpdateKind::Role(key, value) => {
+                apply(&mut self.roles, key, value, diff)?;
+            }
+            StateUpdateKind::Schema(key, value) => {
+                apply(&mut self.schemas, key, value, diff)?;
+            }
+            StateUpdateKind::Setting(key, value) => {
+                apply(&mut self.settings, key, value, diff)?;
+            }
+            StateUpdateKind::SourceReferences(key, value) => {
+                apply(&mut self.source_references, key, value, diff)?;
+            }
+            StateUpdateKind::SystemConfiguration(key, value) => {
+                apply(&mut self.system_configurations, key, value, diff)?;
+            }
+            StateUpdateKind::ClusterSystemConfiguration(key, value) => {
+                apply(&mut self.cluster_system_configurations, key, value, diff)?;
+            }
+            StateUpdateKind::ReplicaSystemConfiguration(key, value) => {
+                apply(&mut self.replica_system_configurations, key, value, diff)?;
+            }
+            StateUpdateKind::SystemObjectMapping(key, value) => {
+                apply(&mut self.system_object_mappings, key, value, diff)?;
+            }
+            StateUpdateKind::SystemPrivilege(key, value) => {
+                apply(&mut self.system_privileges, key, value, diff)?;
+            }
+            StateUpdateKind::StorageCollectionMetadata(key, value) => {
+                apply(&mut self.storage_collection_metadata, key, value, diff)?;
+            }
+            StateUpdateKind::UnfinalizedShard(key, ()) => {
+                apply(&mut self.unfinalized_shards, key, &(), diff)?;
+            }
+            StateUpdateKind::TxnWalShard((), value) => {
+                apply(&mut self.txn_wal_shard, &(), value, diff)?;
+            }
+            StateUpdateKind::RoleAuth(key, value) => {
+                apply(&mut self.role_auth, key, value, diff)?;
+            }
+        }
+        Ok(())
     }
 }
 

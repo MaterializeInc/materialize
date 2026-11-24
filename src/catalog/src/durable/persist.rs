@@ -60,7 +60,7 @@ use crate::durable::objects::state_update::{
     TryIntoStateUpdateKind,
 };
 use crate::durable::objects::{AuditLogKey, FenceToken, Snapshot};
-use crate::durable::transaction::TransactionBatch;
+use crate::durable::transaction::{DecodedCatalogState, TransactionBatch};
 use crate::durable::upgrade::upgrade;
 use crate::durable::{
     BootstrapArgs, CATALOG_CONTENT_VERSION_KEY, CatalogError, DryRunTransaction,
@@ -1627,6 +1627,11 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
 /// Applies updates for an opened catalog.
 #[derive(Debug)]
 struct CatalogStateInner {
+    // Decoding stays fallible at transaction entry, including for collections that
+    // do not produce adapter updates. Consolidating pending changes bounds retained
+    // history when a read-only handle synchronizes without opening transactions.
+    decoded_state: Option<DecodedCatalogState>,
+    pending_decoded_updates: BTreeMap<StateUpdateKind, Diff>,
     /// A trace of all catalog updates that can be consumed by some higher layer.
     updates: VecDeque<memory::objects::StateUpdate>,
 }
@@ -1634,8 +1639,45 @@ struct CatalogStateInner {
 impl CatalogStateInner {
     fn new() -> CatalogStateInner {
         CatalogStateInner {
+            decoded_state: None,
+            pending_decoded_updates: BTreeMap::new(),
             updates: VecDeque::new(),
         }
+    }
+
+    /// Returns a shared decoded base refreshed through the supplied catalog trace.
+    ///
+    /// The caller must synchronize and validate fencing before calling this method.
+    /// The trace must include all updates delivered to this applier. Earlier base
+    /// handles must have been released before refreshing changed collections.
+    fn refresh_decoded_state(
+        &mut self,
+        trace: &[(StateUpdateKind, Timestamp, Diff)],
+    ) -> Result<DecodedCatalogState, TryFromProtoError> {
+        // Decode only updates since the preceding transaction. On a decoding error,
+        // discard the candidate so the next attempt rebuilds from the authoritative trace.
+        let snapshot = match self.decoded_state.take() {
+            Some(mut snapshot) => {
+                let mut updates: Vec<_> = std::mem::take(&mut self.pending_decoded_updates)
+                    .into_iter()
+                    .collect();
+                // Replacements retract the old value before inserting the new one.
+                updates.sort_by_key(|(_, diff)| *diff);
+                for (kind, diff) in updates {
+                    snapshot.apply(&kind, diff)?;
+                }
+                snapshot
+            }
+            None => {
+                let mut snapshot = DecodedCatalogState::default();
+                for (kind, _, diff) in trace {
+                    snapshot.apply(kind, *diff)?;
+                }
+                snapshot
+            }
+        };
+        self.decoded_state = Some(snapshot.clone());
+        Ok(snapshot)
     }
 }
 
@@ -1670,11 +1712,27 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
                 current_fence_token.maybe_fence(token)?;
                 Ok(None)
             }
-            (kind, diff) => Ok(Some(StateUpdate {
-                kind,
-                ts: update.ts,
-                diff,
-            })),
+            (kind, diff) => {
+                if self.decoded_state.is_some() {
+                    use std::collections::btree_map::Entry;
+                    match self.pending_decoded_updates.entry(kind.clone()) {
+                        Entry::Vacant(entry) => {
+                            entry.insert(diff);
+                        }
+                        Entry::Occupied(mut entry) => {
+                            *entry.get_mut() += diff;
+                            if *entry.get() == Diff::ZERO {
+                                entry.remove();
+                            }
+                        }
+                    }
+                }
+                Ok(Some(StateUpdate {
+                    kind,
+                    ts: update.ts,
+                    diff,
+                }))
+            }
         }
     }
 }
@@ -1690,14 +1748,22 @@ impl PersistHandle<StateUpdateKind, CatalogStateInner> {
     /// Creates a transaction without validating pending catalog updates.
     async fn transaction_unchecked(&mut self) -> Result<Transaction<'_>, CatalogError> {
         self.metrics.transactions_started.inc();
-        let snapshot = self.snapshot().await?;
+        self.sync_to_current_upper().await?;
+        let snapshot = {
+            let _timer = self
+                .metrics
+                .transaction_step_seconds
+                .with_label_values(&["snapshot_build", "durable"])
+                .start_timer();
+            self.update_applier.refresh_decoded_state(&self.snapshot)?
+        };
         let commit_ts = self.upper;
         let _timer = self
             .metrics
             .transaction_step_seconds
             .with_label_values(&["transaction_init", "durable"])
             .start_timer();
-        Transaction::new(self, snapshot, commit_ts)
+        Ok(Transaction::from_shared(self, snapshot, commit_ts))
     }
 }
 
