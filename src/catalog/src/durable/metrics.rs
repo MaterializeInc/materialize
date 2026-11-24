@@ -12,13 +12,14 @@
 use mz_ore::metric;
 use mz_ore::metrics::{IntCounter, MetricsRegistry};
 use mz_ore::stats::histogram_seconds_buckets;
-use prometheus::{Histogram, IntGauge, IntGaugeVec};
+use prometheus::{Histogram, HistogramVec, IntGauge, IntGaugeVec};
 
 #[derive(Debug, Clone)]
 pub struct Metrics {
     pub transactions_started: IntCounter,
     pub transaction_commits: IntCounter,
     pub transaction_commit_latency_seconds: Histogram,
+    pub transaction_step_seconds: HistogramVec,
     pub snapshots_taken: IntCounter,
     pub snapshot_latency_seconds: Histogram,
     pub syncs: IntCounter,
@@ -33,6 +34,12 @@ impl Metrics {
     /// Returns a new [Metrics] instance connected to the given registry.
     pub fn new(registry: &MetricsRegistry) -> Self {
         Self {
+            transaction_step_seconds: registry.register(metric!(
+                name: "mz_catalog_transaction_step_seconds",
+                help: "Wall time of catalog transaction steps, including failed attempts. Steps can nest and repeat, so their sums are not an additive latency breakdown. The mode distinguishes commit preparation, dry runs, and durable handle work.",
+                var_labels: ["step", "mode"],
+                buckets: histogram_seconds_buckets(0.000_128, 32.0),
+            )),
             transactions_started: registry.register(metric!(
                 name: "mz_catalog_transactions_started",
                 help: "Total number of started transactions.",

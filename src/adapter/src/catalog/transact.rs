@@ -1113,6 +1113,12 @@ impl Catalog {
         tx: &mut Transaction<'_>,
         state: &CatalogState,
     ) -> Result<Option<CatalogState>, CommandExecutionError> {
+        let steps = tx.metrics().transaction_step_seconds.clone();
+        let mode_label = match mode {
+            TransactInnerMode::Commit => "commit",
+            TransactInnerMode::DryRun => "dry_run",
+        };
+        let step_timer = |step| steps.with_label_values(&[step, mode_label]).start_timer();
         // We come up with new catalog state, builtin state updates, and parsed
         // catalog updates (for deriving catalog implications) in two phases:
         //
@@ -1188,6 +1194,7 @@ impl Catalog {
             let mut execution = match group {
                 OperationGroup::Raw(ops) => CommandExecution::raw(ops),
                 OperationGroup::Command(index, command) => {
+                    let _timer = step_timer("command_compile");
                     let response = responses
                         .as_mut()
                         .and_then(|responses| responses.remove(&index));
@@ -1234,6 +1241,7 @@ impl Catalog {
                     }
                     continue;
                 }
+                let timer = step_timer("transact_op");
                 let result = Self::transact_op(
                     oracle_write_ts,
                     session,
@@ -1247,12 +1255,14 @@ impl Catalog {
                     &mut storage_collections_to_register,
                 )
                 .await;
+                timer.observe_duration();
                 if let Err(error) = result {
                     return execution.finish(Err(error)).map_err(Into::into);
                 }
 
                 let mut op_updates: Vec<_> = tx.get_and_commit_op_updates();
                 if !op_updates.is_empty() {
+                    let timer = step_timer("speculative_apply");
                     // Clone the cache so each apply_updates call has access to cached expressions.
                     // The cache uses `remove` semantics, so we need a fresh clone for each call.
                     let mut local_expr_cache = LocalExpressionCache::new(cached_exprs.clone());
@@ -1260,6 +1270,8 @@ impl Catalog {
                         .to_mut()
                         .apply_updates(op_updates.clone(), &mut local_expr_cache)
                         .await;
+                    timer.observe_duration();
+                    let _timer = step_timer("record_metadata");
                     let updated_item_ids =
                         op_updates.iter().filter_map(|update| match &update.kind {
                             mz_catalog::memory::objects::StateUpdateKind::Item(item)
@@ -1281,6 +1293,7 @@ impl Catalog {
         }
 
         if !updates.is_empty() {
+            let _timer = step_timer("final_apply");
             let mut local_expr_cache = LocalExpressionCache::new(cached_exprs.clone());
             let (op_builtin_table_updates, op_catalog_updates) = state
                 .to_mut()
@@ -1297,6 +1310,7 @@ impl Catalog {
             TransactInnerMode::Commit => {
                 // `storage_collections` can be `None` in tests.
                 if let Some(c) = storage_collections {
+                    let _timer = step_timer("prepare_storage");
                     c.prepare_state(
                         tx,
                         storage_collections_to_create,
@@ -1317,6 +1331,7 @@ impl Catalog {
 
         let updates = tx.get_and_commit_op_updates();
         if !updates.is_empty() {
+            let _timer = step_timer("storage_updates_apply");
             let mut local_expr_cache = LocalExpressionCache::new(cached_exprs.clone());
             let (op_builtin_table_updates, op_catalog_updates) = state
                 .to_mut()
