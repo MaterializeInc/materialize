@@ -17,6 +17,7 @@ import {
   useNavigationType,
 } from "react-router-dom";
 
+import { buildConstants } from "~/config/buildConstants";
 import { User } from "~/external-library-wrappers/frontegg";
 
 import { appConfig } from "./config/AppConfig";
@@ -35,7 +36,10 @@ if (appConfig.mode === "cloud") {
   const { sentryConfig } = appConfig;
   Sentry.init({
     dsn: sentryConfig.dsn,
-    enabled: true,
+    // SENTRY_ENABLED is true on production and staging builds, and false in
+    // unit tests and `yarn start`. With it on, unit tests send their jsdom
+    // page loads under the production DSN and use up the trace quota.
+    enabled: buildConstants.sentryEnabled,
     environment: sentryConfig.environment,
     release: sentryConfig.release,
     beforeSend: (event) => {
