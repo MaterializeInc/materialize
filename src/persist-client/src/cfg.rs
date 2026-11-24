@@ -604,7 +604,7 @@ pub const COMPACTION_HEURISTIC_MIN_UPDATES: Config<usize> = Config::new(
 /// consolidation of updates, at the cost of greater memory usage.
 pub const COMPACTION_MEMORY_BOUND_BYTES: Config<usize> = Config::new(
     "persist_compaction_memory_bound_bytes",
-    1024 * MiB,
+    512 * MiB,
     "Attempt to limit compaction to this amount of memory.",
     ParameterScope::Environment,
 );
