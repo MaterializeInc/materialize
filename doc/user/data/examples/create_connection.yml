@@ -498,6 +498,7 @@
         SSL CERTIFICATE AUTHORITY = { '<pem>' | SECRET <secret_name> },
         SSL CERTIFICATE = { '<pem>' | SECRET <secret_name> },
         SSL KEY = SECRET <secret_name>,
+        AWS CONNECTION <aws_connection_name>,
         AWS PRIVATELINK <privatelink_connection_name>,
         SSH TUNNEL <ssh_connection_name>
     )
@@ -552,6 +553,16 @@
         *Value:* secret or `text` / secret
 
         Client SSL certificate and key in PEM format.
+    - name: "`AWS CONNECTION`"
+      description: |
+        <a name="postgres-aws-connection"></a>
+        *Value:* object name
+
+        The name of an [AWS connection](#aws) to use when performing IAM
+        authentication with an Amazon RDS or Amazon Aurora PostgreSQL database.
+
+        Only valid if `SSL MODE` is set to `require`, `verify_ca`, or `verify_full`.
+        Incompatible with `PASSWORD` being set.
     - name: "`AWS PRIVATELINK`"
       description: |
         *Value:* object name
