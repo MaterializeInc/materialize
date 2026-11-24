@@ -705,6 +705,11 @@ def workflow_fenced_writer(c: Composition) -> None:
                                 "mz-sink-id": "u0",
                                 "mz-frontier": current["summary"]["mz-frontier"],
                                 "mz-sink-version": "999",
+                                # Without the marker the encoding check alone stops the
+                                # sink, masking a missing version check.
+                                "mz-jsonb-encoding": current["summary"][
+                                    "mz-jsonb-encoding"
+                                ],
                             },
                         },
                     },

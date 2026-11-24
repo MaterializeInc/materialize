@@ -806,6 +806,7 @@ async fn do_commit(
 async fn try_commit_batch(
     table: Table,
     commit: &SinkSnapshot,
+    confirmed: Option<&(i64, SinkSnapshot)>,
     data_files: Vec<DataFile>,
     delete_files: Vec<DataFile>,
     catalog: &dyn Catalog,
@@ -832,11 +833,11 @@ async fn try_commit_batch(
         }
     };
 
-    let last = match latest_sink_snapshot(&table) {
+    let last = match latest_sink_snapshot(&table, confirmed) {
         Ok(last) => last,
         Err(e) => return (table, RetryResult::RetryableErr(anyhow!(e))),
     };
-    if let Some(last) = last {
+    if let Some((_, last)) = last {
         // Just in case the sink was recreated, check both sink ID and version to see if it was us.
         if &last == commit {
             // Our own commit for this batch is already on the table.
@@ -1126,7 +1127,7 @@ async fn load_or_create_table(
     }
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 struct SinkSnapshot {
     upper: Antichain<Timestamp>,
     sink_id: GlobalId,
@@ -1151,8 +1152,14 @@ impl SinkSnapshot {
     }
 }
 
-/// Read the most recent sink commit, skipping compaction snapshots.
-fn latest_sink_snapshot(table: &Table) -> anyhow::Result<Option<SinkSnapshot>> {
+/// Read the most recent sink commit and its snapshot ID, skipping compaction snapshots.
+///
+/// `confirmed` is a commit this writer has already verified. It is returned when snapshot
+/// expiration has removed every sink snapshot, provided the remaining snapshots descend from it.
+fn latest_sink_snapshot(
+    table: &Table,
+    confirmed: Option<&(i64, SinkSnapshot)>,
+) -> anyhow::Result<Option<(i64, SinkSnapshot)>> {
     let mut snapshots: Vec<_> = table.metadata().snapshots().collect();
     snapshots.sort_by(|a, b| Ord::cmp(&b.sequence_number(), &a.sequence_number()));
 
@@ -1190,12 +1197,15 @@ fn latest_sink_snapshot(table: &Table) -> anyhow::Result<Option<SinkSnapshot>> {
                     anyhow::bail!("unsupported Iceberg JSONB encoding version {version}")
                 }
             };
-            return Ok(Some(SinkSnapshot {
-                upper: frontier,
-                sink_id,
-                sink_version,
-                quote_jsonb,
-            }));
+            return Ok(Some((
+                snapshot.snapshot_id(),
+                SinkSnapshot {
+                    upper: frontier,
+                    sink_id,
+                    sink_version,
+                    quote_jsonb,
+                },
+            )));
         }
         if snapshot.summary().operation.as_str() != "replace" {
             // This is a bad heuristic, but we have no real other way to identify compactions
@@ -1210,6 +1220,20 @@ fn latest_sink_snapshot(table: &Table) -> anyhow::Result<Option<SinkSnapshot>> {
         }
     }
 
+    // Only compactions remain. An expired snapshot's ID survives as its child's parent pointer,
+    // so reaching `confirmed` along the chain shows that only compactions followed it.
+    if let Some((confirmed_id, confirmed)) = confirmed {
+        let mut id = table.metadata().current_snapshot_id();
+        while let Some(snapshot_id) = id {
+            if snapshot_id == *confirmed_id {
+                return Ok(Some((snapshot_id, confirmed.clone())));
+            }
+            id = table
+                .metadata()
+                .snapshot_by_id(snapshot_id)
+                .and_then(|s| s.parent_snapshot_id());
+        }
+    }
     anyhow::bail!("Iceberg snapshot history contains no sink frontier")
 }
 
@@ -1376,9 +1400,9 @@ fn mint_batch_descriptions<'scope>(
                 "iceberg mint loaded/created table"
             );
 
-            let resume = latest_sink_snapshot(&table)?;
+            let resume = latest_sink_snapshot(&table, None)?;
             let (resume_upper, resume_version, quote_jsonb) = match resume {
-                Some(last) => (last.upper, last.sink_version, last.quote_jsonb),
+                Some((_, last)) => (last.upper, last.sink_version, last.quote_jsonb),
                 None => (Antichain::from_elem(Timestamp::minimum()), 0, true),
             };
             debug!(
@@ -3198,6 +3222,7 @@ fn commit_to_iceberg<'scope>(
                     connection.namespace, connection.table
                 )
             })?;
+            let mut confirmed = latest_sink_snapshot(&table, None)?;
 
             #[allow(clippy::disallowed_types)]
             let mut batch_descriptions: std::collections::HashMap<
@@ -3322,6 +3347,7 @@ fn commit_to_iceberg<'scope>(
                         .max_tries(5)
                         .retry_async_with_state(table, |_, table| {
                             let commit = &commit;
+                            let confirmed = confirmed.as_ref();
                             let data_files = data_files.clone();
                             let delete_files = delete_files.clone();
                             let metrics = Arc::clone(&metrics);
@@ -3333,6 +3359,7 @@ fn commit_to_iceberg<'scope>(
                                 try_commit_batch(
                                     table,
                                     commit,
+                                    confirmed,
                                     data_files,
                                     delete_files,
                                     catalog.as_ref(),
@@ -3357,6 +3384,7 @@ fn commit_to_iceberg<'scope>(
                         .commit_duration_seconds
                         .observe(duration.as_secs_f64());
                     commit_result?;
+                    confirmed = latest_sink_snapshot(&table, confirmed.as_ref())?;
 
                     debug!(
                         ?sink_id,
