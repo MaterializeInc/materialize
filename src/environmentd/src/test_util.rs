@@ -142,6 +142,7 @@ pub struct TestHarness {
     metrics_registry: Option<MetricsRegistry>,
     code_version: semver::Version,
     force_builtin_schema_migration: Option<String>,
+    pinned_plans_dir: Option<PathBuf>,
     capture: Option<SharedStorage>,
     pub environment_id: EnvironmentId,
 }
@@ -262,6 +263,7 @@ impl Default for TestHarness {
             },
             code_version: crate::BUILD_INFO.semver_version(),
             force_builtin_schema_migration: None,
+            pinned_plans_dir: None,
             environment_id: EnvironmentId::for_tests(),
             capture: None,
         }
@@ -739,6 +741,12 @@ impl TestHarness {
         self
     }
 
+    /// See [`mz_adapter::Config::pinned_plans_dir`].
+    pub fn with_pinned_plans_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.pinned_plans_dir = Some(dir.into());
+        self
+    }
+
     pub fn with_capture(mut self, storage: SharedStorage) -> Self {
         self.capture = Some(storage);
         self
@@ -995,6 +1003,7 @@ impl Listeners {
                 external_login_password_mz_system: config.external_login_password_mz_system,
                 force_builtin_schema_migration: config.force_builtin_schema_migration,
                 force_catalog_migration: false,
+                pinned_plans_dir: config.pinned_plans_dir,
             })
             .await?;
 

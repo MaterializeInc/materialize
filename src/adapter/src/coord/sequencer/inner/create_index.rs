@@ -505,6 +505,7 @@ impl Coordinator {
         let transact_result = self
             .catalog_transact_with_side_effects(Some(ctx), ops, move |coord, _ctx| {
                 Box::pin(async move {
+                    let df_desc = coord.pinned_or_fresh_plan(global_id, df_desc);
                     // Save plan structures.
                     coord
                         .catalog_mut()

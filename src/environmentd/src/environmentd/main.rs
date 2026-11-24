@@ -646,6 +646,10 @@ pub struct Args {
     /// Testing only.
     #[clap(long, requires = "unsafe_mode")]
     unsafe_force_catalog_migration: bool,
+    /// A directory of pinned plans that indexes and materialized views run
+    /// in place of freshly optimized ones. Testing only.
+    #[clap(long, requires = "unsafe_mode", value_name = "PATH")]
+    unsafe_pinned_plans_dir: Option<PathBuf>,
 }
 
 #[derive(ValueEnum, Debug, Clone)]
@@ -1207,6 +1211,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 now,
                 force_builtin_schema_migration,
                 force_catalog_migration: args.unsafe_force_catalog_migration,
+                pinned_plans_dir: args.unsafe_pinned_plans_dir,
             })
             .await
             .maybe_terminate("booting server")?;

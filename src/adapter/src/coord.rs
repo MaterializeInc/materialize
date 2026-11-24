@@ -71,6 +71,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::IpAddr;
 use std::num::NonZeroI64;
 use std::ops::Neg;
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::LazyLock;
 use std::sync::{Arc, Mutex};
@@ -240,6 +241,7 @@ mod info_metrics;
 mod introspection;
 mod message_handler;
 mod metric_sink;
+pub(crate) mod pinned_plans;
 mod privatelink_status;
 mod sql;
 mod validity;
@@ -1096,6 +1098,9 @@ pub struct Config {
     pub license_key: ValidatedLicenseKey,
     pub external_login_password_mz_system: Option<Password>,
     pub force_builtin_schema_migration: Option<String>,
+    /// A directory of pinned plans keyed by `GlobalId`, for tests that run
+    /// stored plans across restarts and upgrades. See `coord::pinned_plans`.
+    pub pinned_plans_dir: Option<PathBuf>,
 }
 
 /// Metadata about an active connection.
@@ -1818,6 +1823,8 @@ pub struct Coordinator {
 
     /// A generator for transient [`GlobalId`]s, shareable with other threads.
     transient_id_gen: Arc<TransientIdGen>,
+    /// Set by `--unsafe-pinned-plans-dir`.
+    pinned_plans: Option<pinned_plans::PinnedPlanFiles>,
     /// A map from connection ID to metadata about that connection for all
     /// active connections.
     active_conns: BTreeMap<ConnectionId, ConnMeta>,
@@ -3545,6 +3552,7 @@ impl Coordinator {
                             }
                         };
 
+                    let physical_plan = self.pinned_or_fresh_plan(global_id, physical_plan);
                     let catalog = self.catalog_mut();
                     catalog.set_optimized_plan(idx.global_id(), optimized_plan);
                     catalog.set_physical_plan(idx.global_id(), physical_plan);
@@ -3644,6 +3652,7 @@ impl Coordinator {
                         }
                     };
 
+                    let physical_plan = self.pinned_or_fresh_plan(global_id, physical_plan);
                     let catalog = self.catalog_mut();
                     catalog.set_optimized_plan(mv.global_id_writes(), optimized_plan);
                     catalog.set_physical_plan(mv.global_id_writes(), physical_plan);
@@ -4709,6 +4718,7 @@ pub fn serve(
         license_key,
         external_login_password_mz_system,
         force_builtin_schema_migration,
+        pinned_plans_dir,
     }: Config,
 ) -> BoxFuture<'static, Result<(Handle, Client), AdapterError>> {
     async move {
@@ -5068,6 +5078,7 @@ pub fn serve(
                     linearize_reads_notify: Arc::new(Notify::new()),
                     global_timelines: timestamp_oracles,
                     transient_id_gen: Arc::new(TransientIdGen::new()),
+                    pinned_plans: pinned_plans_dir.map(pinned_plans::PinnedPlanFiles::new),
                     active_conns: BTreeMap::new(),
                     txn_read_holds: Default::default(),
                     peek_registry: Arc::default(),

@@ -35,8 +35,6 @@ use crate::optimize::metric_sink::shape_metric_sink_source;
 
 /// The catalog and the coordinator's transient id generator, which together
 /// answer everything instantiation asks for.
-// TODO(mgree): construct this where the coordinator loads pinned plans.
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, Copy)]
 pub struct CatalogInstantiationContext<'a> {
     pub catalog: &'a CatalogState,
