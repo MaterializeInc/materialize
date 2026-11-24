@@ -3260,7 +3260,7 @@ generate_extracted_config!(
     (PartitionStrategy, String),
     (Version, u64),
     (CommitInterval, Duration),
-    (CreationVersion, String)
+    (CreationVersion, i32)
 );
 
 pub fn plan_create_sink(
@@ -3582,12 +3582,7 @@ fn plan_sink(
     } = with_options.try_into()?;
 
     let creation_version = creation_version
-        .map(|version| {
-            semver::Version::parse(&version)
-                .map(SinkCreationVersion::new)
-                .map_err(|e| sql_err!("invalid CREATION VERSION {}: {}", version.quoted(), e))
-        })
-        .transpose()?
+        .map(SinkCreationVersion::new)
         .unwrap_or_default();
 
     let connection_builder = match connection {

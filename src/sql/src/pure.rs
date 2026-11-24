@@ -532,8 +532,8 @@ async fn purify_create_sink(
     // stamping would give sinks that predate the option the current version.
     with_options.push(CreateSinkOption {
         name: CreateSinkOptionName::CreationVersion,
-        value: Some(WithOptionValue::Value(Value::String(
-            catalog.config().build_info.semver_version().to_string(),
+        value: Some(WithOptionValue::Value(Value::Number(
+            catalog.config().build_info.version_num().to_string(),
         ))),
     });
 

@@ -137,18 +137,19 @@ impl<S: Debug + PartialEq, T: Debug + PartialEq + PartialOrder> AlterCompatible
 /// written the old form. Such changes are gated on this version, through a
 /// predicate defined here.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-pub struct SinkCreationVersion(Option<semver::Version>);
+pub struct SinkCreationVersion(Option<i32>);
 
 impl SinkCreationVersion {
-    /// The creation version of a sink created on the release `version`.
-    pub fn new(version: semver::Version) -> Self {
-        Self(Some(version))
+    /// The creation version of a sink created on the release `version_num`, in
+    /// the form of `BuildInfo::version_num`.
+    pub fn new(version_num: i32) -> Self {
+        Self(Some(version_num))
     }
 
     /// The recorded release, or `None` for a sink created before releases
     /// were recorded.
-    pub fn version(&self) -> Option<&semver::Version> {
-        self.0.as_ref()
+    pub fn version_num(&self) -> Option<i32> {
+        self.0
     }
 
     /// Whether an Iceberg sink writes a jsonb string scalar as JSON text,
