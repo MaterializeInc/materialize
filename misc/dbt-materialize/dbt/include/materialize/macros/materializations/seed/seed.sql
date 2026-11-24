@@ -54,6 +54,7 @@
   {% set target_relation = this.incorporate(type='table') %}
 
   {% do persist_docs(target_relation, model) %}
+  {% do materialize__alter_owner(target_relation) %}
 
   {% if full_refresh_mode or not exists_as_table %}
     {% do create_indexes(target_relation) %}
