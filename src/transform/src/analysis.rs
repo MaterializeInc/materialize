@@ -11,6 +11,7 @@
 
 pub mod equivalences;
 pub mod monotonic;
+pub mod provenance;
 
 use mz_expr::MirRelationExpr;
 
