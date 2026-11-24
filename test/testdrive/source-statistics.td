@@ -286,6 +286,10 @@ ALTER SYSTEM SET compute_prometheus_introspection_scrape_interval = '1s'
 $ set-from-sql var=rerender-tbl-id
 SELECT id FROM mz_tables WHERE name = 'rerender_tbl'
 
+# Wait until value is available
+> SELECT count(*) FROM mz_internal.mz_storage_shards WHERE object_id = '${rerender-tbl-id}'
+1
+
 $ set-from-sql var=rerender-tbl-shard
 SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '${rerender-tbl-id}'
 
