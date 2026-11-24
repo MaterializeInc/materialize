@@ -38,32 +38,6 @@ steps:
     concurrency: 1
     concurrency_group: deploy/linux
 
-  - id: deploy-pypi
-    label: ":rocket: :pypi:"
-    command: bin/ci-builder run stable bin/pyactivate -m ci.deploy.pypi
-    timeout_in_minutes: 30
-    agents:
-      queue: linux-x86_64-small
-    retry:
-      automatic:
-        - exit_status: "*"
-          limit: 2
-    concurrency: 1
-    concurrency_group: deploy/pypi
-
-  - id: deploy-npm
-    label: ":rocket: :npm:"
-    command: bin/ci-builder run stable bin/pyactivate -m ci.deploy.npm
-    timeout_in_minutes: 30
-    agents:
-      queue: linux-x86_64-small
-    retry:
-      automatic:
-        - exit_status: "*"
-          limit: 2
-    concurrency: 1
-    concurrency_group: deploy/npm
-
   - id: deploy-github-release
     label: ":rocket: :github: Release"
     command: bin/ci-builder run stable bin/pyactivate -m ci.deploy.github_release

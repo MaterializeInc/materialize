@@ -20,8 +20,15 @@ the following command:
 cargo owner --add github:MaterializeInc:crate-owners
 ```
 
-## PyPI
+## PyPI and npm
+
+The `Publish packages` GitHub Actions workflow (`.github/workflows/publish.yml`)
+publishes the packages listed in `ci/deploy/pypi.py` and `ci/deploy/npm.py` on
+every push to `main`, `v*.*` branches and `v*.*` tags, skipping versions that
+are already released. It authenticates with trusted publishing from the
+`release` environment, so there are no registry tokens. A new package must be
+registered as a trusted publisher on PyPI or npm before its first release.
 
 Use the [`materializeinc`](https://pypi.org/user/materializeinc/) PyPI user to
-upload and update Materialize's Python packages on PyPI. Login information can
-be found in the shared 1Password account.
+manage Materialize's Python packages on PyPI. Login information can be found in
+the shared 1Password account.
