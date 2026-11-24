@@ -34,6 +34,7 @@ use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, Diff, GlobalId, Row, adt::jsonb::Jsonb};
 use mz_ssh_util::tunnel::SshTunnelStatus;
 use mz_storage_types::connections::KafkaConnection;
+use mz_storage_types::dyncfgs::KAFKA_SOURCE_RECEIVE_MESSAGE_MAX_BYTES;
 use mz_storage_types::errors::{
     ContextCreationError, DataflowError, SourceError, SourceErrorDetails,
 };
@@ -65,7 +66,7 @@ use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
 use timely::progress::Timestamp;
 use tokio::sync::{Notify, OnceCell, mpsc};
-use tracing::{error, info, trace};
+use tracing::{error, info, trace, warn};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::metrics::source::kafka::KafkaSourceMetrics;
@@ -1433,6 +1434,35 @@ type DataOutput = AsyncOutputHandle<
 type HealthOutput =
     AsyncOutputHandle<KafkaTimestamp, CapacityContainerBuilder<Vec<HealthStatusMessage>>>;
 
+/// The librdkafka default `fetch.max.bytes`, set explicitly because [`receive_message_max_bytes`]
+/// derives its minimum from it.
+const FETCH_MAX_BYTES: usize = 52_428_800;
+
+/// The librdkafka default `queued.max.messages.kbytes`.
+const QUEUED_MAX_MESSAGES_KBYTES: usize = 65_536;
+
+// NOTE: librdkafka caps `fetch.max.bytes` at `queued.max.messages.kbytes` only when
+// `fetch.max.bytes` is unset, so that one fetch response fits in the pre-fetch queue. Setting
+// `fetch.max.bytes` explicitly disables that cap, and this assertion takes its place.
+const _: () = assert!(FETCH_MAX_BYTES <= QUEUED_MAX_MESSAGES_KBYTES * 1024);
+
+/// Returns `configured`, clamped to the `receive.message.max.bytes` range librdkafka accepts
+/// with [`FETCH_MAX_BYTES`].
+fn receive_message_max_bytes(configured: usize) -> usize {
+    // librdkafka rejects the client config outside this range, which would halt the source. The
+    // maximum is librdkafka's `INT_MAX` bound on the property.
+    let clamped = configured.clamp(FETCH_MAX_BYTES + 512, 2_147_483_647);
+    if clamped != configured {
+        warn!(
+            configured,
+            clamped,
+            "{} outside the range librdkafka accepts",
+            KAFKA_SOURCE_RECEIVE_MESSAGE_MAX_BYTES.name()
+        );
+    }
+    clamped
+}
+
 /// Creates a reader worker's consumer, possibly long after the operator started, and reports
 /// failures to the operator's outputs.
 struct ReaderConsumerSetup {
@@ -1514,6 +1544,12 @@ impl ReaderConsumerSetup {
                         .to_string(),
                     // TODO: document the rationale for this.
                     "fetch.message.max.bytes" => "134217728".into(),
+                    "fetch.max.bytes" => FETCH_MAX_BYTES.to_string(),
+                    "queued.max.messages.kbytes" => QUEUED_MAX_MESSAGES_KBYTES.to_string(),
+                    "receive.message.max.bytes" => receive_message_max_bytes(
+                        KAFKA_SOURCE_RECEIVE_MESSAGE_MAX_BYTES.get(self.config.config.config_set()),
+                    )
+                    .to_string(),
                     // Consumer group ID, which may have been overridden by
                     // the user. librdkafka requires this, and we use offset
                     // committing to provide a way for users to monitor

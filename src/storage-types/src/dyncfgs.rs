@@ -114,6 +114,18 @@ pub const KAFKA_POLL_MAX_WAIT: Config<Duration> = Config::new(
     ParameterScope::Replica,
 );
 
+/// Sets receive.message.max.bytes in librdkafka for Kafka source reader consumers. Values outside
+/// the range librdkafka accepts are clamped to it. Takes effect when the reader consumers are next
+/// created, for example on replica restart.
+pub const KAFKA_SOURCE_RECEIVE_MESSAGE_MAX_BYTES: Config<usize> = Config::new(
+    "kafka_source_receive_message_max_bytes",
+    // The librdkafka default.
+    100_000_000,
+    "Sets receive.message.max.bytes in librdkafka for Kafka source reader consumers. Values \
+    are clamped to the range librdkafka accepts, from fetch.max.bytes + 512 to 2147483647.",
+    ParameterScope::Replica,
+);
+
 /// How often Kafka sources recommit offsets that have not changed, so that brokers do not expire
 /// them. Must stay well below the broker's `offsets.retention.minutes`. Zero disables it.
 pub const KAFKA_OFFSET_COMMIT_REFRESH_INTERVAL: Config<Duration> = Config::new(
@@ -586,6 +598,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&KAFKA_SINK_BATCH_SIZE)
         .add(&KAFKA_SINK_BATCH_NUM_MESSAGES)
         .add(&KAFKA_SINK_EMIT_SINK_ID_HEADER)
+        .add(&KAFKA_SOURCE_RECEIVE_MESSAGE_MAX_BYTES)
         .add(&MYSQL_REPLICATION_HEARTBEAT_INTERVAL)
         .add(&MYSQL_SOURCE_SNAPSHOT_EXACT_COUNT_MAX_ROWS)
         .add(&MYSQL_SOURCE_SNAPSHOT_PARALLELISM)
