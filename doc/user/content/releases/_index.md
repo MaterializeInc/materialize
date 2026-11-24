@@ -60,6 +60,7 @@ ALTER CLUSTER serving SET (QUERY POLICY = indexed_reads_only);
 
 If an unindexed query is run against the serving cluster, it will be rejected:
 ```mzsql
+SET cluster = serving;
 SELECT customer_id, sum(amount) FROM orders GROUP BY customer_id;
 ```
 ```nofmt
