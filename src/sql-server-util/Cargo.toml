@@ -25,6 +25,7 @@ itertools.workspace = true
 mz-ore = { path = "../ore", features = ["async"] }
 mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr" }
+mz-source-schema-change = { path = "../source-schema-change" }
 mz-ssh-util = { path = "../ssh-util" }
 mz-cloud-resources = { path = "../cloud-resources" }
 ordered-float.workspace = true

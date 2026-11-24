@@ -23,7 +23,7 @@ use mz_ore::future::InTask;
 use mz_repr::{Diff, GlobalId, Row, RowArena};
 use mz_sql_server_util::SqlServerCdcMetrics;
 use mz_sql_server_util::cdc::{CdcEvent, Lsn, Operation as CdcOperation};
-use mz_sql_server_util::desc::SqlServerRowDecoder;
+use mz_sql_server_util::desc::{SqlServerRowDecoder, SqlServerTableConstraint, SqlServerTableDesc};
 use mz_sql_server_util::inspect::{
     ensure_database_cdc_enabled, ensure_sql_server_agent_running, get_latest_restore_history_id,
 };
@@ -97,6 +97,9 @@ pub(crate) fn render<'scope>(
 
             // The decoder is specific to the export, and each export pulls data from a specific capture instance.
             let mut decoder_map: BTreeMap<_, _> = BTreeMap::new();
+            // The description each export was created with, checked against the
+            // constraints the CDC stream re-reads from upstream.
+            let mut upstream_descs: BTreeMap<u64, Arc<SqlServerTableDesc>> = BTreeMap::new();
             // Maps the 'capture instance' to the output index for only those outputs that this worker will snapshot
             let mut capture_instance_to_snapshot: BTreeMap<Arc<str>, Vec<_>> = BTreeMap::new();
             // Maps the 'capture instance' to the output index for all outputs of this worker
@@ -112,6 +115,7 @@ pub(crate) fn render<'scope>(
                 if decoder_map.insert(key, Arc::clone(&output.decoder)).is_some() {
                     panic!("Multiple decoders for output index {}", output.partition_index);
                 }
+                upstream_descs.insert(key, Arc::clone(&output.upstream_desc));
                 // Collect the included columns from decoder for schema
                 // change validation. The decoder serves as an effective
                 // source of truth for which columns are "included", as we
@@ -415,6 +419,16 @@ pub(crate) fn render<'scope>(
             let mut cdc_stream = std::pin::pin!(cdc_stream);
 
             let mut errored_partitions = BTreeSet::new();
+            // Partitions whose recorded key no longer holds upstream. Unlike
+            // `errored_partitions`, these keep receiving data: a constraint change
+            // leaves rows decodable, and the error row alone makes the table
+            // unreadable once it lands. Withholding rows would turn an error row
+            // that lost a persist append race against another writer of the
+            // shard into missing data with nothing to explain it. The set only
+            // stops the error from being emitted again on every poll. It records
+            // that the error was emitted, not that it was persisted: nothing
+            // reports back whether the append carrying it won.
+            let mut key_errored_partitions = BTreeSet::new();
 
             // TODO(sql_server2): We should emit `ProgressStatisticsUpdate::SteadyState` messages
             // here, when we receive progress events. What stops us from doing this now is our
@@ -530,6 +544,57 @@ pub(crate) fn render<'scope>(
                             &mut deferred_updates,
                         ).await?
                     },
+                    CdcEvent::Constraints {
+                        capture_instance,
+                        constraints,
+                    } => {
+                        // The stream polls only the instances in `capture_instances`, so
+                        // a missing capture instance is an unexpected programming error.
+                        let partition_indexes = capture_instances
+                            .get(&capture_instance)
+                            .unwrap_or_else(|| {
+                                panic!(
+                                    "capture instance didn't exist: \
+                                     '{capture_instance}'"
+                                )
+                            });
+                        let current = constraints
+                            .into_iter()
+                            .map(SqlServerTableConstraint::try_from)
+                            .collect::<Result<Vec<_>, _>>()
+                            .map_err(TransientError::from)?;
+                        for partition_idx in partition_indexes {
+                            if errored_partitions.contains(partition_idx)
+                                || key_errored_partitions.contains(partition_idx)
+                            {
+                                continue;
+                            }
+                            // Every partition index was registered above, so a missing
+                            // partition index is an unexpected programming error.
+                            let desc = upstream_descs
+                                .get(partition_idx)
+                                .unwrap_or_else(|| {
+                                    panic!(
+                                        "partition index didn't \
+                                         exist: '{partition_idx}'"
+                                    )
+                                });
+                            if let Err(error) = desc.check_constraint_compatibility(&current) {
+                                let error =
+                                    DefiniteError::IncompatibleConstraintChange(error);
+                                let update = (
+                                    (*partition_idx, Err(error.into())),
+                                    *data_cap_set[0].time(),
+                                    Diff::ONE,
+                                );
+                                let size = update.fuel_size();
+                                data_output
+                                    .give_fueled(&data_cap_set[0], update, size)
+                                    .await;
+                                key_errored_partitions.insert(*partition_idx);
+                            }
+                        }
+                    }
                     CdcEvent::SchemaUpdate {
                         capture_instance,
                         table,
