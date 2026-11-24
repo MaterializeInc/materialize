@@ -51,10 +51,14 @@ This is the single most common source of a wasted query. There is no shared conv
 | `storage-upsert-sources` | `namespace` | `pod`, `source` |
 | `persist` | `env` | `pod` |
 | `environmentd-health` | `env` | `pod` |
-| `release-health` | `organization`, an organization id, not a namespace | `mz_cluster`, `version` |
+| `release-health` | `organization`, an organization id, not a namespace | `stack`, `datasource`, `mz_cluster`, `version` |
 | `networking` | `namespace` | `pod`, `tenant` |
 
 The release bot sets both `var-namespace` and `var-env` on every link for this reason.
+For `release-health`, also set `var-stack=staging|production` and the matching
+regional `var-datasource` UID. The dashboard's controller-backed Deploy progress
+panels select a shared datasource from `stack`; its other health panels use
+`datasource`. Check that both selectors name the same stack before signing off.
 
 ## Step 1: Establish the version and the boundaries
 
