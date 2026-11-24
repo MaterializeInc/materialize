@@ -76,6 +76,10 @@ To enable query policies, [contact our team](https://materialize.com/support/). 
 - **Faster catalog column lookups**: `pg_attribute` is now indexed on `attrelid`, so the column-introspection queries that `psql \d`, SQLAlchemy, and the PostgreSQL JDBC driver issue become index lookups instead of full scans — in a local measurement with 6,400 objects, `pg_attribute WHERE attrelid = ...` went from 14.6 ms to 3.0 ms at p50 and a mixed catalog workload from 711 to 3,742 queries per second.
 - **Smaller source and sink status indexes**: `mz_source_statuses` and `mz_sink_statuses` now keep roughly one copy of the status history rather than nine, so an object that reports a large error no longer inflates the indexes on `mz_catalog_server`.
 
+### Guides {#v26.52-guides}
+- [Query policies](/clusters/query-policies/)
+- [Backup and restore](/self-managed-deployments/backup-and-restore/) (<red>*Materialize Self-Managed only*</red>)
+
 ### Bug Fixes {#v26.52-bug-fixes}
 - Fixed a strict serializable read staying pending for the length of a sustained write flood, even after those same writes had advanced the timestamp oracle past the timestamp the read was waiting for.
 - Fixed `ALTER CONNECTION` restoring the old public keys of a connection whose keys a concurrent `ROTATE KEYS` had already written to the secret store; connection statements are now replanned against the current catalog when their external validation finishes, and a rotation that conflicts with a catalog change is rejected instead of published.
