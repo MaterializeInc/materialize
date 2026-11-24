@@ -114,6 +114,43 @@ single-replica clusters). Override the size list with `--envd-objects-scalabilit
 These runs are long; expect hours for the full size range, especially the MV
 scenario.
 
+### Focused DDL comparison
+
+`ddl_catalog_scaling` measures CREATE/DROP tables, views, and indexes with
+persistent autocommit connections. Use `--envd-objects-scalability-sizes`,
+`--ddl-concurrencies`, `--ddl-duration`, and `--ddl-repeats` to bound the sweep.
+JSONL artifacts retain individual statement samples and phase timestamps.
+
+For a same-harness staging comparison, set `CI_DDL_BASELINE_VERSION` to the
+baseline image version and select only these Buildkite jobs:
+
+```text
+CI_TEST_SELECTION=cluster-spec-sheet-ddl-smoke,cluster-spec-sheet-ddl-baseline,cluster-spec-sheet-ddl-candidate
+```
+
+The two full sweeps run sequentially in the same build, using the same staging
+account and concurrency lock. Each recreates and cleans up its region. The
+baseline uses `--staging-version`, while the candidate uses the build's image.
+Both run 5k/10k/30k objects, 1/8 clients, and three 20-second repetitions.
+The ordinary `cluster-spec-sheet-ddl` job remains available for a single sweep.
+
+Configuration artifacts record hashes of explicit global, cluster, and replica
+overrides, plus visible session/system settings, before padding and before/after
+each catalog-size sweep. Runtime identity is recorded separately, not hashed as
+configuration. Values are hashed to avoid retaining environment-specific payloads.
+Within-run drift fails the benchmark. Compare fingerprints between the two jobs
+before attributing performance differences. `--ddl-configuration-sha256` can
+require a previously captured fingerprint. This detects observed differences,
+not transient changes between checkpoints, and does not disable flag updates.
+The runtime versions must expose the configuration introspection views.
+The fingerprint does not cover hidden startup defaults or pod resources. Verify
+startup arguments, compiled defaults, resource limits, and architecture separately.
+
+Collect CPU, memory, timer, and backend-operation telemetry separately, retaining
+request bounds and failures. Exclude profile intervals from reported client
+repetitions and resource windows. Full metrics gathering has a cost, so match
+collection protocols and do not issue diagnostic scrapes during timed phases.
+
 ### cluster object limits scenarios
 
 The `cluster_object_limits_indexes_from_persist_sources`,
