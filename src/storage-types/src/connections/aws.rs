@@ -1722,7 +1722,8 @@ mod tests {
                 let n = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
                 let margin = u64::try_from(self.margin.as_millis()).expect("fits");
                 if n > 1 {
-                    self.clock.fetch_add(margin.saturating_mul(2), Ordering::SeqCst);
+                    let step = margin.saturating_mul(2);
+                    self.clock.fetch_add(step, Ordering::SeqCst);
                     return Err(CredentialsError::provider_error("injected failure"));
                 }
                 let now = Duration::from_millis(self.clock.load(Ordering::SeqCst));
