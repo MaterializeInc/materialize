@@ -2717,6 +2717,20 @@ steps:
         agents:
           queue: hetzner-aarch64-16cpu-32gb
 
+      - id: orchestratord-force-promote-without-skip
+        topics: [self-managed]
+        label: Orchestratord force promote after lost skip-catchup
+        artifact_paths: ["mz_debug_*.zip"]
+        depends_on: devel-docker-tags
+        timeout_in_minutes: 60
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              run: force-promote-without-skip
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+
       - id: orchestratord-leader-failover
         topics: [self-managed]
         label: Orchestratord leader election failover

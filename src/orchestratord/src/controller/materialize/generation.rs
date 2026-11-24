@@ -261,19 +261,7 @@ impl Resources {
                     }
                 };
                 if force_promote {
-                    trace!("skipping cluster catchup");
-                    let skip_catchup_url = reqwest::Url::parse(&format!(
-                        "{}/api/leader/skip-catchup",
-                        self.connection_info.environmentd_url,
-                    ))
-                    .unwrap();
-                    let response = http_client.post(skip_catchup_url).send().await?;
-                    if response.status() == StatusCode::BAD_REQUEST {
-                        let err: SkipCatchupError = response.json().await?;
-                        return Err(
-                            anyhow::anyhow!("failed to skip catchup: {}", err.message).into()
-                        );
-                    }
+                    self.skip_catchup(&http_client).await?;
                 } else {
                     match response.status {
                         DeploymentStatus::Initializing => {
@@ -293,6 +281,21 @@ impl Resources {
         }
 
         Ok(None)
+    }
+
+    async fn skip_catchup(&self, http_client: &HttpClient) -> Result<(), Error> {
+        trace!("skipping cluster catchup");
+        let skip_catchup_url = reqwest::Url::parse(&format!(
+            "{}/api/leader/skip-catchup",
+            self.connection_info.environmentd_url,
+        ))
+        .unwrap();
+        let response = http_client.post(skip_catchup_url).send().await?;
+        if response.status() == StatusCode::BAD_REQUEST {
+            let err: SkipCatchupError = response.json().await?;
+            return Err(anyhow::anyhow!("failed to skip catchup: {}", err.message).into());
+        }
+        Ok(())
     }
 
     #[instrument]
@@ -365,6 +368,7 @@ impl Resources {
     pub async fn promote_services(
         &self,
         client: &Client,
+        force_promote: bool,
         namespace: &str,
     ) -> Result<Option<Action>, Error> {
         let service_api: Api<Service> = Api::namespaced(client.clone(), namespace);
@@ -379,6 +383,13 @@ impl Resources {
         let Some(http_client) = self.get_http_client(client.clone(), namespace).await else {
             return Ok(Some(retry_action));
         };
+
+        // The skip lives in the environmentd process. If that process restarted
+        // since `apply` skipped catchup, the new one waits to catch up again and
+        // rejects promotion until `with_0dt_deployment_max_wait` elapses.
+        if force_promote {
+            self.skip_catchup(&http_client).await?;
+        }
 
         trace!("promoting new environmentd to leader");
         let response = http_client.post(promote_url).send().await?;
