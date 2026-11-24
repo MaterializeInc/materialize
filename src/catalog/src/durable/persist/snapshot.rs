@@ -129,7 +129,7 @@ mod tests {
     }
 
     proptest! {
-        #[test]
+        #[mz_ore::test]
         fn incremental_matches_full_consolidation(
             batches in prop::collection::vec(
                 (
