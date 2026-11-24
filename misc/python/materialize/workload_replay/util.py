@@ -203,39 +203,44 @@ def update_captured_workloads_repo() -> None:
     public_url = "https://github.com/MaterializeInc/captured-workloads"
 
     used_token = False
-    if not (path / ".git").is_dir():
-        path.mkdir(exist_ok=True)
-        if ui.env_is_truthy("CI"):
-            github_token = os.environ.get(
-                "GITHUB_CI_ISSUE_REFERENCE_CHECKER_TOKEN"
-            ) or os.getenv("GITHUB_TOKEN")
-            assert (
-                github_token
-            ), "GITHUB_CI_ISSUE_REFERENCE_CHECKER_TOKEN or GITHUB_TOKEN must be set in CI"
+    if ui.env_is_truthy("CI"):
+        github_token = os.environ.get(
+            "GITHUB_CI_ISSUE_REFERENCE_CHECKER_TOKEN"
+        ) or os.getenv("GITHUB_TOKEN")
+        assert (
+            github_token
+        ), "GITHUB_CI_ISSUE_REFERENCE_CHECKER_TOKEN or GITHUB_TOKEN must be set in CI"
+        auth_url = f"https://materializebot:{urllib.parse.quote(github_token, safe='')}@github.com/MaterializeInc/captured-workloads"
+        # Anything carrying the token goes through subprocess.run, not
+        # spawn.runv, so it is not echoed into the build log.
+        if not (path / ".git").is_dir():
+            path.mkdir(exist_ok=True)
             # check=True so a failed clone fails here, not later as a confusing
             # "no workload files found".
+            subprocess.run(["git", "clone", auth_url, str(path)], check=True)
+        else:
+            # The checkout is already here from an earlier run on this agent,
+            # which reset the remote to the credential-less public URL below.
+            # captured-workloads is an internal repository, so fetching from
+            # that URL can never authenticate - re-point it before fetching.
             subprocess.run(
+                ["git", "-C", str(path), "remote", "set-url", "origin", auth_url],
+                check=True,
+            )
+        used_token = True
+    elif not (path / ".git").is_dir():
+        path.mkdir(exist_ok=True)
+        try:
+            spawn.runv(["git", "clone", public_url, str(path)])
+        except:
+            spawn.runv(
                 [
                     "git",
                     "clone",
-                    f"https://materializebot:{urllib.parse.quote(github_token, safe='')}@github.com/MaterializeInc/captured-workloads",
+                    "git@github.com:MaterializeInc/captured-workloads",
                     str(path),
-                ],
-                check=True,
+                ]
             )
-            used_token = True
-        else:
-            try:
-                spawn.runv(["git", "clone", public_url, str(path)])
-            except:
-                spawn.runv(
-                    [
-                        "git",
-                        "clone",
-                        "git@github.com:MaterializeInc/captured-workloads",
-                        str(path),
-                    ]
-                )
 
     spawn.runv(["git", "-C", str(path), "fetch"])
     spawn.runv(["git", "-C", str(path), "checkout", commit])
