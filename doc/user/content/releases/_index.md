@@ -24,9 +24,9 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Cloud: 2026-11-26* <br>
 *Released to Materialize Self-Managed: 2026-11-27* <br>
 
-### AWS IAM Authentication for PostgreSQL Connections {#v26.52-aws-iam-authentication-for-postgresql-connections}
+### AWS IAM authentication for PostgreSQL connections {#v26.52-aws-iam-authentication-for-postgresql-connections}
 
-`CREATE CONNECTION ... TO POSTGRES` now accepts an `AWS CONNECTION` option, which authenticates to Amazon RDS and Aurora PostgreSQL with a short-lived IAM token instead of a password. Materialize signs a fresh token every time it opens a connection, including through an SSH tunnel or AWS PrivateLink, so PostgreSQL sources on RDS and Aurora no longer need a stored database password to manage and rotate. The option cannot be combined with `PASSWORD` and requires SSL, the same rules MySQL connections already follow.
+`CREATE CONNECTION ... TO POSTGRES` now accepts an `AWS CONNECTION` option, which authenticates to Amazon RDS and Aurora PostgreSQL with a short-lived IAM token instead of a password. Materialize signs a fresh token every time it opens a connection, so PostgreSQL sources on RDS and Aurora no longer need a stored database password to manage and rotate. The option cannot be combined with `PASSWORD` and requires SSL, the same rules MySQL connections already follow. For setup steps, see [`CREATE CONNECTION`: PostgreSQL](/sql/create-connection/#postgres-aws-connection-example).
 
 ### Improvements {#v26.52-improvements}
 - **Higher fast-path query throughput**: Fast-path reads now register and retire in the session that executes them instead of making a round trip through the coordinator, which in a staging benchmark at 128 concurrent clients raised throughput from 7,827 to 9,010 queries per second at the default statement-logging sample rate, and from 24,011 to 35,282 with statement logging off.
