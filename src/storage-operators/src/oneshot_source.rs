@@ -302,7 +302,13 @@ where
                 let (include, exclude): (Vec<_>, Vec<_>) = objects
                     .into_iter()
                     .partition(|(o, _checksum)| filter.filter::<S>(o));
-                tracing::info!(%worker_id, ?include, ?exclude, "listed objects");
+                tracing::info!(
+                    %worker_id,
+                    include_count = include.len(),
+                    exclude_count = exclude.len(),
+                    "listed objects"
+                );
+                tracing::trace!(%worker_id, ?include, ?exclude, "listed objects");
                 if include.is_empty() {
                     let err = StorageErrorXKind::NoMatchingFiles.with_context("discover");
                     start_handle.give(&start_cap, Err(err));

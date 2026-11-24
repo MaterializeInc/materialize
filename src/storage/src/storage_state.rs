@@ -110,7 +110,7 @@ use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, trace, warn};
 use uuid::Uuid;
 
 use crate::internal_control::{
@@ -1152,7 +1152,12 @@ impl<'w> Worker<'w> {
                     }
                 }
                 StorageCommand::RunIngestion(ingestion) => {
-                    info!(%worker_id, ?ingestion, "reconcile: received RunIngestion command");
+                    info!(
+                        %worker_id,
+                        id = %ingestion.id,
+                        "reconcile: received RunIngestion command"
+                    );
+                    trace!(%worker_id, ?ingestion, "reconcile: received RunIngestion command");
 
                     // Ensure that ingestions are forward-rolling alter compatible.
                     let prev = running_ingestion_descriptions
