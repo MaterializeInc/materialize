@@ -24,6 +24,14 @@ mz_now() <comparison_operator> <numeric_expr | timestamp_expr>
 
 ## Idiomatic Materialize SQL
 
+### Avoid truncating `mz_now()`
+
+{{< warning >}}
+Do not use `mz_now()` with date truncation functions like `date_trunc()`. For example, avoid patterns like `WHERE date_trunc('hour', mz_now()) = date_trunc('hour', event_ts)`.
+
+Truncating `mz_now()` causes Materialize to process data in batches (e.g., hourly) rather than incrementally. This defeats Materialize's core value of pre-computing results continuously. If you need time-bucketed aggregations, truncate your data columns instead and use `mz_now()` directly in temporal filters.
+{{< /warning >}}
+
 ### `mz_now()` expressions to calculate past or future timestamp
 
 **Idiomatic Materialize SQL**: {{< include-md
