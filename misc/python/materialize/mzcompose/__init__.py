@@ -983,6 +983,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "kafka_sink_message_max_bytes",
     "kafka_sink_batch_size",
     "kafka_sink_batch_num_messages",
+    "kafka_source_fetch_message_max_bytes",
     "kafka_source_receive_message_max_bytes",
     "oidc_issuer",
     "oidc_audience",

@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
-use std::ops::ControlFlow;
+use std::ops::{ControlFlow, RangeInclusive};
 use std::rc::Rc;
 use std::str::{self};
 use std::sync::Arc;
@@ -22,6 +22,7 @@ use differential_dataflow::{AsCollection, Hashable};
 use futures::StreamExt;
 use itertools::Itertools;
 use maplit::btreemap;
+use mz_dyncfg::{Config, ConfigSet};
 use mz_kafka_util::client::{
     GetPartitionsError, MzClientContext, PartitionId, TunnelingClientContext, get_partitions,
 };
@@ -34,7 +35,9 @@ use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, Diff, GlobalId, Row, adt::jsonb::Jsonb};
 use mz_ssh_util::tunnel::SshTunnelStatus;
 use mz_storage_types::connections::KafkaConnection;
-use mz_storage_types::dyncfgs::KAFKA_SOURCE_RECEIVE_MESSAGE_MAX_BYTES;
+use mz_storage_types::dyncfgs::{
+    KAFKA_SOURCE_FETCH_MESSAGE_MAX_BYTES, KAFKA_SOURCE_RECEIVE_MESSAGE_MAX_BYTES,
+};
 use mz_storage_types::errors::{
     ContextCreationError, DataflowError, SourceError, SourceErrorDetails,
 };
@@ -1434,8 +1437,8 @@ type DataOutput = AsyncOutputHandle<
 type HealthOutput =
     AsyncOutputHandle<KafkaTimestamp, CapacityContainerBuilder<Vec<HealthStatusMessage>>>;
 
-/// The librdkafka default `fetch.max.bytes`, set explicitly because [`receive_message_max_bytes`]
-/// derives its minimum from it.
+/// The librdkafka default `fetch.max.bytes`, set explicitly because
+/// [`RECEIVE_MESSAGE_MAX_BYTES_RANGE`] derives its minimum from it.
 const FETCH_MAX_BYTES: usize = 52_428_800;
 
 /// The librdkafka default `queued.max.messages.kbytes`.
@@ -1446,18 +1449,31 @@ const QUEUED_MAX_MESSAGES_KBYTES: usize = 65_536;
 // `fetch.max.bytes` explicitly disables that cap, and this assertion takes its place.
 const _: () = assert!(FETCH_MAX_BYTES <= QUEUED_MAX_MESSAGES_KBYTES * 1024);
 
-/// Returns `configured`, clamped to the `receive.message.max.bytes` range librdkafka accepts
-/// with [`FETCH_MAX_BYTES`].
-fn receive_message_max_bytes(configured: usize) -> usize {
-    // librdkafka rejects the client config outside this range, which would halt the source. The
-    // maximum is librdkafka's `INT_MAX` bound on the property.
-    let clamped = configured.clamp(FETCH_MAX_BYTES + 512, 2_147_483_647);
+/// The `receive.message.max.bytes` values librdkafka accepts with [`FETCH_MAX_BYTES`]. The maximum
+/// is librdkafka's `INT_MAX` bound on the property.
+const RECEIVE_MESSAGE_MAX_BYTES_RANGE: RangeInclusive<usize> =
+    FETCH_MAX_BYTES + 512..=2_147_483_647;
+
+/// The `fetch.message.max.bytes` values librdkafka accepts.
+const FETCH_MESSAGE_MAX_BYTES_RANGE: RangeInclusive<usize> = 1..=1_000_000_000;
+
+/// Returns the value of `config` in `config_set`, clamped to `range`.
+fn clamp_to_librdkafka_range(
+    config: &Config<usize>,
+    config_set: &ConfigSet,
+    range: RangeInclusive<usize>,
+) -> usize {
+    // librdkafka rejects the client config outside the property's range, which would halt the
+    // source.
+    let configured = config.get(config_set);
+    let (min, max) = range.into_inner();
+    let clamped = configured.clamp(min, max);
     if clamped != configured {
         warn!(
             configured,
             clamped,
             "{} outside the range librdkafka accepts",
-            KAFKA_SOURCE_RECEIVE_MESSAGE_MAX_BYTES.name()
+            config.name()
         );
     }
     clamped
@@ -1518,6 +1534,7 @@ impl ReaderConsumerSetup {
     }
 
     async fn create(&self) -> Result<Arc<ReaderConsumer>, ContextCreationError> {
+        let config_set = self.config.config.config_set();
         let consumer: ReaderConsumer = self
             .connection
             .create_with_context(
@@ -1542,12 +1559,18 @@ impl ReaderConsumerSetup {
                         self.topic_metadata_refresh_interval
                         .as_millis()
                         .to_string(),
-                    // TODO: document the rationale for this.
-                    "fetch.message.max.bytes" => "134217728".into(),
+                    "fetch.message.max.bytes" => clamp_to_librdkafka_range(
+                        &KAFKA_SOURCE_FETCH_MESSAGE_MAX_BYTES,
+                        config_set,
+                        FETCH_MESSAGE_MAX_BYTES_RANGE,
+                    )
+                    .to_string(),
                     "fetch.max.bytes" => FETCH_MAX_BYTES.to_string(),
                     "queued.max.messages.kbytes" => QUEUED_MAX_MESSAGES_KBYTES.to_string(),
-                    "receive.message.max.bytes" => receive_message_max_bytes(
-                        KAFKA_SOURCE_RECEIVE_MESSAGE_MAX_BYTES.get(self.config.config.config_set()),
+                    "receive.message.max.bytes" => clamp_to_librdkafka_range(
+                        &KAFKA_SOURCE_RECEIVE_MESSAGE_MAX_BYTES,
+                        config_set,
+                        RECEIVE_MESSAGE_MAX_BYTES_RANGE,
                     )
                     .to_string(),
                     // Consumer group ID, which may have been overridden by

@@ -114,6 +114,19 @@ pub const KAFKA_POLL_MAX_WAIT: Config<Duration> = Config::new(
     ParameterScope::Replica,
 );
 
+/// Sets fetch.message.max.bytes in librdkafka for Kafka source reader consumers. Values outside
+/// the range librdkafka accepts are clamped to it. Takes effect when the reader consumers are next
+/// created, for example on replica restart.
+pub const KAFKA_SOURCE_FETCH_MESSAGE_MAX_BYTES: Config<usize> = Config::new(
+    "kafka_source_fetch_message_max_bytes",
+    // Raised from the librdkafka default of 1048576 to fetch bigger batches, which trades memory
+    // for throughput.
+    134_217_728,
+    "Sets fetch.message.max.bytes in librdkafka for Kafka source reader consumers. Values are \
+    clamped to the range librdkafka accepts, from 1 to 1000000000.",
+    ParameterScope::Replica,
+);
+
 /// Sets receive.message.max.bytes in librdkafka for Kafka source reader consumers. Values outside
 /// the range librdkafka accepts are clamped to it. Takes effect when the reader consumers are next
 /// created, for example on replica restart.
@@ -598,6 +611,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&KAFKA_SINK_BATCH_SIZE)
         .add(&KAFKA_SINK_BATCH_NUM_MESSAGES)
         .add(&KAFKA_SINK_EMIT_SINK_ID_HEADER)
+        .add(&KAFKA_SOURCE_FETCH_MESSAGE_MAX_BYTES)
         .add(&KAFKA_SOURCE_RECEIVE_MESSAGE_MAX_BYTES)
         .add(&MYSQL_REPLICATION_HEARTBEAT_INTERVAL)
         .add(&MYSQL_SOURCE_SNAPSHOT_EXACT_COUNT_MAX_ROWS)

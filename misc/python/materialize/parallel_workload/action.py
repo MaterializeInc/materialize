@@ -3528,6 +3528,7 @@ class FlipFlagsAction(Action):
             "kafka_sink_message_max_bytes",
             "kafka_sink_batch_size",
             "kafka_sink_batch_num_messages",
+            "kafka_source_fetch_message_max_bytes",
             "kafka_source_receive_message_max_bytes",
             "pg_source_validate_timeline",
             "sql_server_source_validate_restore_history",
