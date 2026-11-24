@@ -173,3 +173,33 @@ false
 
 statement ok
 DROP TABLE idf_bug
+
+# A parameter takes its type from the comparison, also on the left.
+
+statement ok
+PREPARE idf_param_literal AS SELECT $1 IS DISTINCT FROM 5
+
+query B
+EXECUTE idf_param_literal(5)
+----
+false
+
+query B
+EXECUTE idf_param_literal(6)
+----
+true
+
+statement ok
+CREATE TABLE idf_param (x int)
+
+statement ok
+INSERT INTO idf_param VALUES (1), (NULL)
+
+statement ok
+PREPARE idf_param_column AS SELECT x, $1 IS NOT DISTINCT FROM x FROM idf_param
+
+query IB rowsort
+EXECUTE idf_param_column(1)
+----
+1  true
+NULL  false
