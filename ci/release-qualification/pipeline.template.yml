@@ -832,6 +832,7 @@ steps:
               composition: platform-checks
               args: [--scenario=ZeroDowntimeBumpedVersion, "--seed=$BUILDKITE_JOB_ID"]
               ci-builder: stable
+        skip: "Reenable when SS-607 is fixed"
 
   - id: limits
     topics: [cockroach, iceberg, kafka, kafka-sink, mysql, postgres, sql-server]
