@@ -27,6 +27,7 @@ use mz_aws_util::rds::RdsIamAuth;
 use mz_dyncfg::ConfigSet;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::{InTask, OreFutureExt};
+use mz_ore::now::{NowFn, SYSTEM_TIME};
 use mz_ore::task::AbortOnDropHandle;
 use mz_repr::{CatalogItemId, GlobalId};
 #[cfg(any(test, feature = "proptest"))]
@@ -747,6 +748,8 @@ struct LazyCredentialCache {
     /// Held across a fetch, so that concurrent callers wait for one fetch.
     /// Without it, each would start a fetch of its own.
     fetch_lock: Arc<tokio::sync::Mutex<()>>,
+    /// The clock that credential expiry is compared against.
+    now: NowFn,
 }
 
 #[derive(Debug, Default)]
@@ -786,15 +789,24 @@ impl LazyCredentialState {
 
 impl LazyCredentialCache {
     fn new(inner: SharedCredentialsProvider) -> LazyCredentialCache {
+        LazyCredentialCache::with_clock(inner, SYSTEM_TIME.clone())
+    }
+
+    fn with_clock(inner: SharedCredentialsProvider, now: NowFn) -> LazyCredentialCache {
         LazyCredentialCache {
             inner,
             state: Default::default(),
             fetch_lock: Default::default(),
+            now,
         }
     }
 
     fn state(&self) -> MutexGuard<'_, LazyCredentialState> {
         self.state.lock().expect("lock poisoned")
+    }
+
+    fn now(&self) -> SystemTime {
+        SystemTime::UNIX_EPOCH + Duration::from_millis((self.now)())
     }
 
     /// Reports whether anything other than this handle shares the cached
@@ -805,7 +817,7 @@ impl LazyCredentialCache {
 
     /// Reports whether the cache holds credentials that can still be served.
     fn has_fresh_credentials(&self) -> bool {
-        self.state().fresh(SystemTime::now()).is_some()
+        self.state().fresh(self.now()).is_some()
     }
 
     /// Asks for the cached credentials to be replaced by the next call, if
@@ -860,7 +872,7 @@ impl ProvideCredentials for LazyCredentialCache {
         aws_credential_types::provider::future::ProvideCredentials::new(async move {
             let failed_before = {
                 let state = self.state();
-                if let Some(creds) = state.servable(SystemTime::now()) {
+                if let Some(creds) = state.servable(self.now()) {
                     return Ok(creds);
                 }
                 state.failed_fetches
@@ -868,7 +880,7 @@ impl ProvideCredentials for LazyCredentialCache {
             let _fetching = self.fetch_lock.lock().await;
             {
                 let state = self.state();
-                let now = SystemTime::now();
+                let now = self.now();
                 // Another caller fetched while this one waited.
                 if let Some(creds) = state.servable(now) {
                     return Ok(creds);
@@ -908,7 +920,7 @@ impl ProvideCredentials for LazyCredentialCache {
             // STS is not asked again on every call. Freshness is checked now
             // and not before the fetch, because the fetch can take up to
             // `CREDENTIAL_CACHE_FETCH_TIMEOUT`.
-            if let Some(creds) = state.fresh(SystemTime::now()).cloned() {
+            if let Some(creds) = state.fresh(self.now()).cloned() {
                 warn!(
                     error = %error.display_with_causes(),
                     "failed to refresh AWS credentials, keeping the cached ones"
@@ -1149,7 +1161,7 @@ impl ProvideCredentials for CredentialPrefetcher {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
     use aws_credential_types::provider::future;
     use tokio::sync::Semaphore;
@@ -1689,15 +1701,16 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 3);
     }
 
-    /// A test [`ProvideCredentials`] whose first fetch returns credentials
-    /// that leave the expiry buffer `margin` from now, and whose later
-    /// fetches block for twice `margin` of wall-clock time and then fail.
+    /// A test [`ProvideCredentials`] that reads and moves a fake clock, in
+    /// milliseconds since the Unix epoch. Its first fetch returns credentials
+    /// that leave the expiry buffer `margin` after the clock's current time.
+    /// Each later fetch moves the clock past that point and then fails, as a
+    /// refresh that takes a long time would.
     #[derive(Debug)]
     struct SlowFailingRefresh {
         calls: Arc<AtomicUsize>,
+        clock: Arc<AtomicU64>,
         margin: Duration,
-        /// The expiry of the credentials that the first fetch returned.
-        expiry: std::sync::OnceLock<SystemTime>,
     }
 
     impl ProvideCredentials for SlowFailingRefresh {
@@ -1707,22 +1720,14 @@ mod tests {
         {
             future::ProvideCredentials::new(async move {
                 let n = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+                let margin = u64::try_from(self.margin.as_millis()).expect("fits");
                 if n > 1 {
-                    // Without this, a test thread that stalled for `margin`
-                    // would pass without the cached credentials ever being
-                    // servable when the refresh starts.
-                    let expiry = *self.expiry.get().expect("set by the first fetch");
-                    assert!(
-                        SystemTime::now() + CREDENTIAL_CACHE_EXPIRY_BUFFER < expiry,
-                        "the cached credentials stopped being servable before the refresh"
-                    );
-                    // Expiry follows the wall clock, which tokio's paused
-                    // clock does not move.
-                    std::thread::sleep(self.margin.saturating_mul(2));
+                    self.clock.fetch_add(margin.saturating_mul(2), Ordering::SeqCst);
                     return Err(CredentialsError::provider_error("injected failure"));
                 }
-                let expiry = SystemTime::now() + CREDENTIAL_CACHE_EXPIRY_BUFFER + self.margin;
-                self.expiry.set(expiry).expect("the first fetch runs once");
+                let now = Duration::from_millis(self.clock.load(Ordering::SeqCst));
+                let expiry =
+                    SystemTime::UNIX_EPOCH + now + CREDENTIAL_CACHE_EXPIRY_BUFFER + self.margin;
                 Ok(Credentials::new(
                     "akid-1",
                     "secret",
@@ -1734,27 +1739,34 @@ mod tests {
         }
     }
 
+    // NOTE: Expiry is compared against the fake clock, so this test does not
+    // depend on how long anything takes. The paused tokio clock only ages the
+    // credentials past the floor for `request_refresh`.
     #[mz_ore::test(tokio::test(start_paused = true))]
     async fn failed_refresh_does_not_serve_credentials_that_entered_the_buffer() {
         let calls = Arc::new(AtomicUsize::new(0));
+        let clock = Arc::new(AtomicU64::new(1_700_000_000_000));
         let provider = SlowFailingRefresh {
             calls: Arc::clone(&calls),
-            margin: Duration::from_millis(200),
-            expiry: Default::default(),
+            clock: Arc::clone(&clock),
+            margin: Duration::from_secs(1),
         };
-        let cache = LazyCredentialCache::new(SharedCredentialsProvider::new(provider));
+        let now = NowFn::from(move || clock.load(Ordering::SeqCst));
+        let cache = LazyCredentialCache::with_clock(SharedCredentialsProvider::new(provider), now);
 
         cache.provide_credentials().await.unwrap();
+        assert!(cache.has_fresh_credentials());
         tokio::time::sleep(CREDENTIAL_CACHE_MIN_REUSE).await;
         cache.request_refresh("akid-1");
 
-        // The cached credentials leave the expiry buffer while the refresh
+        // The cached credentials enter the expiry buffer while the refresh
         // runs, so its failure must not fall back to them.
         let err = cache.provide_credentials().await.unwrap_err();
         assert!(
             format!("{}", err.display_with_causes()).contains("injected failure"),
             "the caller must see the fetch failure: {err}"
         );
+        assert!(!cache.has_fresh_credentials());
         assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
