@@ -24,9 +24,9 @@ use futures::stream::{BoxStream, StreamExt};
 use k8s_openapi::DeepMerge;
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec, StatefulSetUpdateStrategy};
 use k8s_openapi::api::core::v1::{
-    Affinity, Capabilities, Container, ContainerPort, EnvVar, EnvVarSource, EphemeralVolumeSource,
-    NodeAffinity, NodeSelector, NodeSelectorRequirement, NodeSelectorTerm, ObjectFieldSelector,
-    ObjectReference, PersistentVolumeClaim, PersistentVolumeClaimSpec,
+    Affinity, Capabilities, Container, ContainerPort, EmptyDirVolumeSource, EnvVar, EnvVarSource,
+    EphemeralVolumeSource, NodeAffinity, NodeSelector, NodeSelectorRequirement, NodeSelectorTerm,
+    ObjectFieldSelector, ObjectReference, PersistentVolumeClaim, PersistentVolumeClaimSpec,
     PersistentVolumeClaimTemplate, Pod, PodAffinity, PodAffinityTerm, PodAntiAffinity,
     PodSecurityContext, PodSpec, PodTemplateSpec, PreferredSchedulingTerm, ResourceRequirements,
     SeccompProfile, Secret, SecurityContext, Service as K8sService, ServicePort, ServiceSpec,
@@ -1055,7 +1055,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             })
         }
 
-        let volumes = match (disk, &self.config.ephemeral_volume_storage_class) {
+        let mut volumes = match (disk, &self.config.ephemeral_volume_storage_class) {
             (true, Some(ephemeral_volume_storage_class)) => {
                 volume_mounts.push(VolumeMount {
                     name: "scratch".to_string(),
@@ -1064,7 +1064,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 });
                 args.push("--scratch-directory=/scratch".into());
 
-                Some(vec![Volume {
+                vec![Volume {
                     name: "scratch".to_string(),
                     ephemeral: Some(EphemeralVolumeSource {
                         volume_claim_template: Some(PersistentVolumeClaimTemplate {
@@ -1093,15 +1093,34 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                         ..Default::default()
                     }),
                     ..Default::default()
-                }])
+                }]
             }
             (true, None) => {
                 return Err(anyhow!(
                     "service requested disk but no ephemeral volume storage class was configured"
                 ));
             }
-            (false, _) => None,
+            (false, _) => vec![],
         };
+
+        // The init container image is supplied by the deployment and not
+        // audited for writes, so only the main container is read-only.
+        let mut main_container_security_context = container_security_context;
+        if let Some(ctx) = &mut main_container_security_context {
+            ctx.read_only_root_filesystem = Some(true);
+            // `/tmp` holds SSH tunnel keys and control sockets, and heap
+            // profile dumps.
+            volume_mounts.push(VolumeMount {
+                name: "tmp".to_string(),
+                mount_path: "/tmp".to_string(),
+                ..Default::default()
+            });
+            volumes.push(Volume {
+                name: "tmp".to_string(),
+                empty_dir: Some(EmptyDirVolumeSource::default()),
+                ..Default::default()
+            });
+        }
 
         if let Some(name_prefix) = &self.config.name_prefix {
             args.push(format!("--secrets-reader-name-prefix={}", name_prefix));
@@ -1209,7 +1228,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                             })
                             .collect(),
                     ),
-                    security_context: container_security_context.clone(),
+                    security_context: main_container_security_context,
                     resources: Some(ResourceRequirements {
                         claims: None,
                         limits: Some(limits),
@@ -1223,7 +1242,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                     env,
                     ..Default::default()
                 }],
-                volumes,
+                volumes: (!volumes.is_empty()).then_some(volumes),
                 security_context,
                 // `None` rather than `Some(true)` when disabled, so the pod
                 // template hash is unchanged from before user namespace support.

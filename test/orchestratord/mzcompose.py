@@ -1056,6 +1056,12 @@ class EnvironmentdImageRef(Modification):
                 assert (
                     image == expected or f"ghcr.io/materializeinc/{image}" == expected
                 ), f"Expected environmentd image {expected}, but found {image}"
+                # The operator image pinned in the chart predates read-only roots.
+                if (
+                    ORCHESTRATORD_OVERRIDE
+                    and MzVersion.parse_mz(self.value) >= READ_ONLY_ROOT_VERSION
+                ):
+                    validate_read_only_root(item)
 
             balancerd = get_balancerd_data()
             for item in balancerd["items"]:
@@ -1584,8 +1590,19 @@ EXPECTED_CLUSTERD_SYSCTLS = {
 }
 
 
+READ_ONLY_ROOT_VERSION = MzVersion.parse_mz("v26.53.0-dev.0")
+
+
+def validate_read_only_root(pod: dict[str, Any]) -> None:
+    container = pod["spec"]["containers"][0]
+    assert container["securityContext"]["readOnlyRootFilesystem"] is True
+    assert any(m["mountPath"] == "/tmp" for m in container["volumeMounts"])
+
+
 def validate_clusterd_pod(pod: dict[str, Any], version: MzVersion) -> None:
     """Validate always-on properties of a clusterd pod."""
+    if version >= READ_ONLY_ROOT_VERSION:
+        validate_read_only_root(pod)
     if version >= MzVersion.parse_mz("v26.24.0-dev.0"):
         sysctls = {
             s["name"]: s["value"]

@@ -18,10 +18,11 @@ use k8s_openapi::{
     api::{
         apps::v1::{StatefulSet, StatefulSetSpec},
         core::v1::{
-            Capabilities, ConfigMap, ConfigMapVolumeSource, Container, ContainerPort, EnvVar,
-            EnvVarSource, KeyToPath, PodSecurityContext, PodSpec, PodTemplateSpec, Probe,
-            SeccompProfile, Secret, SecretKeySelector, SecretVolumeSource, SecurityContext,
-            Service, ServicePort, ServiceSpec, TCPSocketAction, Toleration, Volume, VolumeMount,
+            Capabilities, ConfigMap, ConfigMapVolumeSource, Container, ContainerPort,
+            EmptyDirVolumeSource, EnvVar, EnvVarSource, KeyToPath, PodSecurityContext, PodSpec,
+            PodTemplateSpec, Probe, SeccompProfile, Secret, SecretKeySelector, SecretVolumeSource,
+            SecurityContext, Service, ServicePort, ServiceSpec, TCPSocketAction, Toleration,
+            Volume, VolumeMount,
         },
     },
     apimachinery::pkg::{apis::meta::v1::LabelSelector, util::intstr::IntOrString},
@@ -91,6 +92,16 @@ static V26_42_0: LazyLock<Version> = LazyLock::new(|| Version {
 static V26_50_0: LazyLock<Version> = LazyLock::new(|| Version {
     major: 26,
     minor: 50,
+    patch: 0,
+    pre: Prerelease::new("dev.0").expect("dev.0 is valid prerelease"),
+    build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
+});
+
+/// Version at which `environmentd` stopped writing SSH control sockets under
+/// `$HOME`, so it can run with a read-only root filesystem.
+static V26_53_0: LazyLock<Version> = LazyLock::new(|| Version {
+    major: 26,
+    minor: 53,
     patch: 0,
     pre: Prerelease::new("dev.0").expect("dev.0 is valid prerelease"),
     build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
@@ -1107,7 +1118,7 @@ fn create_environmentd_statefulset_object(
         )
     });
 
-    let security_context = if config.enable_security_context {
+    let mut security_context = if config.enable_security_context {
         // Since we want to adhere to the most restrictive security context, all
         // of these fields have to be set how they are.
         // See https://kubernetes.io/docs/concepts/security/pod-security-standards/#restricted
@@ -1127,6 +1138,23 @@ fn create_environmentd_statefulset_object(
     } else {
         None
     };
+    if let Some(ctx) = &mut security_context
+        && mz.meets_minimum_version(&V26_53_0)
+    {
+        ctx.read_only_root_filesystem = Some(true);
+        // `/tmp` holds SSH tunnel keys and control sockets, and heap profile
+        // dumps.
+        volume_mounts.push(VolumeMount {
+            name: "tmp".to_string(),
+            mount_path: "/tmp".to_string(),
+            ..Default::default()
+        });
+        volumes.push(Volume {
+            name: "tmp".to_string(),
+            empty_dir: Some(EmptyDirVolumeSource::default()),
+            ..Default::default()
+        });
+    }
 
     let ports = vec![
         ContainerPort {
@@ -1230,7 +1258,7 @@ fn create_environmentd_statefulset_object(
             .environmentd_resource_requirements
             .clone()
             .or_else(|| config.environmentd_default_resources.clone()),
-        security_context: security_context.clone(),
+        security_context,
         ..Default::default()
     };
 
