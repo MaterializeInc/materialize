@@ -21,6 +21,9 @@ use aws_sigv4::http_request::{
 };
 use aws_sigv4::sign::v4::SigningParams;
 use aws_sigv4::sign::v4::signing_params::BuildError;
+use mz_ore::secure::SecureString;
+use std::fmt;
+use std::sync::Arc;
 use std::time::Duration;
 
 const AWS_TOKEN_EXPIRATION_SECONDS: u64 = 900;
@@ -50,25 +53,92 @@ pub enum RdsTokenError {
     InvalidEndpoint(#[from] url::ParseError),
 }
 
-/// Generates an RDS IAM authentication token for `username` connecting to the
-/// database at `host:port`.
-///
-/// `host` and `port` must be the endpoint of the RDS instance or cluster
-/// itself, not of a tunnel or proxy in front of it, because the token is a
-/// signature over that endpoint. The token is valid for 15 minutes.
-///
+/// An RDS IAM authentication token.
+#[derive(Debug, Clone)]
+pub struct RdsAuthToken {
+    /// The token, to use as the database password. It is a credential for as
+    /// long as it is valid, so it is redacted in `Debug` output.
+    pub token: SecureString,
+    /// The access key ID of the credentials that signed the token.
+    pub access_key_id: String,
+}
+
+/// Authenticates database connections to Amazon RDS with AWS IAM.
+#[derive(Clone)]
+pub struct RdsIamAuth {
+    aws_config: SdkConfig,
+    on_token_rejected: Option<Arc<dyn Fn(&str) + Send + Sync>>,
+}
+
+impl fmt::Debug for RdsIamAuth {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RdsIamAuth")
+            .field("aws_config", &self.aws_config)
+            .field("on_token_rejected", &self.on_token_rejected.is_some())
+            .finish()
+    }
+}
+
+impl RdsIamAuth {
+    /// Signs tokens with the credentials provider of `aws_config`.
+    pub fn new(aws_config: SdkConfig) -> RdsIamAuth {
+        RdsIamAuth {
+            aws_config,
+            on_token_rejected: None,
+        }
+    }
+
+    /// Calls `hook` with the access key ID of the signing credentials whenever
+    /// [`RdsIamAuth::token_rejected`] reports a rejected token.
+    ///
+    /// A provider that caches credentials uses this to replace credentials
+    /// that AWS no longer honors, such as those of a revoked role session.
+    pub fn on_token_rejected(mut self, hook: impl Fn(&str) + Send + Sync + 'static) -> RdsIamAuth {
+        self.on_token_rejected = Some(Arc::new(hook));
+        self
+    }
+
+    /// Generates an RDS IAM authentication token for `username` connecting to
+    /// the database at `host:port`.
+    ///
+    /// `host` and `port` must be the endpoint of the RDS instance or cluster
+    /// itself, not of a tunnel or proxy in front of it, because the token is a
+    /// signature over that endpoint. The token is valid for 15 minutes.
+    ///
+    /// Every call asks the credentials provider for credentials, and nothing
+    /// here caches them. If that provider assumes a role, each token costs a
+    /// round of AWS STS requests unless the provider caches.
+    pub async fn token(
+        &self,
+        host: &str,
+        port: u16,
+        username: &str,
+    ) -> Result<RdsAuthToken, RdsTokenError> {
+        sign_rds_auth_token(host, port, username, &self.aws_config).await
+    }
+
+    /// Reports that the database rejected `token` as an authentication
+    /// failure.
+    pub fn token_rejected(&self, token: &RdsAuthToken) {
+        if let Some(hook) = &self.on_token_rejected {
+            hook(&token.access_key_id);
+        }
+    }
+}
+
 /// This mirrors `aws_sdk_rds::auth_token`, without depending on `aws-sdk-rds`.
-pub async fn rds_auth_token(
+async fn sign_rds_auth_token(
     host: &str,
     port: u16,
     username: &str,
     aws_config: &SdkConfig,
-) -> Result<String, RdsTokenError> {
+) -> Result<RdsAuthToken, RdsTokenError> {
     let credentials = aws_config
         .credentials_provider()
         .ok_or(RdsTokenError::MissingCredentialsProvider)?
         .provide_credentials()
         .await?;
+    let access_key_id = credentials.access_key_id().to_owned();
 
     // mirror existing SDK behaviour: default to us-east-1,
     let region = aws_config
@@ -112,7 +182,10 @@ pub async fn rds_auth_token(
         url.query_pairs_mut().append_pair(key, val);
     }
 
-    Ok(url.as_str()["https://".len()..].to_owned())
+    Ok(RdsAuthToken {
+        token: SecureString::from(&url.as_str()["https://".len()..]),
+        access_key_id,
+    })
 }
 
 #[cfg(test)]
@@ -144,21 +217,20 @@ mod test {
             )))
             .time_source(time_source)
             .build();
-        let signature = rds_auth_token("mysql", 3306, "root", &aws_config)
-            .await
-            .unwrap();
+        let iam_auth = RdsIamAuth::new(aws_config);
+        let signature = iam_auth.token("mysql", 3306, "root").await.unwrap();
+        assert_eq!(signature.access_key_id, "drjekyll");
         assert_eq!(
-            &signature,
+            signature.token.unsecure(),
             "mysql:3306/?Action=connect&DBUser=root&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=drjekyll%2F20250227%2Fus-east-1%2Frds-db%2Faws4_request&X-Amz-Date=20250227T210000Z&X-Amz-Expires=900&X-Amz-SignedHeaders=host&X-Amz-Signature=6eb04929394feeb9e070621ecafc731145914cc53e542d5302c251b705c4ac72"
         );
 
         // Usernames with URL-special characters must be percent-encoded in the
         // token, not interpolated raw into the query string.
         for (username, reject_key) in [("root&Foo=bar", Some("Foo")), ("root#admin", None)] {
-            let token = rds_auth_token("mysql", 3306, username, &aws_config)
-                .await
-                .unwrap();
-            let parsed = url::Url::parse(&format!("https://{token}")).unwrap();
+            let token = iam_auth.token("mysql", 3306, username).await.unwrap();
+            let url = format!("https://{}", token.token.unsecure());
+            let parsed = url::Url::parse(&url).unwrap();
             let pairs: std::collections::BTreeMap<_, _> = parsed.query_pairs().collect();
             assert_eq!(pairs.get("DBUser").unwrap(), username);
             if let Some(key) = reject_key {
@@ -166,6 +238,6 @@ mod test {
             }
         }
 
-        assert!(rds_auth_token("", 3306, "root", &aws_config).await.is_err());
+        assert!(iam_auth.token("", 3306, "root").await.is_err());
     }
 }

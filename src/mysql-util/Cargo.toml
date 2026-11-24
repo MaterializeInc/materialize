@@ -11,7 +11,6 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
-aws-types.workspace = true
 chrono.workspace = true
 itertools.workspace = true
 maplit.workspace = true

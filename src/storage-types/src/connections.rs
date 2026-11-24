@@ -79,6 +79,7 @@ use crate::AlterCompatible;
 use crate::configuration::StorageConfiguration;
 use crate::connections::aws::{
     AwsAuth, AwsConnection, AwsConnectionReference, AwsConnectionValidationError,
+    AwsCredentialsCache,
 };
 use crate::connections::gcp::{GcpConnectionReference, GcpTokenProvider};
 use crate::connections::string_or_secret::StringOrSecret;
@@ -355,6 +356,9 @@ pub struct ConnectionContext {
     pub cloud_resource_reader: Option<Arc<dyn CloudResourceReader>>,
     /// A manager for SSH tunnels.
     pub ssh_tunnel_manager: SshTunnelManager,
+    /// Cached credentials for `AssumeRole` AWS connections, shared by every
+    /// user of this context in the process.
+    pub aws_credentials_cache: AwsCredentialsCache,
 }
 
 impl ConnectionContext {
@@ -384,6 +388,7 @@ impl ConnectionContext {
             secrets_reader,
             cloud_resource_reader,
             ssh_tunnel_manager: SshTunnelManager::default(),
+            aws_credentials_cache: AwsCredentialsCache::default(),
         }
     }
 
@@ -404,6 +409,7 @@ impl ConnectionContext {
             secrets_reader,
             cloud_resource_reader: None,
             ssh_tunnel_manager: SshTunnelManager::default(),
+            aws_credentials_cache: AwsCredentialsCache::default(),
         }
     }
 }
@@ -2645,12 +2651,12 @@ impl PostgresConnection<InlinedConnection> {
             }
         };
 
-        let aws_config = match self.aws_connection.as_ref() {
+        let iam_auth = match self.aws_connection.as_ref() {
             None => None,
             Some(aws_ref) => Some(
                 aws_ref
                     .connection
-                    .load_sdk_config(
+                    .load_rds_iam_auth(
                         &storage_configuration.connection_context,
                         aws_ref.connection_id,
                         in_task,
@@ -2665,7 +2671,7 @@ impl PostgresConnection<InlinedConnection> {
             tunnel,
             params.ssh_timeout_config,
             in_task,
-            aws_config,
+            iam_auth,
         )?)
     }
 
@@ -3028,12 +3034,12 @@ impl MySqlConnection<InlinedConnection> {
             }
         };
 
-        let aws_config = match self.aws_connection.as_ref() {
+        let iam_auth = match self.aws_connection.as_ref() {
             None => None,
             Some(aws_ref) => Some(
                 aws_ref
                     .connection
-                    .load_sdk_config(
+                    .load_rds_iam_auth(
                         &storage_configuration.connection_context,
                         aws_ref.connection_id,
                         in_task,
@@ -3052,7 +3058,7 @@ impl MySqlConnection<InlinedConnection> {
                 .parameters
                 .mysql_source_timeouts
                 .clone(),
-            aws_config,
+            iam_auth,
         )?)
     }
 

@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use aws_types::SdkConfig;
 use mysql_async::{Conn, Opts, OptsBuilder};
 use std::collections::BTreeSet;
 use std::future::Future;
@@ -17,7 +16,7 @@ use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::time::Duration;
 
-use mz_aws_util::rds::rds_auth_token;
+use mz_aws_util::rds::RdsIamAuth;
 use mz_ore::future::{InTask, OreFutureExt, TimeoutError};
 use mz_ore::option::OptionExt;
 use mz_ore::task::spawn;
@@ -239,7 +238,7 @@ pub struct Config {
     in_task: InTask,
     ssh_timeout_config: SshTimeoutConfig,
     mysql_timeout_config: TimeoutConfig,
-    aws_config: Option<SdkConfig>,
+    iam_auth: Option<RdsIamAuth>,
 }
 
 impl Config {
@@ -249,7 +248,7 @@ impl Config {
         ssh_timeout_config: SshTimeoutConfig,
         in_task: InTask,
         mysql_timeout_config: TimeoutConfig,
-        aws_config: Option<SdkConfig>,
+        iam_auth: Option<RdsIamAuth>,
     ) -> Result<Self, MySqlError> {
         let opts = mysql_timeout_config.apply_to_opts(builder)?;
         Ok(Self {
@@ -258,7 +257,7 @@ impl Config {
             in_task,
             ssh_timeout_config,
             mysql_timeout_config,
-            aws_config,
+            iam_auth,
         })
     }
 
@@ -297,19 +296,41 @@ impl Config {
     ) -> Result<MySqlConn, MySqlError> {
         let mut opts_builder = OptsBuilder::from_opts(self.inner.clone());
 
-        if let Some(aws_config) = &self.aws_config {
-            let (host, port) = self.address();
-            let username = self.inner.user().expect("MySQL: username required");
+        let iam_token = match &self.iam_auth {
+            None => None,
+            Some(iam_auth) => {
+                let (host, port) = self.address();
+                let username = self.inner.user().expect("MySQL: username required");
 
-            let token = rds_auth_token(host, port, username, aws_config).await?;
-            // Cleartext plugin must be enabled for IAM authentication, for security,
-            // the network traffic is SSL/TLS encrypted.  The cleartext plugin is built
-            // into the MySQL client library.
-            opts_builder = opts_builder
-                .pass(Some(token.to_string()))
-                .enable_cleartext_plugin(true);
+                let token = iam_auth.token(host, port, username).await?;
+                // Cleartext plugin must be enabled for IAM authentication, for security,
+                // the network traffic is SSL/TLS encrypted.  The cleartext plugin is built
+                // into the MySQL client library.
+                opts_builder = opts_builder
+                    .pass(Some(token.token.unsecure()))
+                    .enable_cleartext_plugin(true);
+                Some(token)
+            }
+        };
+
+        let result = self
+            .connect_with_opts(opts_builder, ssh_tunnel_manager)
+            .await;
+        if let Err(error) = &result
+            && let Some(iam_auth) = &self.iam_auth
+            && let Some(token) = &iam_token
+            && is_authentication_failure(error)
+        {
+            iam_auth.token_rejected(token);
         }
+        result
+    }
 
+    async fn connect_with_opts(
+        &self,
+        mut opts_builder: OptsBuilder,
+        ssh_tunnel_manager: &SshTunnelManager,
+    ) -> Result<MySqlConn, MySqlError> {
         match &self.tunnel {
             TunnelConfig::Direct { resolved_ips } => {
                 opts_builder = opts_builder.resolved_ips(
@@ -433,5 +454,19 @@ impl Config {
         } else {
             connection_future.await
         }
+    }
+}
+
+/// The MySQL error code for `ER_ACCESS_DENIED_ERROR`.
+const ER_ACCESS_DENIED_ERROR: u16 = 1045;
+
+/// Reports whether the server refused the connection's credentials.
+///
+/// Amazon RDS for MySQL was observed to answer a token signed by a revoked
+/// role session with `ER_ACCESS_DENIED_ERROR`.
+fn is_authentication_failure(error: &MySqlError) -> bool {
+    match error {
+        MySqlError::MySql(mysql_async::Error::Server(e)) => e.code == ER_ACCESS_DENIED_ERROR,
+        _ => false,
     }
 }
