@@ -12,9 +12,10 @@ use std::collections::BTreeSet;
 use anyhow::{Context, anyhow, bail};
 use mz_ore::str::StrExt;
 use mz_repr::{ColumnName, Datum, Row, RowPacker, SqlColumnType, SqlScalarType};
+use prost_reflect::prost::Message;
 use prost_reflect::{
     Cardinality, DescriptorPool, DynamicMessage, FieldDescriptor, Kind, MessageDescriptor,
-    ReflectMessage, Value,
+    ReflectMessage, Value, prost_types,
 };
 
 /// A decoded description of the schema of a Protobuf message.
@@ -29,7 +30,11 @@ impl DecodedDescriptors {
     /// Builds a `DecodedDescriptors` from an encoded `FileDescriptorSet` and
     /// the fully qualified name of a message inside that file descriptor set.
     pub fn from_bytes(bytes: &[u8], message_name: String) -> Result<Self, anyhow::Error> {
-        let fds = DescriptorPool::decode(bytes).context("decoding file descriptor set")?;
+        let mut fds = prost_types::FileDescriptorSet::decode(bytes)
+            .context("decoding file descriptor set")?;
+        strip_aggregate_options(&mut fds);
+        let fds = DescriptorPool::from_file_descriptor_set(fds)
+            .context("decoding file descriptor set")?;
         let message_descriptor = fds.get_message_by_name(&message_name).ok_or_else(|| {
             anyhow!(
                 "protobuf message {} not found in file descriptor set",
@@ -58,6 +63,60 @@ impl DecodedDescriptors {
     /// `DecodedDescriptors`.
     pub fn columns(&self) -> &[(ColumnName, SqlColumnType)] {
         &self.columns
+    }
+}
+
+/// Drops message-valued options still in unparsed text form.
+///
+/// Stored descriptors compiled by libprotobuf's parser carry custom options
+/// this way. With prost-reflect's `text-format` feature on, which `protox`
+/// enables for the whole binary, the pool parses that text and rejects syntax
+/// protoc accepts, so a stored source would fail to plan at startup. Without
+/// the feature these options decode as empty messages, and nothing reads them.
+fn strip_aggregate_options(fds: &mut prost_types::FileDescriptorSet) {
+    macro_rules! strip {
+        ($options:expr) => {
+            if let Some(options) = &mut $options {
+                options
+                    .uninterpreted_option
+                    .retain(|o| o.aggregate_value.is_none());
+            }
+        };
+    }
+    let strip_field = |f: &mut prost_types::FieldDescriptorProto| strip!(f.options);
+    let strip_enum = |e: &mut prost_types::EnumDescriptorProto| {
+        strip!(e.options);
+        for value in &mut e.value {
+            strip!(value.options);
+        }
+    };
+
+    // Messages nest arbitrarily deep, so walk them without recursing.
+    let mut messages = Vec::new();
+    for file in &mut fds.file {
+        strip!(file.options);
+        file.extension.iter_mut().for_each(strip_field);
+        file.enum_type.iter_mut().for_each(strip_enum);
+        for service in &mut file.service {
+            strip!(service.options);
+            for method in &mut service.method {
+                strip!(method.options);
+            }
+        }
+        messages.extend(file.message_type.iter_mut());
+    }
+    while let Some(message) = messages.pop() {
+        strip!(message.options);
+        message.field.iter_mut().for_each(strip_field);
+        message.extension.iter_mut().for_each(strip_field);
+        message.enum_type.iter_mut().for_each(strip_enum);
+        for oneof in &mut message.oneof_decl {
+            strip!(oneof.options);
+        }
+        for range in &mut message.extension_range {
+            strip!(range.options);
+        }
+        messages.extend(message.nested_type.iter_mut());
     }
 }
 
@@ -237,4 +296,84 @@ fn pack_value(
         ),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use prost_reflect::prost_types::field_descriptor_proto::{Label, Type};
+    use prost_reflect::prost_types::uninterpreted_option::NamePart;
+    use prost_reflect::prost_types::{
+        DescriptorProto, FieldDescriptorProto, FileDescriptorProto, FileDescriptorSet,
+        MessageOptions, UninterpretedOption,
+    };
+
+    use super::*;
+
+    /// Descriptors as libprotobuf's parser emits them, with a message-valued
+    /// custom option left as unparsed text that a strict text-format parser
+    /// rejects (a list of messages without a colon).
+    #[mz_ore::test]
+    fn uninterpreted_aggregate_option() {
+        let field = |name: &str, number, label, ty, type_name: Option<&str>| FieldDescriptorProto {
+            name: Some(name.into()),
+            number: Some(number),
+            label: Some(i32::from(label)),
+            r#type: Some(i32::from(ty)),
+            type_name: type_name.map(Into::into),
+            ..Default::default()
+        };
+        let message = |name: &str, field: Vec<FieldDescriptorProto>| DescriptorProto {
+            name: Some(name.into()),
+            field,
+            ..Default::default()
+        };
+        let mut a = message("A", vec![field("x", 1, Label::Optional, Type::Int32, None)]);
+        a.options = Some(MessageOptions {
+            uninterpreted_option: vec![UninterpretedOption {
+                name: vec![NamePart {
+                    name_part: "lopt".into(),
+                    is_extension: true,
+                }],
+                aggregate_value: Some("entries [ { version: 1 } ]".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let mut lopt = field("lopt", 50001, Label::Optional, Type::Message, Some(".L"));
+        lopt.extendee = Some(".google.protobuf.MessageOptions".into());
+        let file = FileDescriptorProto {
+            name: Some("p.proto".into()),
+            dependency: vec!["google/protobuf/descriptor.proto".into()],
+            message_type: vec![
+                message(
+                    "E",
+                    vec![field("version", 1, Label::Optional, Type::Int32, None)],
+                ),
+                message(
+                    "L",
+                    vec![field(
+                        "entries",
+                        1,
+                        Label::Repeated,
+                        Type::Message,
+                        Some(".E"),
+                    )],
+                ),
+                a,
+            ],
+            extension: vec![lopt],
+            ..Default::default()
+        };
+        let descriptor = DescriptorPool::global()
+            .get_file_by_name("google/protobuf/descriptor.proto")
+            .unwrap()
+            .file_descriptor_proto()
+            .clone();
+        let fds = FileDescriptorSet {
+            file: vec![descriptor, file],
+        };
+
+        let decoded = DecodedDescriptors::from_bytes(&fds.encode_to_vec(), ".A".into()).unwrap();
+        assert_eq!(decoded.columns().len(), 1);
+    }
 }

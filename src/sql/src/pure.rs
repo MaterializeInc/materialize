@@ -2685,9 +2685,23 @@ impl CsrProtobufPreparation {
             .map_err(|e| CsrPurificationError::ClientError(Arc::new(e)))?;
 
         let value = compile_proto(&format!("{}-value", topic), &ccsr_client).await?;
-        let key = compile_proto(&format!("{}-key", topic), &ccsr_client)
-            .await
-            .ok();
+        // Only a missing key subject means there is no key schema. An explicit
+        // KEY FORMAT falls back to the value schema when the key is absent, so
+        // swallowing other errors would decode keys with the wrong schema.
+        let key = match compile_proto(&format!("{}-key", topic), &ccsr_client).await {
+            Ok(key) => Some(key),
+            Err(PlanError::FetchingCsrSchemaFailed { cause, .. })
+                if matches!(
+                    cause.downcast_ref(),
+                    Some(
+                        GetBySubjectError::SubjectNotFound | GetBySubjectError::VersionNotFound(_)
+                    )
+                ) =>
+            {
+                None
+            }
+            Err(e) => return Err(e),
+        };
 
         if require_key && key.is_none() {
             sql_bail!("Key schema is required for ENVELOPE DEBEZIUM");

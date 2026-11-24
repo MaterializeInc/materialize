@@ -8611,6 +8611,7 @@ dependencies = [
  "mz-auth",
  "mz-aws-glue-schema-registry",
  "mz-build-info",
+ "mz-build-tools",
  "mz-ccsr",
  "mz-cloud-provider",
  "mz-compute-types",

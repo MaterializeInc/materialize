@@ -80,5 +80,8 @@ version-compare.workspace = true
 [dev-dependencies]
 prost-reflect.workspace = true
 
+[build-dependencies]
+mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
+
 [features]
-default = []
+default = ["mz-build-tools/default"]

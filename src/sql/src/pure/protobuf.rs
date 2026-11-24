@@ -16,7 +16,7 @@ use mz_ore::str::StrExt;
 use mz_repr::strconv;
 use mz_sql_parser::ast::CsrSeedProtobufSchema;
 use protox::Compiler;
-use protox::file::{ChainFileResolver, File, FileResolver, GoogleFileResolver};
+use protox::file::{ChainFileResolver, File, FileResolver};
 
 use crate::plan::PlanError;
 
@@ -60,7 +60,7 @@ fn compile_files(
     // against.
     let mut resolver = ChainFileResolver::new();
     resolver.add(InMemoryFileResolver(files));
-    resolver.add(GoogleFileResolver::new());
+    resolver.add(WellKnownTypes);
 
     let mut compiler = Compiler::with_file_resolver(resolver);
     compiler.include_imports(true);
@@ -110,6 +110,30 @@ impl FileResolver for InMemoryFileResolver {
             Some(source) => {
                 File::from_source(name, source.strip_prefix('\u{feff}').unwrap_or(source))
             }
+            None => Err(protox::Error::file_not_found(name)),
+        }
+    }
+}
+
+mod well_known_types {
+    include!(concat!(env!("OUT_DIR"), "/well_known_types.rs"));
+}
+
+/// Resolves the well-known `.proto` files shipped with the libprotobuf that
+/// `mz-build-tools` builds against.
+///
+/// NOTE: `protox`'s own `GoogleFileResolver` serves older copies, missing for
+/// example `google/protobuf/cpp_features.proto` and newer `Edition` values.
+#[derive(Debug)]
+struct WellKnownTypes;
+
+impl FileResolver for WellKnownTypes {
+    fn open_file(&self, name: &str) -> Result<File, protox::Error> {
+        match well_known_types::WELL_KNOWN_TYPES
+            .iter()
+            .find(|(path, _)| *path == name)
+        {
+            Some((path, source)) => File::from_source(path, source),
             None => Err(protox::Error::file_not_found(name)),
         }
     }
@@ -230,6 +254,24 @@ mod tests {
             .expect("bundled Timestamp");
         assert!(ts.get_field_by_name("seconds").is_some());
         assert!(ts.get_field_by_name("nanos").is_some());
+    }
+
+    #[mz_ore::test]
+    fn well_known_types_from_libprotobuf() {
+        let schema = compile(
+            "topic-value",
+            &[(
+                "topic-value",
+                r#"syntax = "proto2"; import "google/protobuf/cpp_features.proto";
+                   import "google/protobuf/descriptor.proto";
+                   message M { optional google.protobuf.Edition e = 1; }"#,
+            )],
+        )
+        .unwrap();
+        let edition = decode(&schema)
+            .get_enum_by_name("google.protobuf.Edition")
+            .unwrap();
+        assert!(edition.get_value_by_name("EDITION_2024").is_some());
     }
 
     #[mz_ore::test]
