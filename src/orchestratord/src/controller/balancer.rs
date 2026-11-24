@@ -192,6 +192,7 @@ impl Context {
                     ..Default::default()
                 }),
                 allow_privilege_escalation: Some(false),
+                read_only_root_filesystem: Some(true),
                 ..Default::default()
             })
         } else {

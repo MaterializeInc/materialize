@@ -13,9 +13,9 @@ use k8s_openapi::{
         apps::v1::{Deployment, DeploymentSpec},
         core::v1::{
             Affinity, Capabilities, ConfigMap, ConfigMapVolumeSource, Container, ContainerPort,
-            EnvVar, HTTPGetAction, KeyToPath, PodSecurityContext, PodSpec, PodTemplateSpec, Probe,
-            ResourceRequirements, SeccompProfile, SecretVolumeSource, SecurityContext, Service,
-            ServicePort, ServiceSpec, Toleration, Volume, VolumeMount,
+            EmptyDirVolumeSource, EnvVar, HTTPGetAction, KeyToPath, PodSecurityContext, PodSpec,
+            PodTemplateSpec, Probe, ResourceRequirements, SeccompProfile, SecretVolumeSource,
+            SecurityContext, Service, ServicePort, ServiceSpec, Toleration, Volume, VolumeMount,
         },
         networking::v1::{
             IPBlock, NetworkPolicy, NetworkPolicyIngressRule, NetworkPolicyPeer, NetworkPolicyPort,
@@ -319,25 +319,51 @@ impl Context {
             )),
             ..Default::default()
         });
-        let mut volumes = vec![Volume {
-            name: "app-config".to_string(),
-            config_map: Some(ConfigMapVolumeSource {
-                name: console.configmap_name(),
-                default_mode: Some(256),
-                optional: Some(false),
-                items: Some(vec![KeyToPath {
-                    key: "app-config.json".to_string(),
-                    path: "app-config.json".to_string(),
-                    ..Default::default()
-                }]),
-            }),
-            ..Default::default()
-        }];
-        let mut volume_mounts = vec![VolumeMount {
-            name: "app-config".to_string(),
-            mount_path: "/usr/share/nginx/html/app-config".to_string(),
-            ..Default::default()
-        }];
+        // nginx writes its pid file and temp files to /tmp, and the image
+        // entrypoint renders its config template into /etc/nginx/conf.d.
+        let mut volumes = vec![
+            Volume {
+                name: "tmp".to_string(),
+                empty_dir: Some(EmptyDirVolumeSource::default()),
+                ..Default::default()
+            },
+            Volume {
+                name: "nginx-conf".to_string(),
+                empty_dir: Some(EmptyDirVolumeSource::default()),
+                ..Default::default()
+            },
+            Volume {
+                name: "app-config".to_string(),
+                config_map: Some(ConfigMapVolumeSource {
+                    name: console.configmap_name(),
+                    default_mode: Some(256),
+                    optional: Some(false),
+                    items: Some(vec![KeyToPath {
+                        key: "app-config.json".to_string(),
+                        path: "app-config.json".to_string(),
+                        ..Default::default()
+                    }]),
+                }),
+                ..Default::default()
+            },
+        ];
+        let mut volume_mounts = vec![
+            VolumeMount {
+                name: "tmp".to_string(),
+                mount_path: "/tmp".to_string(),
+                ..Default::default()
+            },
+            VolumeMount {
+                name: "nginx-conf".to_string(),
+                mount_path: "/etc/nginx/conf.d".to_string(),
+                ..Default::default()
+            },
+            VolumeMount {
+                name: "app-config".to_string(),
+                mount_path: "/usr/share/nginx/html/app-config".to_string(),
+                ..Default::default()
+            },
+        ];
 
         let scheme = if issuer_ref_defined(
             &self.config.default_certificate_specs.console_external,
@@ -404,6 +430,7 @@ ssl_certificate_key /nginx/tls/tls.key;",
                     ..Default::default()
                 }),
                 allow_privilege_escalation: Some(false),
+                read_only_root_filesystem: Some(true),
                 ..Default::default()
             })
         } else {
