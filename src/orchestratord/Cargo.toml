@@ -35,6 +35,7 @@ mz-ore = { path = "../ore", default-features = false, features = ["panic"] }
 mz-orchestrator-kubernetes = { path = "../orchestrator-kubernetes", default-features = false }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing", default-features = false }
 mz-prof-http = { path = "../prof-http", default-features = false }
+mz-segment = { path = "../segment", default-features = false }
 mz-server-core = { path = "../server-core", default-features = false }
 prometheus.workspace = true
 rand.workspace = true
