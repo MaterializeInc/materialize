@@ -184,7 +184,7 @@ def referenced():
 # six files while exiting 0. Update deliberately when a reference gains or loses
 # a metric, never to make the test pass.
 REFERENCE_NAME_COUNTS = {
-    "SKILL.md": 18,
+    "SKILL.md": 24,
     "adapter.md": 35,
     "compute.md": 31,
     "persist.md": 84,
