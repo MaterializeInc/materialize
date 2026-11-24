@@ -738,10 +738,15 @@ impl AwsCredentialsCache {
     }
 }
 
-/// A [`ProvideCredentials`] that replaces its provider after a failed fetch.
+/// A [`ProvideCredentials`] that replaces its provider after any fetch that
+/// did not succeed.
+///
+/// Callers must not fetch concurrently. Each concurrent fetch would build a
+/// provider of its own.
 struct RebuildingProvider<F> {
     build: F,
-    /// `None` before the first fetch and after a failed one.
+    /// `None` before the first fetch, during a fetch, and after one that did
+    /// not succeed.
     current: Mutex<Option<SharedCredentialsProvider>>,
 }
 
@@ -773,7 +778,19 @@ where
         Self: 'a,
     {
         aws_credential_types::provider::future::ProvideCredentials::new(async move {
-            let current = self.current.lock().expect("lock poisoned").clone();
+            // NOTE: The provider leaves the slot for the fetch and returns
+            // only if the fetch succeeds, so that every other outcome leads
+            // to a new provider. That includes a fetch that the caller drops,
+            // as the cache does when a fetch times out.
+            //
+            // A provider that did not succeed might hold something stale
+            // that it read when it was built, such as an access key that has
+            // since been rotated in the shared credentials file. A provider
+            // that works is kept, because the SDK's providers hold state
+            // that a new one lacks. The instance metadata provider, for one,
+            // serves its last credentials while the metadata service is
+            // unreachable.
+            let current = self.current.lock().expect("lock poisoned").take();
             let provider = match current {
                 Some(provider) => provider,
                 None => {
@@ -782,24 +799,12 @@ where
                     // blocking I/O, and the caller can be a Timely worker.
                     let name = || "build_aws_credentials_provider";
                     let built = mz_ore::task::spawn(name, (self.build)()).await;
-                    let provider = SharedCredentialsProvider::new(built);
-                    let mut slot = self.current.lock().expect("lock poisoned");
-                    *slot = Some(provider.clone());
-                    provider
+                    SharedCredentialsProvider::new(built)
                 }
             };
-            let result = provider.provide_credentials().await;
-            if result.is_err() {
-                // The provider might have failed because of something that it
-                // read when it was built, such as an access key that has
-                // since been rotated in the shared credentials file. A
-                // provider that works is kept, because the SDK's providers
-                // hold state that a new one lacks. The instance metadata
-                // provider, for one, serves its last credentials while the
-                // metadata service is unreachable.
-                *self.current.lock().expect("lock poisoned") = None;
-            }
-            result
+            let creds = provider.provide_credentials().await?;
+            *self.current.lock().expect("lock poisoned") = Some(provider);
+            Ok(creds)
         })
     }
 }
@@ -1794,6 +1799,32 @@ mod tests {
             builds.load(Ordering::SeqCst),
             2,
             "the fetch after a failure must use a new provider"
+        );
+    }
+
+    #[mz_ore::test(tokio::test(start_paused = true))]
+    async fn rebuilding_provider_rebuilds_after_a_dropped_fetch() {
+        let builds = Arc::new(AtomicUsize::new(0));
+        let provider = RebuildingProvider::new({
+            let builds = Arc::clone(&builds);
+            move || {
+                let n = builds.fetch_add(1, Ordering::SeqCst) + 1;
+                // Only the first provider hangs, on its first fetch.
+                let hang_calls = usize::from(n == 1);
+                async move { CountingProvider::shared(hang_calls, usize::MAX, None).1 }
+            }
+        });
+
+        let fetch = provider.provide_credentials();
+        let timed_out = tokio::time::timeout(Duration::from_secs(60), fetch).await;
+        assert!(timed_out.is_err(), "the first fetch must hang");
+
+        let creds = provider.provide_credentials().await.unwrap();
+        assert_eq!(creds.access_key_id(), "akid-1");
+        assert_eq!(
+            builds.load(Ordering::SeqCst),
+            2,
+            "the fetch after a dropped one must use a new provider"
         );
     }
 
