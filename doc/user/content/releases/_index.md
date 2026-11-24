@@ -38,7 +38,7 @@ We tested v26.48, v26.51, and v26.52, running `environmentd` with 32 CPUs and be
 
 The option cannot be combined with `PASSWORD` and requires SSL. For setup steps, see [`CREATE CONNECTION`: PostgreSQL](/sql/create-connection/#postgres-aws-connection-example).
 
-### Query policies, to protect your cluster against runaway ad hoc queries {#v26.52-query-policies}
+### Query policies, to protect your cluster against expensive ad hoc queries {#v26.52-query-policies}
 
 {{< private-preview />}}
 
