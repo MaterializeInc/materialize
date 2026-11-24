@@ -332,6 +332,18 @@ impl Authenticator {
             .validate_access_token(token, expected_user, group_claim)?;
         Ok((claims, Authenticated))
     }
+
+    /// Returns a timer that completes when `claims` expire, according to the
+    /// `Authenticator`'s clock.
+    ///
+    /// Unlike an app password session, a session established from an access
+    /// token cannot be refreshed, so it must end when the token expires to pick
+    /// up changes such as revoked admin status.
+    pub fn access_token_expiry(&self, claims: &ValidatedClaims) -> time::Sleep {
+        let valid_for = Duration::try_from_secs_i64(claims.exp - self.inner.now.as_secs())
+            .unwrap_or(Duration::ZERO);
+        time::sleep(valid_for)
+    }
 }
 
 /// A handle to an authentication session.

@@ -25,6 +25,7 @@ jsonwebtoken.workspace = true
 launchdarkly-server-sdk.workspace = true
 mz-alloc = { path = "../alloc" }
 mz-alloc-default = { path = "../alloc-default", optional = true }
+mz-auth = { path = "../auth", default-features = false }
 mz-build-info = { path = "../build-info" }
 mz-dyncfg-launchdarkly = { path = "../dyncfg-launchdarkly" }
 mz-dyncfg-file= { path = "../dyncfg-file" }

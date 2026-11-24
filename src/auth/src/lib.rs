@@ -37,3 +37,34 @@ pub enum AuthenticatorKind {
 /// has succeeded. It may also be used when authentication is not required.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Authenticated;
+
+/// Decides if a given password is a JWT by checking if we can decode its
+/// header.
+///
+/// This only routes a password to the right authenticator. It does not
+/// validate the token.
+pub fn is_jwt(password: &str) -> bool {
+    jsonwebtoken::decode_header(password).is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn test_is_jwt() {
+        // A real JWT header decodes successfully.
+        assert!(is_jwt("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.signature"));
+        // Not JWTs: plain strings, wrong segment count, non-JSON headers.
+        for s in [
+            "",
+            "secure_password",
+            "p4ss.w0rd",
+            "aaa.bbb.ccc",
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0",
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig.extra",
+        ] {
+            assert!(!is_jwt(s), "is_jwt({s:?})");
+        }
+    }
+}
