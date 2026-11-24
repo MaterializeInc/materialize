@@ -86,7 +86,7 @@ rust_components=rustc,cargo,rust-std-$arch_gcc-unknown-linux-gnu,llvm-tools-prev
 if [[ $rust_version = nightly ]]; then
     rust_components+=,miri-preview,rustfmt-preview
 else
-    rust_components+=,clippy-preview,rustfmt-preview
+    rust_components+=,clippy-preview,rustfmt-preview,rust-analyzer-preview
 fi
 
 # Target a specific CPU to get better performance, i.e. use more modern instructions.

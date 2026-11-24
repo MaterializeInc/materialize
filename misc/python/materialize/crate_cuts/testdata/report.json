@@ -1,0 +1,241 @@
+{
+ "baseline": {
+  "workspace_pairs": 24,
+  "rebuild_lines": 474,
+  "all_pairs": 44
+ },
+ "planned": {
+  "workspace_pairs": 23,
+  "rebuild_lines": 392,
+  "all_pairs": 38
+ },
+ "applied": [
+  {
+   "crate": "types",
+   "avoided": [
+    "big"
+   ],
+   "core": [
+    "types/lib.rs"
+   ],
+   "rest": [
+    "types/heavy.rs",
+    "types/impls.rs"
+   ],
+   "core_lines": 100,
+   "rest_lines": 170,
+   "consumers": [
+    "client",
+    "tool",
+    "tool2"
+   ],
+   "delta": {
+    "workspace_pairs": 1,
+    "rebuild_lines": 82,
+    "all_pairs": 6
+   }
+  }
+ ],
+ "candidates": [
+  {
+   "crate": "types",
+   "avoided": [
+    "big"
+   ],
+   "core": [
+    "types/lib.rs"
+   ],
+   "rest": [
+    "types/heavy.rs",
+    "types/impls.rs"
+   ],
+   "core_lines": 100,
+   "rest_lines": 170,
+   "consumers": [
+    "client",
+    "tool",
+    "tool2"
+   ],
+   "delta": {
+    "workspace_pairs": 1,
+    "rebuild_lines": 82,
+    "all_pairs": 6
+   }
+  }
+ ],
+ "edges": [
+  {
+   "crate": "app",
+   "dependency": "server",
+   "delta": {
+    "workspace_pairs": 6,
+    "rebuild_lines": 34,
+    "all_pairs": 9
+   },
+   "decouples": true,
+   "files": [
+    "app/main.rs"
+   ],
+   "referrers": [
+    "app/main.rs: main()."
+   ],
+   "symbols": [
+    "serve()."
+   ]
+  },
+  {
+   "crate": "client",
+   "dependency": "types",
+   "delta": {
+    "workspace_pairs": 1,
+    "rebuild_lines": 35,
+    "all_pairs": 3
+   },
+   "decouples": true,
+   "files": [
+    "client/lib.rs"
+   ],
+   "referrers": [
+    "client/lib.rs: Client#",
+    "client/lib.rs: Client#fetch()."
+   ],
+   "symbols": [
+    "Row#",
+    "Schema#"
+   ]
+  },
+  {
+   "crate": "client",
+   "dependency": "util",
+   "delta": {
+    "workspace_pairs": 0,
+    "rebuild_lines": 0,
+    "all_pairs": 0
+   },
+   "decouples": true,
+   "files": [],
+   "referrers": [],
+   "symbols": []
+  },
+  {
+   "crate": "server",
+   "dependency": "client",
+   "delta": {
+    "workspace_pairs": 4,
+    "rebuild_lines": 52,
+    "all_pairs": 4
+   },
+   "decouples": true,
+   "files": [
+    "server/lib.rs"
+   ],
+   "referrers": [
+    "server/lib.rs: serve()."
+   ],
+   "symbols": [
+    "Client#"
+   ]
+  },
+  {
+   "crate": "server",
+   "dependency": "types",
+   "delta": {
+    "workspace_pairs": 0,
+    "rebuild_lines": 0,
+    "all_pairs": 0
+   },
+   "decouples": true,
+   "files": [
+    "server/lib.rs"
+   ],
+   "referrers": [
+    "server/lib.rs: serve()."
+   ],
+   "symbols": [
+    "Encoder#"
+   ]
+  },
+  {
+   "crate": "tool",
+   "dependency": "types",
+   "delta": {
+    "workspace_pairs": 3,
+    "rebuild_lines": 20,
+    "all_pairs": 6
+   },
+   "decouples": true,
+   "files": [
+    "tool/lib.rs"
+   ],
+   "referrers": [
+    "tool/lib.rs: check()."
+   ],
+   "symbols": [
+    "Schema#"
+   ]
+  },
+  {
+   "crate": "tool2",
+   "dependency": "types",
+   "delta": {
+    "workspace_pairs": 3,
+    "rebuild_lines": 20,
+    "all_pairs": 6
+   },
+   "decouples": true,
+   "files": [
+    "tool2/lib.rs"
+   ],
+   "referrers": [
+    "tool2/lib.rs: lint()."
+   ],
+   "symbols": [
+    "Row#"
+   ]
+  },
+  {
+   "crate": "types",
+   "dependency": "util",
+   "delta": {
+    "workspace_pairs": 6,
+    "rebuild_lines": 44,
+    "all_pairs": 6
+   },
+   "decouples": true,
+   "files": [
+    "types/heavy.rs"
+   ],
+   "referrers": [
+    "types/heavy.rs: Encoder#encode()."
+   ],
+   "symbols": [
+    "retry()."
+   ]
+  },
+  {
+   "crate": "util",
+   "dependency": "logging",
+   "delta": {
+    "workspace_pairs": 7,
+    "rebuild_lines": 68,
+    "all_pairs": 7
+   },
+   "decouples": false,
+   "files": [
+    "util/lib.rs"
+   ],
+   "referrers": [
+    "util/lib.rs: retry()."
+   ],
+   "symbols": [
+    "log()."
+   ]
+  }
+ ],
+ "unreferenced": [
+  [
+   "util",
+   "small"
+  ]
+ ]
+}
