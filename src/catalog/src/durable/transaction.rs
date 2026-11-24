@@ -3958,11 +3958,12 @@ where
                 .into_iter()
                 .filter_map(|key| self.get(key).map(|value| (key, value)))
                 .collect();
-            // Compare each value in `entries` to each value in `self` and ensure they are unique.
-            for (ki, vi) in self.items() {
-                for (kj, vj) in &entries {
-                    if ki != *kj && (check.violation)(vi, vj) {
-                        return Err(DurableCatalogError::UniquenessViolation);
+            if !entries.is_empty() {
+                for (ki, vi) in self.items() {
+                    for (kj, vj) in &entries {
+                        if ki != *kj && (check.violation)(vi, vj) {
+                            return Err(DurableCatalogError::UniquenessViolation);
+                        }
                     }
                 }
             }
@@ -4399,6 +4400,28 @@ mod tests {
         ReplicaConfig, ReplicaLocation, TestCatalogStateBuilder, test_bootstrap_args,
     };
     use crate::memory;
+
+    #[mz_ore::test]
+    fn empty_key_verification_preserves_full_soft_check() {
+        // Duplicate base names must still trip the optional full check when no key is live.
+        let table: TableTransaction<Vec<u8>, String> = TableTransaction::new_with_uniqueness_fn(
+            BTreeMap::from([
+                (1i64.to_le_bytes().to_vec(), "duplicate".to_string()),
+                (2i64.to_le_bytes().to_vec(), "duplicate".to_string()),
+            ]),
+            |a, b| a == b,
+            |a, b| a == b,
+        )
+        .unwrap();
+        for keys in [vec![], vec![3i64.to_le_bytes().to_vec()]] {
+            let result = std::panic::catch_unwind(|| table.verify_keys(&keys));
+            if mz_ore::assert::soft_assertions_enabled() {
+                assert!(result.is_err());
+            } else {
+                assert_ok!(result.unwrap());
+            }
+        }
+    }
 
     #[mz_ore::test]
     fn test_table_transaction_simple() {
