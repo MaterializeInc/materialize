@@ -156,3 +156,23 @@ EXECUTE param_text(current_user)
 
 statement error pg_backend_pid in a constant expression not yet supported
 SELECT pg_cancel_backend(pg_backend_pid())
+
+# Inference can describe record comparisons that typed execution cannot plan.
+# The execution error must not prevent preparing either operand order.
+statement ok
+PREPARE record_param_left AS SELECT $1 = ROW(1, 2);
+
+statement ok
+PREPARE record_param_right AS SELECT ROW(1, 2) = $1;
+
+query error operator does not exist: text = record\(f1: integer,f2: integer\)
+EXECUTE record_param_left('(1,2)');
+
+query error operator does not exist: record\(f1: integer,f2: integer\) = text
+EXECUTE record_param_right('(1,2)');
+
+query error operator does not exist: text = record\(f1: integer,f2: integer\)
+EXECUTE record_param_left('(1,2,3)');
+
+query error operator does not exist: record\(f1: integer,f2: integer\) = text
+EXECUTE record_param_right('(1,2,3)');
