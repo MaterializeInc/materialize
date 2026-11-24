@@ -1,0 +1,2 @@
+# Rendered manifests embed the license key. Never commit them.
+manifests/

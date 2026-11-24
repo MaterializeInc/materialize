@@ -265,7 +265,12 @@ where
         match self {
             Ok(t) => t,
             Err(e) if e.should_terminate_gracefully() => exit!(0, "{context}: {e:?}"),
-            Err(e) => panic!("{context}: {e:?}"),
+            Err(e) => {
+                if e.is_epoch_fence() {
+                    mz_ore::antithesis::expect_panic();
+                }
+                panic!("{context}: {e:?}")
+            }
         }
     }
 
@@ -286,6 +291,11 @@ trait ShouldTerminateGracefully {
     /// Reports whether the error should terminate the process gracefully
     /// rather than panic.
     fn should_terminate_gracefully(&self) -> bool;
+
+    /// See [`AdapterError::is_epoch_fence`].
+    fn is_epoch_fence(&self) -> bool {
+        false
+    }
 }
 
 impl ShouldTerminateGracefully for AdapterError {
@@ -294,6 +304,22 @@ impl ShouldTerminateGracefully for AdapterError {
             AdapterError::Catalog(e) => e.should_terminate_gracefully(),
             _ => false,
         }
+    }
+
+    fn is_epoch_fence(&self) -> bool {
+        match self {
+            AdapterError::Catalog(e) => e.is_epoch_fence(),
+            _ => false,
+        }
+    }
+}
+
+impl AdapterError {
+    /// Reports whether another process opened the durable catalog at a
+    /// higher epoch, which fences this one out. A panic on this error is
+    /// caused outside the process, and the restart opens the catalog again.
+    pub fn is_epoch_fence(&self) -> bool {
+        ShouldTerminateGracefully::is_epoch_fence(self)
     }
 }
 
@@ -304,12 +330,26 @@ impl ShouldTerminateGracefully for mz_catalog::memory::error::Error {
             _ => false,
         }
     }
+
+    fn is_epoch_fence(&self) -> bool {
+        match &self.kind {
+            mz_catalog::memory::error::ErrorKind::Durable(e) => e.is_epoch_fence(),
+            _ => false,
+        }
+    }
 }
 
 impl ShouldTerminateGracefully for mz_catalog::durable::CatalogError {
     fn should_terminate_gracefully(&self) -> bool {
         match &self {
             Self::Durable(e) => e.should_terminate_gracefully(),
+            Self::Catalog(_) => false,
+        }
+    }
+
+    fn is_epoch_fence(&self) -> bool {
+        match &self {
+            Self::Durable(e) => e.is_epoch_fence(),
             Self::Catalog(_) => false,
         }
     }
@@ -332,6 +372,13 @@ impl ShouldTerminateGracefully for DurableCatalogError {
             | DurableCatalogError::Internal(_) => false,
         }
     }
+
+    fn is_epoch_fence(&self) -> bool {
+        match self {
+            DurableCatalogError::Fence(err) => err.is_epoch_fence(),
+            _ => false,
+        }
+    }
 }
 
 impl ShouldTerminateGracefully for FenceError {
@@ -340,6 +387,10 @@ impl ShouldTerminateGracefully for FenceError {
             FenceError::DeployGeneration { .. } => true,
             FenceError::Epoch { .. } | FenceError::MigrationUpper { .. } => false,
         }
+    }
+
+    fn is_epoch_fence(&self) -> bool {
+        matches!(self, FenceError::Epoch { .. })
     }
 }
 
@@ -548,5 +599,38 @@ where
     // Cycle detection: if we didn't process all items, there's a cycle.
     if !items_by_key.is_empty() {
         panic!("dependency cycle: {items_by_key:?}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_catalog::durable::{DurableCatalogError, Epoch, FenceError};
+    use mz_catalog::memory::error::{Error, ErrorKind};
+
+    use crate::error::AdapterError;
+
+    #[mz_ore::test]
+    fn epoch_fence_is_recognized_through_the_catalog_error() {
+        let fenced = |fence| {
+            AdapterError::Catalog(Error::new(ErrorKind::Durable(DurableCatalogError::Fence(
+                fence,
+            ))))
+        };
+        let epoch = |e| Epoch::new(e).expect("non-zero");
+        assert!(
+            fenced(FenceError::Epoch {
+                current_epoch: epoch(7),
+                fence_epoch: epoch(8),
+            })
+            .is_epoch_fence()
+        );
+        assert!(
+            !fenced(FenceError::DeployGeneration {
+                current_generation: 1,
+                fence_generation: 2,
+            })
+            .is_epoch_fence()
+        );
+        assert!(!AdapterError::Unstructured(anyhow::anyhow!("x")).is_epoch_fence());
     }
 }

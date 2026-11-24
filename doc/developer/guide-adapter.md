@@ -125,6 +125,17 @@ preparation. Release it while preparation runs so unrelated DDL can progress.
 Queue contenders instead of awaiting the mutex on the coordinator, which its
 owner needs to finish. Releasing the guard must also wake the deferred queue.
 
+### Reported frontiers can lag a completed peek
+
+Do not use `mz_frontiers` or `EXPLAIN TIMESTAMP` to prove that a completed peek
+could not have answered. Compute reports frontiers on maintenance ticks, then
+steps timely and processes peeks (`src/compute/src/server.rs`). A peek response
+can arrive before the next frontier report. The controller forwards that response
+without advancing its cached collection frontiers
+(`src/compute-client/src/controller/instance.rs`). Repeating `EXPLAIN TIMESTAMP`
+still reads those cached frontiers through `TimestampProvider`, so its immediate
+response indication can remain false after a valid result.
+
 ### Timestamp selection must respect real-time bounds
 
 For strict serializability, the timestamp assigned to a query must fall within

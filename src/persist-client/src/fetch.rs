@@ -401,6 +401,17 @@ where
     T: Timestamp + Lattice + Codec64 + Sync,
     D: Monoid + Codec64,
 {
+    #[derive(Serialize)]
+    struct Details<'a> {
+        shard_id: String,
+        reader_id: &'a str,
+    }
+    let reader = reader_id.to_string();
+    let details = Details {
+        shard_id: applier.shard_id.to_string(),
+        reader_id: &reader,
+    };
+
     // Refreshing state talks to consensus; this runs on an already-fatal path
     // and a partition from consensus may be the very reason the lease was
     // lost, so don't let the diagnosis block the restart indefinitely.
@@ -409,17 +420,33 @@ where
         .await
         .is_err()
     {
+        mz_ore::antithesis_reachable!(
+            "persist: blob missing and the leasing reader's state could not be refreshed",
+            &details
+        );
         return MissingBlobDiagnosis::Unknown { reader_id };
     }
     if applier.is_tombstone() {
         return MissingBlobDiagnosis::ShardTombstoned { reader_id };
     }
     match applier.reader_lease(reader_id.clone()) {
-        Some(lease_state) => MissingBlobDiagnosis::LeasePresent {
-            reader_id,
-            lease_state: format!("{lease_state:?}"),
-        },
-        None => MissingBlobDiagnosis::LeaseExpired { reader_id },
+        Some(lease_state) => {
+            mz_ore::antithesis_unreachable!(
+                "persist: blob missing although the leasing reader is still in state",
+                &details
+            );
+            MissingBlobDiagnosis::LeasePresent {
+                reader_id,
+                lease_state: format!("{lease_state:?}"),
+            }
+        }
+        None => {
+            mz_ore::antithesis_reachable!(
+                "persist: blob missing after the leasing reader expired",
+                &details
+            );
+            MissingBlobDiagnosis::LeaseExpired { reader_id }
+        }
     }
 }
 
@@ -542,6 +569,9 @@ where
             // process.
             let diagnostics =
                 missing_blob_diagnostics(schema_cache.applier(), reader_id.clone()).await;
+            if matches!(diagnostics, MissingBlobDiagnosis::LeaseExpired { .. }) {
+                mz_ore::antithesis::expect_panic();
+            }
             panic!("could not fetch batch part {}: {}", blob_key, diagnostics)
         }
     };
