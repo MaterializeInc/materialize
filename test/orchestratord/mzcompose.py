@@ -5260,7 +5260,10 @@ def workflow_force_promote_without_skip(
     condition["message"] = "Attempting to promote"
     for subresource, patch in [
         (None, {"spec": {"forcePromote": request_rollout}}),
-        ("status", {"status": {"conditions": [condition]}}),
+        (
+            "status",
+            {"status": {"phase": "Promoting", "conditions": [condition]}},
+        ),
     ]:
         spawn.runv(
             [
