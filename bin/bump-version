@@ -114,6 +114,7 @@ if $sbom; then
     find . -type f -name "Dockerfile" -exec sed -i 's/MZFROM/FROM/g' {} +
     mkdir -p ~/.inspector-sbomgen
     inspector-sbomgen directory --path . --skip-files test --outfile "sbom/materialize.$version.cdx.json" --disable-progress-bar
+    bin/pyactivate -m materialize.sbom "sbom/materialize.$version.cdx.json"
     git ls-files | grep 'Dockerfile$' | xargs git checkout --
     git add sbom
 fi
