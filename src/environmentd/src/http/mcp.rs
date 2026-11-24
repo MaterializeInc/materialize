@@ -56,7 +56,8 @@ use mz_sql::session::vars::{APPLICATION_NAME, Var, VarInput};
 use mz_sql_parser::ast::display::{AstDisplay, escaped_string_literal};
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
-    CteBlock, Ident, Raw, RawItemName, SetExpr, Statement, TableFactor, UnresolvedItemName,
+    CteBlock, Function, Ident, Raw, RawItemName, Statement, UnresolvedItemName,
+    UnresolvedSchemaName,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -2257,19 +2258,20 @@ async fn query_system_catalog(
     format_rows_response(rows, max_response_size)
 }
 
-/// Rewrites each relation the query reads to its system catalog ID, as
-/// `[<id> AS <name>]`, and rejects the query if one is not a system relation
-/// or if a SELECT reads none.
+/// Rewrites each object name in the query to its system catalog ID, as
+/// `[<id> AS <name>]`, and rejects the query if one is not a system object,
+/// if a schema name is not a system schema, or if a SELECT reads no relation.
+/// This covers the names SHOW and EXPLAIN take, not only the relations a
+/// query reads. Function, type and cluster names stay as written.
 ///
 /// Names match by exact spelling, in the system schemas (`SYSTEM_SCHEMAS`
 /// without `mz_unsafe`). An unqualified name binds through
 /// [`SYSTEM_CATALOG_SEARCH_PATH`], except one matching a CTE, which stays
-/// unbound. Object names in SHOW, and in EXPLAIN of a named object, are not
-/// reads of rows and stay as written.
+/// unbound.
 ///
 /// `sql` must hold exactly one statement, which `validate_readonly_query`
-/// checks. `resolve(schema, item)` returns the ID of the system relation
-/// `item` in `schema`.
+/// checks. `resolve(schema, item)` returns the ID of the system object `item`
+/// in `schema`.
 fn bind_system_catalog_query(
     sql: &str,
     resolve: impl Fn(&str, &str) -> Option<String>,
@@ -2339,9 +2341,6 @@ impl<F: Fn(&str, &str) -> Option<String>> SystemRelationBinder<'_, F> {
             return;
         };
         let parts: Vec<&str> = unresolved.0.iter().map(|ident| ident.as_str()).collect();
-        let is_system_schema = |schema: &str| {
-            SYSTEM_SCHEMAS.contains(&schema) && schema != namespaces::MZ_UNSAFE_SCHEMA
-        };
         let (item, schemas): (&str, &[&str]) = match parts.as_slice() {
             [item] if self.cte_names.contains(*item) => return,
             [item] => (item, &SYSTEM_CATALOG_SEARCH_PATH),
@@ -2390,28 +2389,45 @@ impl<'ast, F: Fn(&str, &str) -> Option<String>> VisitMut<'ast, Raw>
         visit_mut::visit_cte_block_mut(self, block);
     }
 
-    // The table factor and set expression visitors descend before binding, so
-    // `visit_item_name_mut` sees each name as the caller wrote it.
-    fn visit_table_factor_mut(&mut self, table_factor: &'ast mut TableFactor<Raw>) {
-        visit_mut::visit_table_factor_mut(self, table_factor);
-        if let TableFactor::Table { name, .. } = table_factor {
-            self.bind(name);
-        }
-    }
-
-    fn visit_set_expr_mut(&mut self, set_expr: &'ast mut SetExpr<Raw>) {
-        visit_mut::visit_set_expr_mut(self, set_expr);
-        // `TABLE t` parses to a set expression, not a table factor.
-        if let SetExpr::Table(name) = set_expr {
-            self.bind(name);
-        }
-    }
-
     fn visit_item_name_mut(&mut self, name: &'ast mut RawItemName) {
+        match name {
+            RawItemName::Id(..) => self.id_references.push(name.to_ast_string_simple()),
+            RawItemName::Name(_) => self.bind(name),
+        }
+    }
+
+    // Function names resolve among functions, not relations, so they stay
+    // unbound. The exhaustive pattern makes a new `Function` field a compile error.
+    fn visit_function_mut(&mut self, function: &'ast mut Function<Raw>) {
+        let Function {
+            name,
+            args,
+            filter,
+            over,
+            distinct: _,
+        } = function;
         if let RawItemName::Id(..) = name {
             self.id_references.push(name.to_ast_string_simple());
         }
+        self.visit_function_args_mut(args);
+        if let Some(filter) = filter {
+            self.visit_expr_mut(filter);
+        }
+        if let Some(over) = over {
+            self.visit_window_spec_mut(over);
+        }
     }
+
+    fn visit_schema_name_mut(&mut self, name: &'ast mut UnresolvedSchemaName) {
+        let parts: Vec<&str> = name.0.iter().map(|ident| ident.as_str()).collect();
+        if !matches!(parts.as_slice(), [schema] | [_, schema] if is_system_schema(schema)) {
+            self.rejected.push(name.to_ast_string_simple());
+        }
+    }
+}
+
+fn is_system_schema(schema: &str) -> bool {
+    SYSTEM_SCHEMAS.contains(&schema) && schema != namespaces::MZ_UNSAFE_SCHEMA
 }
 
 #[cfg(test)]
@@ -3025,6 +3041,58 @@ mod tests {
             bind_with_stub_catalog("EXPLAIN SELECT 1").is_ok(),
             "EXPLAIN SELECT 1 should be allowed"
         );
+    }
+
+    #[mz_ore::test]
+    fn test_bind_system_catalog_query_binds_show_and_explain_names() {
+        for (sql, bound) in [
+            (
+                "SHOW CREATE VIEW mz_catalog.mz_tables",
+                r#"SHOW CREATE VIEW [s1 AS "mz_catalog"."mz_tables"]"#,
+            ),
+            (
+                "SHOW COLUMNS FROM mz_tables",
+                r#"SHOW COLUMNS FROM [s1 AS "mz_catalog"."mz_tables"]"#,
+            ),
+            (
+                "SHOW INDEXES ON mz_internal.mz_comments",
+                r#"SHOW INDEXES ON [s1 AS "mz_internal"."mz_comments"]"#,
+            ),
+            (
+                "EXPLAIN OPTIMIZED PLAN FOR INDEX mz_internal.mz_show_databases_ind",
+                r#"EXPLAIN OPTIMIZED PLAN FOR INDEX [s1 AS "mz_internal"."mz_show_databases_ind"]"#,
+            ),
+            (
+                "SELECT count(*), now() FROM mz_tables",
+                r#"SELECT "count"(*), "now"() FROM [s1 AS "mz_catalog"."mz_tables"]"#,
+            ),
+        ] {
+            assert_eq!(bind_with_stub_catalog(sql).unwrap(), bound, "{sql}");
+        }
+
+        for sql in [
+            "SHOW CREATE TABLE materialize.public.t",
+            r#"SHOW CREATE VIEW "MZ_CATALOG".leak"#,
+            "SHOW CREATE MATERIALIZED VIEW mv",
+            "SHOW COLUMNS FROM public.t",
+            "SHOW INDEXES ON t",
+            "SHOW TABLES FROM public",
+            r#"SHOW TABLES FROM "MZ_CATALOG""#,
+            "SHOW TABLES FROM mz_unsafe",
+            "EXPLAIN OPTIMIZED PLAN FOR VIEW public.v",
+            "EXPLAIN OPTIMIZED PLAN FOR MATERIALIZED VIEW mv",
+            "EXPLAIN OPTIMIZED PLAN FOR INDEX public.i",
+            "EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW mv",
+            "EXPLAIN OPTIMIZED PLAN FOR CREATE INDEX ON public.t (a)",
+            "EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE TO public.t",
+            "EXPLAIN SELECT * FROM public.t",
+            "EXPLAIN TIMESTAMP FOR SELECT * FROM public.t",
+        ] {
+            assert!(
+                bind_with_stub_catalog(sql).is_err(),
+                "{sql} must be rejected"
+            );
+        }
     }
 
     #[mz_ore::test]
