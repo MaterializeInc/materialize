@@ -145,6 +145,14 @@ async fn main() -> Result<(), anyhow::Error> {
                     ddl_event.lsn
                 );
             }
+            CdcEvent::Constraints {
+                capture_instance,
+                constraints,
+            } => {
+                tracing::info!(
+                    "constraints for capture instance {capture_instance}: {constraints:?}"
+                );
+            }
         }
     }
 

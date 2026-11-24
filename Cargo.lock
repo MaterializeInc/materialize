@@ -8764,6 +8764,7 @@ dependencies = [
  "mz-ore",
  "mz-proto",
  "mz-repr",
+ "mz-source-schema-change",
  "mz-sql-server-util",
  "mz-ssh-util",
  "ordered-float 5.5.1",

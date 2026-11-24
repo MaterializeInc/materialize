@@ -22,6 +22,7 @@ use mz_repr::{Diff, GlobalId};
 use mz_sql_server_util::SqlServerError;
 use mz_sql_server_util::cdc::Lsn;
 use mz_sql_server_util::desc::{SqlServerRowDecoder, SqlServerTableDesc};
+use mz_sql_server_util::schema_change::SchemaChangeError;
 use mz_storage_types::errors::{DataflowError, SourceError, SourceErrorDetails};
 use mz_storage_types::sources::{
     SourceExport, SourceExportDetails, SourceTimestamp, SqlServerSourceConnection,
@@ -46,7 +47,6 @@ struct SourceOutputInfo {
     /// Name of the capture instance in the upstream SQL Server DB.
     capture_instance: Arc<str>,
     /// Description of the upstream table.
-    #[allow(dead_code)]
     upstream_desc: Arc<SqlServerTableDesc>,
     /// Type that can decode (and map) SQL Server rows into Materialize rows.
     decoder: Arc<SqlServerRowDecoder>,
@@ -102,6 +102,8 @@ pub enum DefiniteError {
     RestoreHistoryChanged(Option<i32>, Option<i32>),
     #[error("Incompatible schema change for table {0} capture instance {1}")]
     IncompatibleSchemaChange(String, String),
+    #[error(transparent)]
+    IncompatibleConstraintChange(#[from] SchemaChangeError),
 }
 
 impl From<DefiniteError> for DataflowError {
@@ -109,6 +111,9 @@ impl From<DefiniteError> for DataflowError {
         let msg = val.to_string().into();
         DataflowError::SourceError(Box::new(SourceError {
             error: SourceErrorDetails::Other(msg),
+            // `SchemaChange::hint` recommends `EXCLUDE CONSTRAINTS`, which
+            // only Postgres and MySQL sources accept, so SQL Server surfaces
+            // the granular `SchemaChange` message without a recovery hint.
             hint: None,
         }))
     }

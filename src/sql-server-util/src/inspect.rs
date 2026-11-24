@@ -94,17 +94,7 @@ pub async fn get_min_lsns(
     capture_instances: impl IntoIterator<Item = &str>,
 ) -> Result<BTreeMap<Arc<str>, Lsn>, SqlServerError> {
     let capture_instances: SmallVec<[_; 1]> = capture_instances.into_iter().collect();
-    let values: Vec<_> = capture_instances
-        .iter()
-        .map(|ci| {
-            let ci: &dyn tiberius::ToSql = ci;
-            ci
-        })
-        .collect();
-    let args = (0..capture_instances.len())
-        .map(|i| format!("@P{}", i + 1))
-        .collect::<Vec<_>>()
-        .join(",");
+    let (args, values) = in_list(&capture_instances[..]);
     let stmt = format!(
         "SELECT capture_instance, start_lsn FROM cdc.change_tables WHERE capture_instance IN ({args});"
     );
@@ -403,30 +393,97 @@ pub async fn get_tables_for_capture_instance(
         return Ok(Vec::default());
     }
 
-    // TODO(sql_server3): Remove this redundant collection.
-    #[allow(clippy::as_conversions)]
-    let params_dyn: SmallVec<[_; 1]> = params
-        .iter()
-        .map(|instance| instance as &dyn tiberius::ToSql)
-        .collect();
-    let param_indexes = params
-        .iter()
-        .enumerate()
-        // Params are 1-based indexed.
-        .map(|(idx, _)| format!("@P{}", idx + 1))
-        .join(", ");
-
+    let (param_indexes, params_dyn) = in_list(&params[..]);
     let table_for_capture_instance_query = format!(
         "{GET_COLUMNS_FOR_TABLES_WITH_CDC_QUERY} WHERE ch.capture_instance IN ({param_indexes});"
     );
 
     let result = client
-        .query(&table_for_capture_instance_query, &params_dyn[..])
+        .query(&table_for_capture_instance_query, &params_dyn)
         .await?;
 
     let tables = deserialize_table_columns_to_raw_tables(&result)?;
 
     Ok(tables)
+}
+
+/// Returns the PRIMARY KEY and UNIQUE constraints of the table tracked by each
+/// of the given capture instances, keyed by capture instance.
+///
+/// The table is resolved through `cdc.change_tables.source_object_id`, so a
+/// table renamed upstream is still found. Every capture instance whose table
+/// is visible to the connection's user is present in the result, with an
+/// empty list when the table has no such constraints. A capture instance is
+/// absent only when it no longer exists or its table is not visible, which
+/// SQL Server reports identically for a dropped table and for a user without
+/// a permission on it.
+pub async fn get_constraints_for_capture_instances(
+    client: &mut Client,
+    capture_instances: impl IntoIterator<Item = &str>,
+) -> Result<BTreeMap<Arc<str>, Vec<SqlServerTableConstraintRaw>>, SqlServerError> {
+    let params: Vec<_> = capture_instances.into_iter().collect();
+    if params.is_empty() {
+        return Ok(BTreeMap::default());
+    }
+    let (param_indexes, params_dyn) = in_list(&params);
+    // The constraint type filter sits in the join condition so a table with no
+    // matching constraints still yields one row, with NULL constraint columns.
+    let query = format!(
+        "SELECT \
+        ch.capture_instance, \
+        kcu.column_name, \
+        tc.constraint_name, \
+        tc.constraint_type \
+    FROM cdc.change_tables ch \
+    JOIN sys.tables t ON ch.source_object_id = t.object_id \
+    JOIN sys.schemas s ON t.schema_id = s.schema_id \
+    LEFT JOIN information_schema.table_constraints tc \
+        ON tc.table_schema = s.name \
+        AND tc.table_name = t.name \
+        AND tc.constraint_type IN ('PRIMARY KEY', 'UNIQUE') \
+    LEFT JOIN information_schema.key_column_usage kcu \
+        ON kcu.constraint_schema = tc.constraint_schema \
+        AND kcu.constraint_name = tc.constraint_name \
+        AND kcu.table_schema = tc.table_schema \
+        AND kcu.table_name = tc.table_name \
+    WHERE ch.capture_instance IN ({param_indexes}) \
+    ORDER BY ch.capture_instance, tc.constraint_name, kcu.ordinal_position;"
+    );
+    let rows = client.query(&query, &params_dyn).await?;
+
+    let mut constraints_by_instance: BTreeMap<Arc<str>, BTreeMap<_, Vec<_>>> = BTreeMap::new();
+    for row in rows {
+        let capture_instance: Arc<str> = get_value::<&str>(&row, "capture_instance")?.into();
+        let constraints = constraints_by_instance.entry(capture_instance).or_default();
+        // A NULL constraint is the row a visible table with no constraints yields.
+        let Some(constraint_name) = row.try_get::<&str, _>("constraint_name")? else {
+            continue;
+        };
+        let column_name = get_value::<&str>(&row, "column_name")?.into();
+        let constraint_type = get_value::<&str>(&row, "constraint_type")?.into();
+        constraints
+            .entry((constraint_name.to_string(), constraint_type))
+            .or_default()
+            .push(column_name);
+    }
+    Ok(constraints_by_instance
+        .into_iter()
+        .map(|(capture_instance, constraints)| {
+            (
+                capture_instance,
+                constraints
+                    .into_iter()
+                    .map(|((constraint_name, constraint_type), columns)| {
+                        SqlServerTableConstraintRaw {
+                            constraint_name,
+                            constraint_type,
+                            columns,
+                        }
+                    })
+                    .collect(),
+            )
+        })
+        .collect())
 }
 
 /// Retrieves column metdata from the CDC table maintained by the provided capture instance. The
@@ -496,9 +553,7 @@ pub async fn get_constraints_for_tables(
         return Ok(Default::default());
     }
 
-    let params = (1..qualified_table_names.len() + 1)
-        .map(|idx| format!("@P{}", idx))
-        .join(", ");
+    let (params, query_params) = in_list(&qualified_table_names);
 
     // KEY_COLUMN_USAGE (not CONSTRAINT_COLUMN_USAGE) because it exposes
     // ORDINAL_POSITION, letting us preserve composite-key column order.
@@ -520,14 +575,6 @@ pub async fn get_constraints_for_tables(
         AND tc.constraint_type IN ('PRIMARY KEY', 'UNIQUE')
     ORDER BY tc.table_schema, tc.table_name, tc.constraint_name, kcu.ordinal_position"
     );
-
-    let query_params: Vec<_> = qualified_table_names
-        .iter()
-        .map(|qualified_name| {
-            let name: &dyn tiberius::ToSql = qualified_name;
-            name
-        })
-        .collect();
 
     tracing::debug!("query = {query} params = {qualified_table_names:?}");
     let result = client.query(query, &query_params).await?;
@@ -568,6 +615,17 @@ pub async fn get_constraints_for_tables(
             )
         })
         .collect())
+}
+
+/// The placeholders `@P1, .., @Pn` for an `IN` list over `values`, and the
+/// values bound to them. T-SQL cannot bind a list as one parameter.
+fn in_list<T: tiberius::ToSql>(values: &[T]) -> (String, Vec<&dyn tiberius::ToSql>) {
+    let placeholders = (1..=values.len()).map(|i| format!("@P{i}")).join(", ");
+    let params = values
+        .iter()
+        .map(|value| -> &dyn tiberius::ToSql { value })
+        .collect();
+    (placeholders, params)
 }
 
 /// Ensure change data capture (CDC) is enabled for the database the provided
@@ -1060,17 +1118,7 @@ pub async fn validate_source_privileges(
         return Ok(());
     }
 
-    let params_dyn: SmallVec<[_; 1]> = params
-        .iter()
-        .map(|instance| {
-            let instance: &dyn tiberius::ToSql = instance;
-            instance
-        })
-        .collect();
-
-    let param_indexes = (1..params.len() + 1)
-        .map(|idx| format!("@P{}", idx))
-        .join(", ");
+    let (param_indexes, params_dyn) = in_list(&params[..]);
 
     // NB(ptravers): we rely on HAS_PERMS_BY_NAME to check both table and column permissions.
     let capture_instance_query = format!(
@@ -1086,9 +1134,7 @@ pub async fn validate_source_privileges(
             "
         );
 
-    let rows = client
-        .query(capture_instance_query, &params_dyn[..])
-        .await?;
+    let rows = client.query(capture_instance_query, &params_dyn).await?;
 
     let mut capture_instances_without_perms = vec![];
     let mut tables_without_perms = vec![];
