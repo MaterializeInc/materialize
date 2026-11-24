@@ -21,8 +21,7 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 {{</ note >}}
 
 ## v26.52.0
-*Released to Materialize Cloud: 2026-11-26* <br>
-*Released to Materialize Self-Managed: 2026-11-27* <br>
+*Released to Materialize Self-Managed: 2026-11-24* <br>
 
 ### AWS IAM authentication for PostgreSQL connections {#v26.52-aws-iam-authentication-for-postgresql-connections}
 
