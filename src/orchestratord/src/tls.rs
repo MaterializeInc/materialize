@@ -13,7 +13,7 @@ use anyhow::bail;
 use serde::Deserialize;
 
 use mz_cloud_resources::crd::{
-    ManagedResource, MaterializeCertSpec,
+    ManagedResource, MaterializeCertSpec, MaterializeExternalCertSpec,
     generated::cert_manager::certificates::{
         Certificate, CertificatePrivateKey, CertificatePrivateKeyAlgorithm,
         CertificatePrivateKeyEncoding, CertificatePrivateKeyRotationPolicy, CertificateSpec,
@@ -118,6 +118,78 @@ pub fn create_certificate(
     }))
 }
 
+/// Checks that an external certificate spec does not ask for both a
+/// cert-manager Certificate and an existing Secret.
+pub fn validate_external_certificate_spec(
+    spec: &Option<MaterializeExternalCertSpec>,
+) -> anyhow::Result<()> {
+    let Some(spec) = spec else {
+        return Ok(());
+    };
+    match &spec.secret_name {
+        Some(name) if name.is_empty() => bail!("secretName must not be empty"),
+        Some(_) if spec.cert_manager.issuer_ref.is_some() => {
+            bail!("secretName and issuerRef cannot both be set")
+        }
+        _ => Ok(()),
+    }
+}
+
+/// The existing Secret named in an external certificate spec, if any.
+pub fn existing_certificate_secret(spec: &Option<MaterializeExternalCertSpec>) -> Option<&str> {
+    spec.as_ref()?.secret_name.as_deref()
+}
+
+/// Builds the cert-manager Certificate for an external certificate spec.
+///
+/// Returns `None` when the spec names an existing Secret, or when no issuer is
+/// configured.
+pub fn create_external_certificate(
+    default_spec: Option<MaterializeCertSpec>,
+    resource: &impl ManagedResource,
+    spec: Option<MaterializeExternalCertSpec>,
+    cert_name: String,
+    secret_name: String,
+    algorithm_hint: CertificatePrivateKeyAlgorithm,
+    size_hint: Option<i64>,
+) -> anyhow::Result<Option<Certificate>> {
+    validate_external_certificate_spec(&spec)?;
+    if existing_certificate_secret(&spec).is_some() {
+        return Ok(None);
+    }
+    create_certificate(
+        default_spec,
+        resource,
+        spec.map(|spec| spec.cert_manager),
+        cert_name,
+        secret_name,
+        None,
+        algorithm_hint,
+        size_hint,
+    )
+}
+
+/// The name of the Secret that holds an external certificate, or `None` when
+/// the component should not serve TLS.
+///
+/// `managed_secret_name` is the Secret that cert-manager writes the
+/// operator-managed Certificate to.
+pub fn external_certificate_secret_name(
+    defaults: &Option<MaterializeCertSpec>,
+    spec: &Option<MaterializeExternalCertSpec>,
+    managed_secret_name: String,
+) -> Option<String> {
+    if let Some(name) = existing_certificate_secret(spec) {
+        return Some(name.to_owned());
+    }
+    let cert_manager = spec.as_ref().map(|spec| &spec.cert_manager);
+    let issuer_ref_defined = cert_manager
+        .and_then(|spec| spec.issuer_ref.as_ref())
+        .or_else(|| defaults.as_ref().and_then(|spec| spec.issuer_ref.as_ref()))
+        .is_some();
+    issuer_ref_defined.then_some(managed_secret_name)
+}
+
 pub fn issuer_ref_defined(
     defaults: &Option<MaterializeCertSpec>,
     overrides: &Option<MaterializeCertSpec>,
@@ -134,10 +206,69 @@ pub fn issuer_ref_defined(
 
 pub fn resolved_dns_names(
     defaults: &Option<MaterializeCertSpec>,
-    overrides: &Option<MaterializeCertSpec>,
+    overrides: &Option<MaterializeExternalCertSpec>,
 ) -> Option<Vec<String>> {
     overrides
         .as_ref()
-        .and_then(|spec| spec.dns_names.clone())
+        .and_then(|spec| spec.cert_manager.dns_names.clone())
         .or_else(|| defaults.as_ref().and_then(|spec| spec.dns_names.clone()))
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_cloud_resources::crd::generated::cert_manager::certificates::CertificateIssuerRef;
+
+    use super::*;
+
+    fn issuer_spec() -> MaterializeCertSpec {
+        MaterializeCertSpec {
+            issuer_ref: Some(CertificateIssuerRef {
+                name: "issuer".to_owned(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn secret_spec(name: &str) -> MaterializeExternalCertSpec {
+        MaterializeExternalCertSpec {
+            secret_name: Some(name.to_owned()),
+            ..Default::default()
+        }
+    }
+
+    #[mz_ore::test]
+    fn external_certificate_secret_name_precedence() {
+        let managed = || "managed-tls".to_owned();
+        let secret_name = external_certificate_secret_name;
+        // Neither an issuer nor a Secret: no TLS.
+        assert_eq!(secret_name(&None, &None, managed()), None);
+        // An issuer, from the defaults or the resource: the managed Secret.
+        assert_eq!(
+            secret_name(&Some(issuer_spec()), &None, managed()),
+            Some(managed())
+        );
+        assert_eq!(
+            secret_name(&None, &Some(issuer_spec().into()), managed()),
+            Some(managed())
+        );
+        // An existing Secret wins over the default issuer.
+        assert_eq!(
+            secret_name(&Some(issuer_spec()), &Some(secret_spec("tls")), managed()),
+            Some("tls".to_owned())
+        );
+    }
+
+    #[mz_ore::test]
+    fn validate_external_certificate_spec_rejects_conflicts() {
+        assert!(validate_external_certificate_spec(&None).is_ok());
+        assert!(validate_external_certificate_spec(&Some(issuer_spec().into())).is_ok());
+        assert!(validate_external_certificate_spec(&Some(secret_spec("tls"))).is_ok());
+        assert!(validate_external_certificate_spec(&Some(secret_spec(""))).is_err());
+        let both = MaterializeExternalCertSpec {
+            cert_manager: issuer_spec(),
+            secret_name: Some("tls".to_owned()),
+        };
+        assert!(validate_external_certificate_spec(&Some(both)).is_err());
+    }
 }

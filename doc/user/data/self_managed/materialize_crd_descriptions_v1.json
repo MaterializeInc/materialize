@@ -36,8 +36,8 @@
       },
       {
         "name": "balancerdExternalCertificateSpec",
-        "type": "MaterializeCertSpec",
-        "description": "The configuration for generating an x509 certificate using cert-manager for balancerd\nto present to incoming connections.\nThe `dnsNames` and `issuerRef` fields are required.\n\nThis field is excluded from the rollout hash and changes will not trigger a rollout.",
+        "type": "MaterializeExternalCertSpec",
+        "description": "The x509 certificate balancerd presents to incoming connections.\nEither set `issuerRef` (and `dnsNames`) to have cert-manager issue it,\nor set `secretName` to use an existing Secret.\n\nThis field is excluded from the rollout hash and changes will not trigger a rollout.",
         "default": null,
         "required": false,
         "deprecated": false
@@ -68,8 +68,8 @@
       },
       {
         "name": "consoleExternalCertificateSpec",
-        "type": "MaterializeCertSpec",
-        "description": "The configuration for generating an x509 certificate using cert-manager for the console\nto present to incoming connections.\nThe `dnsNames` and `issuerRef` fields are required.\nNot yet implemented.\n\nThis field is excluded from the rollout hash and changes will not trigger a rollout.",
+        "type": "MaterializeExternalCertSpec",
+        "description": "The x509 certificate the console presents to incoming connections.\nEither set `issuerRef` (and `dnsNames`) to have cert-manager issue it,\nor set `secretName` to use an existing Secret.\n\nThis field is excluded from the rollout hash and changes will not trigger a rollout.",
         "default": null,
         "required": false,
         "deprecated": false
@@ -307,6 +307,75 @@
         "name": "renewBefore",
         "type": "String",
         "description": "Duration before expiration the certificate will be renewed.\nValue must be in units accepted by Go\n[`time.ParseDuration`](https://golang.org/pkg/time/#ParseDuration).",
+        "default": null,
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "secretTemplate",
+        "type": "CertificateSecretTemplate",
+        "description": "Additional annotations and labels to include in the Certificate object.",
+        "default": null,
+        "required": false,
+        "deprecated": false
+      }
+    ]
+  ],
+  [
+    "MaterializeExternalCertSpec",
+    [
+      {
+        "name": "dnsNames",
+        "type": "Array<String>",
+        "description": "Additional DNS names the certificate will be valid for.",
+        "default": null,
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "duration",
+        "type": "String",
+        "description": "Duration the certificate will be requested for.\nValue must be in units accepted by Go\n[`time.ParseDuration`](https://golang.org/pkg/time/#ParseDuration).",
+        "default": null,
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "issuerRef",
+        "type": "CertificateIssuerRef",
+        "description": "Reference to an `Issuer` or `ClusterIssuer` that will generate the certificate.",
+        "default": null,
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "privateKeyAlgorithm",
+        "type": "CertificatePrivateKeyAlgorithm",
+        "description": "Optional algorithm to use for the private key. If not specified, a recommended default will be chosen.",
+        "default": null,
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "privateKeySize",
+        "type": "Integer",
+        "description": "Optional size for the private key.",
+        "default": null,
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "renewBefore",
+        "type": "String",
+        "description": "Duration before expiration the certificate will be renewed.\nValue must be in units accepted by Go\n[`time.ParseDuration`](https://golang.org/pkg/time/#ParseDuration).",
+        "default": null,
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "secretName",
+        "type": "String",
+        "description": "Name of an existing Secret in the same namespace that holds the\ncertificate in its `tls.crt` and `tls.key` keys, such as a\n`kubernetes.io/tls` Secret.\nWhen set, the operator does not create a cert-manager Certificate, and\ndeletes the one it created earlier, if any.\nTo rotate the certificate, update the Secret in place.\nCannot be set together with `issuerRef`. The other cert-manager options\nare ignored, except that `dnsNames` on the balancerd certificate is still\npassed to the console.",
         "default": null,
         "required": false,
         "deprecated": false

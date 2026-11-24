@@ -39,7 +39,10 @@ use crate::{
     matching_image_from_environmentd_image_ref,
     metrics::Metrics,
     parse_image_tag,
-    tls::{DefaultCertificateSpecs, issuer_ref_defined, resolved_dns_names},
+    tls::{
+        DefaultCertificateSpecs, external_certificate_secret_name, resolved_dns_names,
+        validate_external_certificate_spec,
+    },
 };
 use mz_cloud_provider::CloudProvider;
 use mz_cloud_resources::crd::{
@@ -514,6 +517,25 @@ impl k8s_controller::Context for Context {
                     ))
                 })?;
             }
+        }
+
+        for (field, spec) in [
+            (
+                "balancerdExternalCertificateSpec",
+                &mz.spec.balancerd_external_certificate_spec,
+            ),
+            (
+                "consoleExternalCertificateSpec",
+                &mz.spec.console_external_certificate_spec,
+            ),
+        ] {
+            validate_external_certificate_spec(spec).map_err(|e| {
+                Error::Anyhow(anyhow::anyhow!(
+                    "invalid {field} in materialize resource {}/{}: {e}",
+                    mz.namespace(),
+                    mz.name_unchecked(),
+                ))
+            })?;
         }
 
         self.check_environment_id_conflicts(&client, mz).await?;
@@ -1044,10 +1066,13 @@ impl k8s_controller::Context for Context {
                     balancerd: BalancerdRef {
                         service_name: mz.balancerd_service_name(),
                         namespace: mz.namespace(),
-                        scheme: if issuer_ref_defined(
+                        scheme: if external_certificate_secret_name(
                             &self.config.default_certificate_specs.balancerd_external,
                             &mz.spec.balancerd_external_certificate_spec,
-                        ) {
+                            mz.balancerd_external_certificate_secret_name(),
+                        )
+                        .is_some()
+                        {
                             HttpConnectionScheme::Https
                         } else {
                             HttpConnectionScheme::Http

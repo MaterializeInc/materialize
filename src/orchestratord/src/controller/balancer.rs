@@ -37,10 +37,13 @@ use tracing::{trace, warn};
 use crate::{
     Error,
     k8s::{
-        FIELD_MANAGER, apply_resource, get_resource, pod_disruption_budget, recommended_k8s_labels,
-        replace_resource,
+        FIELD_MANAGER, apply_resource, delete_resource, get_resource, pod_disruption_budget,
+        recommended_k8s_labels, replace_resource,
     },
-    tls::{DefaultCertificateSpecs, create_certificate, issuer_ref_defined},
+    tls::{
+        DefaultCertificateSpecs, create_external_certificate, existing_certificate_secret,
+        external_certificate_secret_name, issuer_ref_defined,
+    },
 };
 use mz_cloud_resources::crd::{
     ManagedResource,
@@ -161,7 +164,7 @@ impl Context {
         &self,
         balancer: &Balancer,
     ) -> Result<Option<Certificate>, anyhow::Error> {
-        create_certificate(
+        create_external_certificate(
             self.config
                 .default_certificate_specs
                 .balancerd_external
@@ -170,7 +173,6 @@ impl Context {
             balancer.spec.external_certificate_spec.clone(),
             balancer.external_certificate_name(),
             balancer.external_certificate_secret_name(),
-            None,
             CertificatePrivateKeyAlgorithm::Ecdsa,
             Some(256),
         )
@@ -311,15 +313,16 @@ impl Context {
                 "--config-sync-loop-interval=1s".to_owned(),
             ]);
         }
-        if issuer_ref_defined(
+        if let Some(secret_name) = external_certificate_secret_name(
             &self.config.default_certificate_specs.balancerd_external,
             &balancer.spec.external_certificate_spec,
+            balancer.external_certificate_secret_name(),
         ) {
             volumes.push(Volume {
                 name: "external-certificate".to_owned(),
                 secret: Some(SecretVolumeSource {
                     default_mode: Some(0o400),
-                    secret_name: Some(balancer.external_certificate_secret_name()),
+                    secret_name: Some(secret_name),
                     items: None,
                     optional: Some(false),
                 }),
@@ -689,6 +692,12 @@ impl k8s_controller::Context for Context {
             trace!("creating new balancerd external certificate");
             apply_resource(&certificate_api, &external_certificate).await?;
             step.finish(Outcome::Completed);
+        } else if existing_certificate_secret(&balancer.spec.external_certificate_spec).is_some() {
+            // The certificate comes from an existing Secret, so stop managing
+            // any Certificate created before the switch.
+            trace!("deleting balancerd external certificate");
+            delete_resource(&certificate_api, &balancer.external_certificate_name()).await?;
+            step.finish(Outcome::Completed);
         } else {
             step.finish(Outcome::Skipped);
         }
@@ -744,6 +753,8 @@ fn owns_replicas(deployment: &Deployment) -> bool {
 mod tests {
     use super::*;
     use mz_cloud_resources::crd::balancer::v1alpha1::{BalancerSpec, StaticRoutingConfig};
+    use mz_cloud_resources::crd::generated::cert_manager::certificates::CertificateIssuerRef;
+    use mz_cloud_resources::crd::{MaterializeCertSpec, MaterializeExternalCertSpec};
 
     fn test_context() -> Context {
         Context::new(Config {
@@ -908,5 +919,94 @@ mod tests {
                 assert!(!args.iter().any(|arg| arg.starts_with("--config-sync-")));
             }
         }
+    }
+
+    fn external_tls(balancer: &Balancer, context: &Context) -> (Option<String>, Vec<String>) {
+        let pod = context
+            .create_deployment_object(balancer)
+            .unwrap()
+            .spec
+            .unwrap()
+            .template
+            .spec
+            .unwrap();
+        let secret = pod
+            .volumes
+            .iter()
+            .flatten()
+            .find(|volume| volume.name == "external-certificate")
+            .and_then(|volume| volume.secret.as_ref())
+            .and_then(|secret| secret.secret_name.clone());
+        let args = pod.containers[0].args.clone().unwrap();
+        (secret, args)
+    }
+
+    #[mz_ore::test]
+    fn external_certificate_from_existing_secret() {
+        let issuer_ref = || CertificateIssuerRef {
+            name: "issuer".to_owned(),
+            ..Default::default()
+        };
+        let mut context = test_context();
+        // The operator default issuer is overridden by secretName.
+        context.config.default_certificate_specs.balancerd_external = Some(MaterializeCertSpec {
+            issuer_ref: Some(issuer_ref()),
+            ..Default::default()
+        });
+
+        let balancer = test_balancer(BalancerSpec {
+            external_certificate_spec: Some(MaterializeExternalCertSpec {
+                secret_name: Some("wildcard-tls".to_owned()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        assert!(
+            context
+                .create_external_certificate_object(&balancer)
+                .unwrap()
+                .is_none()
+        );
+        let (secret, args) = external_tls(&balancer, &context);
+        assert_eq!(secret.as_deref(), Some("wildcard-tls"));
+        assert!(args.contains(&"--tls-mode=require".to_owned()));
+        assert!(args.contains(&"--tls-cert=/etc/external_tls/tls.crt".to_owned()));
+        assert!(args.contains(&"--tls-key=/etc/external_tls/tls.key".to_owned()));
+
+        // Without secretName, the default issuer's Certificate is used.
+        let balancer = test_balancer(BalancerSpec::default());
+        let certificate = context
+            .create_external_certificate_object(&balancer)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            certificate.spec.secret_name,
+            balancer.external_certificate_secret_name()
+        );
+        let (secret, args) = external_tls(&balancer, &context);
+        assert_eq!(secret, Some(balancer.external_certificate_secret_name()));
+        assert!(args.contains(&"--tls-mode=require".to_owned()));
+
+        // Without either, TLS is disabled.
+        let (secret, args) = external_tls(&balancer, &test_context());
+        assert_eq!(secret, None);
+        assert!(args.contains(&"--tls-mode=disable".to_owned()));
+
+        // secretName and issuerRef on the same spec are rejected.
+        let balancer = test_balancer(BalancerSpec {
+            external_certificate_spec: Some(MaterializeExternalCertSpec {
+                cert_manager: MaterializeCertSpec {
+                    issuer_ref: Some(issuer_ref()),
+                    ..Default::default()
+                },
+                secret_name: Some("wildcard-tls".to_owned()),
+            }),
+            ..Default::default()
+        });
+        assert!(
+            context
+                .create_external_certificate_object(&balancer)
+                .is_err()
+        );
     }
 }
