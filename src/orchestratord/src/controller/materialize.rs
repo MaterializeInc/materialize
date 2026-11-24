@@ -261,7 +261,10 @@ impl Context {
         resources_hash: String,
     ) -> Result<Option<Action>, Error> {
         let step = metadata.step("promote");
-        if let Some(action) = resources.promote_services(client, &mz.namespace()).await? {
+        if let Some(action) = resources
+            .promote_services(client, mz.should_force_promote(), &mz.namespace())
+            .await?
+        {
             step.finish(Outcome::Waiting);
             return Ok(Some(action));
         }

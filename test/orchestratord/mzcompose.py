@@ -4738,6 +4738,149 @@ def workflow_rollout_timeout(c: Composition, parser: WorkflowArgumentParser) -> 
     retry(check_single_generation, 120)
 
 
+def scale_operator(replicas: int) -> None:
+    spawn.runv(
+        [
+            "kubectl",
+            "scale",
+            "deployment",
+            OPERATOR_DEPLOYMENT,
+            "-n",
+            "materialize",
+            f"--replicas={replicas}",
+        ]
+    )
+
+
+def workflow_force_promote_without_skip(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    # Regression test: a force-promoted rollout must not depend on the one
+    # skip-catchup request orchestratord sends before it records `Promoting`.
+    # environmentd keeps the skip in memory only. If the process restarts
+    # before the promotion lands, the new process catches up from scratch and
+    # rejects promotion, and orchestratord, already past the point of no
+    # return, used to only retry the promotion. The rollout was then stuck
+    # until `with_0dt_deployment_max_wait` elapsed.
+    #
+    # The restart would have to hit the few milliseconds between the skip and
+    # the promotion, so we construct its outcome instead: with orchestratord
+    # scaled down, we mark the rollout as `Promoting` while the new generation
+    # is still catching up and has never been told to skip.
+    parser.add_argument(
+        "--recreate-cluster",
+        action=argparse.BooleanOptionalAction,
+        help="Recreate cluster if it exists already",
+    )
+    parser.add_argument("--tag", type=str, help="Custom version tag to use")
+    parser.add_argument(
+        "--orchestratord-override",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Override orchestratord tag",
+    )
+    args = parser.parse_args()
+
+    definition = setup(c, args)
+    init(definition)
+    run(definition, False)
+
+    operator_replicas = int(
+        spawn.capture(
+            [
+                "kubectl",
+                "get",
+                "deployment",
+                OPERATOR_DEPLOYMENT,
+                "-n",
+                "materialize",
+                "-o",
+                "jsonpath={.spec.replicas}",
+            ]
+        )
+    )
+
+    # Keep the new generation from catching up on its own, so that only a
+    # skip can make it promotable. The first caught-up check cannot pass
+    # because of the stability period, and the second never runs.
+    request_rollout = str(uuid.uuid4())
+    spec = definition["materialize"]["spec"]
+    spec["rolloutStrategy"] = "ManuallyPromote"
+    spec["requestRollout"] = request_rollout
+    spec["environmentdExtraArgs"] = [
+        "--system-parameter-default=with_0dt_caught_up_check_stability_period=1h",
+        "--system-parameter-default=0dt_deployment_hydration_check_interval=1h",
+    ]
+    apply_materialize(definition)
+
+    def check_new_generation_applied() -> None:
+        statefulsets = spawn.capture(
+            [
+                "kubectl",
+                "get",
+                "statefulset",
+                "-n",
+                "materialize-environment",
+                "-o",
+                "name",
+            ],
+            stderr=subprocess.DEVNULL,
+        ).split()
+        environmentd_statefulsets = [s for s in statefulsets if "-environmentd-" in s]
+        assert (
+            len(environmentd_statefulsets) == 2
+        ), f"expected two environmentd statefulsets, but found {environmentd_statefulsets}"
+
+    retry(check_new_generation_applied, 300)
+
+    scale_operator(0)
+
+    def check_operator_gone() -> None:
+        # Terminating pods count, they can still be reconciling.
+        pods = [
+            pod["metadata"]["name"]
+            for pod in get_pod_data(
+                labels={"app.kubernetes.io/instance": "operator"},
+                namespace="materialize",
+            )["items"]
+        ]
+        assert not pods, f"orchestratord pods still exist: {pods}"
+
+    retry(check_operator_gone, 120)
+
+    mz = get_materialize_at_stored_version()
+    mz_name = mz["metadata"]["name"]
+    condition = mz["status"]["conditions"][0]
+    assert condition["reason"] == "Applying", condition
+    condition["reason"] = "Promoting"
+    condition["message"] = "Attempting to promote"
+    for subresource, patch in [
+        (None, {"spec": {"forcePromote": request_rollout}}),
+        ("status", {"status": {"conditions": [condition]}}),
+    ]:
+        spawn.runv(
+            [
+                "kubectl",
+                "patch",
+                "materializes.v1alpha1.materialize.cloud",
+                mz_name,
+                "-n",
+                "materialize-environment",
+                "--type=merge",
+                *([f"--subresource={subresource}"] if subresource else []),
+                "-p",
+                json.dumps(patch),
+            ],
+        )
+
+    scale_operator(operator_replicas)
+
+    wait_for_rollout_complete()
+    status = get_materialize_status_at_stored_version()
+    assert status is not None
+    assert status["lastCompletedRolloutRequest"] == request_rollout, status
+
+
 OPERATOR_DEPLOYMENT = "operator-materialize-operator"
 # The lease name is fixed in the orchestratord binary. A single lease guards
 # all of its controllers, in the namespace orchestratord runs in.
