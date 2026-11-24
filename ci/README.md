@@ -37,6 +37,8 @@ label change takes effect on the next push.
   `inputs` (or build mzbuild images) take part in a PR-triggered nightly. A
   command-only step without inputs is trimmed out and will not run, so labeling a
   PR to exercise such a step has no effect.
+* `ci-antithesis`: also build the x86_64 images that the `test/antithesis`
+  harness runs, instrumented for Antithesis, and push them to its registry.
 * `ci-no-trim`: disable input-based trimming, so the full test pipeline runs.
 * `ci-no-test`: skip the test steps. The build still runs, but `mkpipeline.py`
   exits non-zero so the build is red and the PR cannot be merged without tests.

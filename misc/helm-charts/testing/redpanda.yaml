@@ -25,7 +25,7 @@ spec:
     spec:
       containers:
         - name: redpanda
-          image: docker.vectorized.io/vectorized/redpanda:v23.3.5
+          image: docker.io/redpandadata/redpanda:v23.3.5
           command: ["/usr/bin/rpk"]
           args: [
             "redpanda",
@@ -55,6 +55,13 @@ spec:
               port: 9644
             initialDelaySeconds: 30
             periodSeconds: 10
+          # Without a volume a restart of the container loses every topic.
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/redpanda/data
+      volumes:
+        - name: data
+          emptyDir: {}
 
 ---
 apiVersion: v1

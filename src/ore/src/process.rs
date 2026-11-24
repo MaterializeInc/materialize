@@ -16,7 +16,14 @@
 //! Process utilities.
 
 /// The exit code of [`halt!`](crate::halt).
-pub const HALT_EXIT_CODE: i32 = 166;
+///
+/// Antithesis fails a run for every container exit code other than 0, 137 and
+/// 143, so its build flavor halts with 143, the exit code of a SIGTERM.
+pub const HALT_EXIT_CODE: i32 = if cfg!(feature = "antithesis") {
+    143
+} else {
+    166
+};
 
 /// The exit code of [`restart_in_place!`](crate::restart_in_place).
 ///
@@ -95,12 +102,17 @@ macro_rules! exit {
 }
 
 /// Like [`halt!`], but exits with the given code, so that a restart with a
-/// specific cause can be told apart from a routine halt.
+/// specific cause can be told apart from a routine halt. The Antithesis build
+/// flavor exits with [`HALT_EXIT_CODE`] instead.
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "tracing")))]
 #[cfg(feature = "tracing")]
 pub fn halt_with_code(exit_code: i32, message: std::fmt::Arguments<'_>) -> ! {
     crate::__private::tracing::warn!("halting process: {message}");
-    exit_thread_safe(exit_code)
+    exit_thread_safe(if cfg!(feature = "antithesis") {
+        HALT_EXIT_CODE
+    } else {
+        exit_code
+    })
 }
 
 /// Helper for exiting macros.

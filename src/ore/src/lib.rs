@@ -110,6 +110,11 @@ pub use mz_ore_proc::{instrument, static_list, test};
 #[cfg(feature = "overflowing")]
 pub use overflowing::Overflowing;
 
+// Links the Antithesis coverage runtime into every binary that links this
+// crate. Only the instrumentation that rustc inserts calls into it.
+#[cfg(all(feature = "antithesis", target_os = "linux"))]
+use antithesis_instrumentation as _;
+
 #[doc(hidden)]
 pub mod __private {
     #[cfg(feature = "tracing")]

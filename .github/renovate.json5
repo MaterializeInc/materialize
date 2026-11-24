@@ -373,7 +373,7 @@
     },
     {
       "matchManagers": ["pip_requirements", "pip_setup", "pep621"],
-      "matchFileNames": ["ci/builder/*", "test/adbc/*", "test/terraform/azure-temporary/*"],
+      "matchFileNames": ["ci/builder/*", "test/adbc/*", "test/antithesis/driver/*", "test/terraform/azure-temporary/*"],
       "additionalBranchPrefix": "python-tools-"
     },
     {

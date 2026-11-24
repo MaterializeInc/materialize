@@ -44,6 +44,21 @@ steps:
         agents:
           queue: l-builder-linux-aarch64
 
+      - id: build-x86_64-antithesis
+        label: ":rust: Build x86_64 (Antithesis)"
+        command: bin/ci-builder run stable ci/test/build-antithesis.sh
+        if: 'build.pull_request.labels includes "ci-antithesis"'
+        inputs:
+          - "*"
+        depends_on: []
+        timeout_in_minutes: 180
+        agents:
+          queue: l-builder-linux-x86_64
+        env:
+          CI_ANTITHESIS: 1
+        coverage: skip
+        sanitizer: skip
+
       - id: build-x86_64-no-lto
         label: ":rust: Build x86_64 (no LTO)"
         command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
@@ -387,6 +402,21 @@ steps:
           composition: restart
     agents:
       queue: hetzner-aarch64-8cpu-16gb
+
+  - id: antithesis-driver
+    topics: [kafka, kafka-sink, postgres]
+    label: Antithesis driver
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    inputs: [test/antithesis]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: antithesis
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+    env:
+      # The driver image is not published, so the agent builds it.
+      CI_ALLOW_LOCAL_BUILD: 1
 
   - group: "MySQL"
     key: mysql-tests

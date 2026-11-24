@@ -222,6 +222,7 @@ class RepositoryDetails:
         coverage: Whether the repository has code coverage instrumentation
             enabled.
         sanitizer: Whether to use a sanitizer (address, hwaddress, cfi, thread, leak, memory, none)
+        antithesis: Whether to build the Rust binaries for Antithesis.
         cargo_workspace: The `cargo.Workspace` associated with the repository.
         image_registry: The Docker image registry to pull images from and push
             images to.
@@ -237,12 +238,14 @@ class RepositoryDetails:
         sanitizer: Sanitizer,
         image_registry: str,
         image_prefix: str,
+        antithesis: bool,
     ):
         self.root = root
         self.arch = arch
         self.profile = profile
         self.coverage = coverage
         self.sanitizer = sanitizer
+        self.antithesis = antithesis
         self.cargo_workspace = cargo.Workspace(root)
         self.image_registry = image_registry
         self.image_prefix = image_prefix
@@ -689,6 +692,8 @@ class CargoPreImage(PreImage):
             flags += "coverage"
         if self.rd.sanitizer != Sanitizer.none:
             flags += self.rd.sanitizer.value
+        if self.rd.antithesis:
+            flags += "antithesis"
         flags.sort()
         return ",".join(flags)
 
@@ -765,6 +770,7 @@ class CargoBuild(CargoPreImage):
             rd.profile == Profile.RELEASE
             and rd.sanitizer == Sanitizer.none
             and not rd.coverage
+            and not rd.antithesis
         ):
             rustflags += [
                 "-Clinker-plugin-lto",
@@ -785,6 +791,13 @@ class CargoBuild(CargoPreImage):
                 "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "/usr/local/bin/clang-lld-22",
                 "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER": "/usr/local/bin/clang-lld-22",
             }
+
+        if rd.antithesis:
+            rustflags = [*rustflags, *rustc_flags.antithesis]
+            # AWS-LC seeds from CPU jitter by default and aborts when its
+            # health tests fail, as they do on Antithesis's deterministic CPU.
+            extra_env = {**extra_env, "AWS_LC_SYS_NO_JITTER_ENTROPY": "1"}
+            features = [*(features or []), "mz-ore/antithesis"]
 
         cargo_build = rd.build(
             "build", channel=None, rustflags=rustflags, extra_env=extra_env
@@ -872,7 +885,7 @@ class CargoBuild(CargoPreImage):
             exe_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(src, exe_path)
 
-            if self.strip:
+            if self.strip and not self.rd.antithesis:
                 # The debug information is large enough that it slows down CI,
                 # since we're packaging these binaries up into Docker images and
                 # shipping them around.
@@ -892,6 +905,13 @@ class CargoBuild(CargoPreImage):
                 spawn.runv(
                     [
                         *self.rd.tool("objcopy"),
+                        # Antithesis found no source locations in the DWARF
+                        # that the linker compressed with zstd.
+                        *(
+                            ["--decompress-debug-sections"]
+                            if self.rd.antithesis
+                            else []
+                        ),
                         "-R",
                         ".debug_pubnames",
                         "-R",
@@ -968,6 +988,8 @@ class CargoBuild(CargoPreImage):
             )
 
         inputs = super().inputs() | set(inp for dep in deps for inp in dep.inputs())
+        if self.rd.antithesis:
+            inputs.add("misc/python/materialize/rustc_flags.py")
         return inputs
 
 
@@ -1155,6 +1177,7 @@ class ResolvedImage:
             "ARCH_GCC": str(self.image.rd.arch),
             "ARCH_GO": self.image.rd.arch.go_str(),
             "CI_SANITIZER": str(self.image.rd.sanitizer),
+            "ANTITHESIS": "1" if self.image.rd.antithesis else "",
         }
         f = self.write_dockerfile()
 
@@ -1636,6 +1659,7 @@ class Repository:
             sanitizer,
             image_registry,
             image_prefix,
+            ui.env_is_truthy("CI_ANTITHESIS"),
         )
         self.images: dict[str, Image] = {}
         self.compositions: dict[str, Path] = {}

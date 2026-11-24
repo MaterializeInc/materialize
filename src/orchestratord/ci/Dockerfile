@@ -11,6 +11,11 @@ MZFROM distroless-prod-base
 
 COPY orchestratord /usr/local/bin/
 
+# Antithesis symbolizes coverage from the binaries under /symbols.
+ARG ANTITHESIS
+USER root
+RUN ["/busybox/sh", "-c", "[ -z \"$ANTITHESIS\" ] || (mkdir /symbols && ln -s /usr/local/bin/orchestratord /symbols/)"]
+
 USER nonroot
 
 ENTRYPOINT ["orchestratord"]

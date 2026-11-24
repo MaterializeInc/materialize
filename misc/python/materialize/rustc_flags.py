@@ -24,6 +24,20 @@ coverage = [
     "-Cllvm-args=-runtime-counter-relocation",
 ]
 
+# Flags for Antithesis coverage instrumentation, see
+# https://antithesis.com/docs/reference/sdk/rust/instrumentation/. The runtime
+# they call into is linked by the `mz-ore/antithesis` feature.
+antithesis = [
+    "-Ccodegen-units=1",
+    "-Cpasses=sancov-module",
+    "-Cllvm-args=-sanitizer-coverage-level=3",
+    "-Cllvm-args=-sanitizer-coverage-trace-pc-guard",
+    "-Clink-args=-Wl,--build-id",
+    # Antithesis symbolizes from the DWARF in the shipped binary, which the
+    # `optimized` profile would split out.
+    "-Csplit-debuginfo=off",
+]
+
 
 class Sanitizer(Enum):
     """What sanitizer to use"""

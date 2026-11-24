@@ -36,7 +36,7 @@ spec:
     spec:
       containers:
       - name: postgres
-        image: postgres:13
+        image: docker.io/library/postgres:13
         ports:
         - containerPort: 5432
         env:
