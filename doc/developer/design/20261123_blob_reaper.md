@@ -5,8 +5,11 @@
 Persist GC finds the blobs to delete by reading shard state, so it never deletes a blob no state
 names. While we can close the gaps in GC so it doesn't leak there are some
 leaks that we can't prevent. E.g., A writer uploads a batch, fails to link
-it into consensus, and crashes before deleting it. Since those blobs are not named, nothing
+it into consensus, and crashes before deleting it.[^examples] Since those blobs are not named, nothing
 will ever delete them.
+
+[^examples]: Compaction does this in production: a halted generation at 0dt cutover that
+is in the middle of writing a batch will leak the blobs.
 
 A *blob reaper* is a backstop that finds blobs nothing will ever use and deletes them.
 
