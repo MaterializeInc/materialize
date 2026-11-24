@@ -2835,12 +2835,14 @@ pub mod tests {
         let (mut write, mut read) = client.expect_open::<String, (), u64, i64>(shard_id).await;
         read.downgrade_since(&Antichain::new()).await;
         write.advance_upper(&Antichain::new()).await;
-        write.expire().await;
-        read.expire().await;
+        // Expiring the last handle here would start a background rollup that
+        // could commit after finalize_shard finishes GC.
         client
             .finalize_shard::<String, (), u64, i64>(shard_id, Diagnostics::for_tests())
             .await
             .expect("finalization must succeed");
+        write.expire().await;
+        read.expire().await;
 
         // Upgrading at the version that wrote the tombstone must not panic or
         // commit a new state.
