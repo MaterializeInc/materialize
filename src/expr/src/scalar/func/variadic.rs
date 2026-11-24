@@ -1686,7 +1686,7 @@ fn list_slice_linear<'a>(
 
         // Length index only moves to leq positions
         let length_inner = (end - start) as usize + 1;
-        total_length = std::cmp::min(length_inner, total_length - start_inner);
+        total_length = std::cmp::min(length_inner, total_length.saturating_sub(start_inner));
     }
 
     let iter = list.iter().skip(start_idx).take(total_length);
