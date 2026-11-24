@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, anyhow};
 use duckdb::types::ValueRef;
-use mz_ore::retry::{Retry, RetryResult};
+use mz_ore::retry::Retry;
 
 use crate::action::duckdb::get_or_create_connection;
 use crate::action::{ControlFlow, State};
@@ -38,17 +38,18 @@ pub async fn run_query(
     let conn = get_or_create_connection(state, name).await?;
     println!(">> {}", query);
 
+    let in_ci = mz_ore::env::is_var_truthy("CI");
     // Reading from an external system (e.g. an Iceberg table backed by a sink
     // with a non-zero COMMIT INTERVAL) is eventually consistent, so retry until
     // the result matches the expectation or the timeout elapses, mirroring the
     // behavior of testdrive's `>` SQL queries. Query-execution errors (e.g. the
     // table not yet existing after a restart) are retried too.
-    Retry::default()
+    let (previous_notice, result) = Retry::default()
         .initial_backoff(state.initial_backoff)
         .factor(state.backoff_factor)
         .max_duration(state.timeout)
         .max_tries(state.max_tries)
-        .retry_async(|retry_state| {
+        .retry_async_with_state(String::new(), |retry_state, mut previous_notice| {
             let conn = Arc::clone(&conn);
             let query = query.clone();
             let expected_rows = &expected_rows;
@@ -85,7 +86,7 @@ pub async fn run_query(
                             actual_rows.sort();
                         }
                         if actual_rows == *expected_rows {
-                            return RetryResult::Ok(());
+                            return (previous_notice, Ok(()));
                         }
                         anyhow!(
                             "DuckDB query result mismatch\nexpected ({} rows):\n{}\n\nactual ({} rows):\n{}",
@@ -97,25 +98,35 @@ pub async fn run_query(
                     }
                 };
 
-                // Only print the first retry notice in CI to avoid spamming the
-                // log; print every one locally for visibility.
-                if retry_state.i == 0 || !mz_ore::env::is_var_truthy("CI") {
-                    if let Some(backoff) = retry_state.next_backoff {
-                        if !backoff.is_zero() {
-                            println!(
-                                "{}\nrows didn't match; sleeping to see if the result catches up 🕑 {:.0?}",
-                                err, backoff
-                            );
-                        }
+                if let Some(backoff) = retry_state.next_backoff
+                    && !backoff.is_zero()
+                    && (retry_state.i == 0 || !in_ci)
+                {
+                    let notice = format!(
+                        "{err}\nrows didn't match; sleeping to see if the result catches up 🕑"
+                    );
+                    if notice != previous_notice {
+                        clear_retry_notice(&previous_notice);
+                        println!("{notice} {backoff:.0?}");
+                        previous_notice = notice;
                     }
                 }
-
-                RetryResult::RetryableErr(err)
+                (previous_notice, Err(err))
             }
         })
-        .await?;
+        .await;
+    if !in_ci {
+        clear_retry_notice(&previous_notice);
+    }
+    result?;
 
     Ok(ControlFlow::Continue)
+}
+
+fn clear_retry_notice(notice: &str) {
+    for _ in notice.lines() {
+        print!("\x1B[1A\x1B[2K");
+    }
 }
 
 fn format_value(val: &ValueRef) -> String {
