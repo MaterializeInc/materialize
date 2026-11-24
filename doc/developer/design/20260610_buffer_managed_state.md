@@ -125,6 +125,8 @@ The ledger must therefore observe residency: after the advice, read the page-tab
 
 #### File extents (future)
 
+Detailed in [20261003_pool_file_extents.md](20261003_pool_file_extents.md).
+
 Use a few large preallocated files per worker, or `O_TMPFILE` inodes, with a userspace extent allocator:
 
 * Round allocation to chunk classes, giving per-class free lists and bounded fragmentation.
