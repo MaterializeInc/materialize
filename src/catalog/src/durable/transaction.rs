@@ -4418,7 +4418,7 @@ mod tests {
             Err(DurableCatalogError::UniquenessViolation)
         ));
         for keys in [vec![], vec![3i64.to_le_bytes().to_vec()]] {
-            let result = std::panic::catch_unwind(|| table.verify_keys(&keys));
+            let result = mz_ore::panic::catch_unwind(|| table.verify_keys(&keys));
             if mz_ore::assert::soft_assertions_enabled() {
                 assert!(result.is_err());
             } else {
