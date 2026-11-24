@@ -308,7 +308,7 @@ where
                     exclude_count = exclude.len(),
                     "listed objects"
                 );
-                tracing::debug!(%worker_id, ?include, ?exclude, "listed objects");
+                tracing::trace!(%worker_id, ?include, ?exclude, "listed objects");
                 if include.is_empty() {
                     let err = StorageErrorXKind::NoMatchingFiles.with_context("discover");
                     start_handle.give(&start_cap, Err(err));
