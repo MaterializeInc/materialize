@@ -1,6 +1,6 @@
 {{- /* Skill output: list SQL keywords from keywords.txt */ -}}
 {{- $keywords := slice -}}
-{{- range $line := split (readFile "sql-grammar/keywords.txt") "\n" -}}
+{{- range $line := split (resources.Get "sql-keywords.txt").Content "\n" -}}
   {{- if and (not (hasPrefix $line "#")) $line -}}
     {{- $keywords = $keywords | append ($line | upper) -}}
   {{- end -}}

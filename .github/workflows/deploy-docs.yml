@@ -13,9 +13,11 @@ name: Deploy docs
 
 on:
   push:
-    branches: [main, "self-managed-docs/*"]
+    branches: [main]
     paths:
       - doc/user/**
+      - src/sql-lexer/src/keywords.txt
+      - ci/builder/Dockerfile
       - ci/deploy_website/**
       - .github/workflows/deploy-docs.yml
   workflow_dispatch:
@@ -27,12 +29,25 @@ concurrency:
 permissions: {}
 
 jobs:
+  lint:
+    name: Lint docs
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    permissions:
+      contents: read # check out the repository
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Same check and image as the Buildkite lint-docs step.
+      - run: bin/ci-builder run stable --no-secrets ci/test/lint-docs.sh
+
   deploy:
     name: Deploy docs
-    runs-on: ubuntu-24.04
+    needs: lint
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
-    # Restricted to main and self-managed-docs/*; the AWS role trusts only
-    # this environment on those refs.
+    # Restricted to main; the AWS role trusts only this environment.
     environment: docs-production
     permissions:
       contents: read # check out the docs
@@ -42,16 +57,12 @@ jobs:
         with:
           persist-credentials: false
           sparse-checkout: |
+            ci/builder
             ci/deploy_website
             doc/user
             misc/shlib
-      # Keep in sync with the Hugo version in ci/builder/Dockerfile.
-      - name: Install Hugo
-        run: |
-          curl -fsSL https://github.com/gohugoio/hugo/releases/download/v0.152.2/hugo_extended_withdeploy_0.152.2_Linux-64bit.tar.gz > hugo.tar.gz
-          echo '08200e4d82f086c94c301e8ba08102f9e23f38774ad949bb3251cac76283684a hugo.tar.gz' | sha256sum --check
-          sudo tar -xzf hugo.tar.gz -C /usr/local/bin hugo
-          rm hugo.tar.gz
+            src/sql-lexer
+      - run: ci/deploy_website/install-tools.sh
       - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: arn:aws:iam::834237029485:role/GithubActionsDocsDeploy

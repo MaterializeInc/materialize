@@ -1,7 +1,7 @@
 
 <table border="0" style="width:100%; border-collapse: collapse;">
   <tr>
-{{range $index, $keyword := split (readFile ("sql-grammar/keywords.txt")) "\n"}}
+{{range $index, $keyword := split (resources.Get "sql-keywords.txt").Content "\n"}}
   {{if and (not (hasPrefix $keyword "#")) $keyword}}
     {{ if eq (mod $index 4) 0 }}
       </tr><tr>

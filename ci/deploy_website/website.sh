@@ -48,14 +48,9 @@ declare -A external_redirects=(
 )
 
 cd doc/user
-if [[ "$GITHUB_REPOSITORY" == "MaterializeInc/materialize" ]] && [[ "$GITHUB_REF_NAME" == self-managed-docs/* ]]; then
-    VERSION=${GITHUB_REF_NAME#self-managed-docs/}
-    hugo --gc --baseURL "/docs/self-managed/$VERSION" --destination "public/docs/self-managed/$VERSION"
-else
-    hugo --gc --baseURL /docs --destination public/docs
-    # Build skill docs to public/docs/markdown-docs/.
-    hugo --gc --baseURL /docs --config config.toml,config.skill.toml --disableKinds 404,sitemap,robotsTXT,taxonomy --destination public/docs/markdown-docs
-fi
+hugo --gc --baseURL /docs --destination public/docs
+# Build skill docs to public/docs/markdown-docs/.
+hugo --gc --baseURL /docs --config config.toml,config.skill.toml --disableKinds 404,sitemap,robotsTXT,taxonomy --destination public/docs/markdown-docs
 hugo deploy --maxDeletes -1
 
 touch empty
