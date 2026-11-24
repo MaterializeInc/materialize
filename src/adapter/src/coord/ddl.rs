@@ -1773,7 +1773,7 @@ impl Coordinator {
         F: Fn(&SystemVars) -> u32,
     {
         self.catalog().state().validate_resource_limit(
-            current_amount,
+            || current_amount,
             new_instances,
             resource_limit,
             resource_type,
@@ -1793,7 +1793,7 @@ impl Coordinator {
         F: Fn(&SystemVars) -> Numeric,
     {
         self.catalog().state().validate_resource_limit_numeric(
-            current_amount,
+            || current_amount,
             new_amount,
             resource_limit,
             resource_type,

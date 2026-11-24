@@ -72,6 +72,30 @@ ALTER SYSTEM SET max_objects_per_schema = 20
 > CREATE VIEW v as SELECT 1
 
 $ postgres-execute connection=mz_system
+ALTER SYSTEM SET max_tables = 0
+ALTER SYSTEM SET max_objects_per_schema = 3
+
+# Replacement has no net growth, even while the schema is above its quota.
+> CREATE OR REPLACE VIEW v AS SELECT 2
+
+> SELECT * FROM v
+2
+
+! CREATE VIEW extra_view AS SELECT 1
+contains:creating object would violate max_objects_per_schema limit (desired: 5, limit: 3, current: 4)
+
+! CREATE TABLE extra_table (a INT)
+contains:creating table would violate max_tables limit (desired: 5, limit: 0, current: 4)
+
+> DROP VIEW v
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET max_tables = 25
+ALTER SYSTEM SET max_objects_per_schema = 20
+
+> CREATE VIEW v AS SELECT 1
+
+$ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_clusters = 3
 
 > SHOW max_clusters
