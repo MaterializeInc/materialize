@@ -23,7 +23,8 @@ use k8s_openapi::{
     api::{
         apps::v1::Deployment,
         core::v1::{
-            Affinity, ConfigMap, Probe, ResourceRequirements, Service, ServiceAccount, Toleration,
+            Affinity, ConfigMap, Probe, ResourceRequirements, Secret, Service, ServiceAccount,
+            Toleration,
         },
         networking::v1::NetworkPolicy,
         policy::v1::PodDisruptionBudget,
@@ -33,7 +34,11 @@ use k8s_openapi::{
         CustomResourceColumnDefinition, CustomResourceDefinition,
     },
 };
-use kube::{Api, api::ListParams, runtime::watcher};
+use kube::{
+    Api,
+    api::ListParams,
+    runtime::{reflector::ObjectRef, watcher},
+};
 use tokio::signal::unix::{SignalKind, signal};
 
 use mz_cloud_provider::CloudProvider;
@@ -965,6 +970,35 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                             .labels("materialize.cloud/mz-resource-id")
                             .timeout(29),
                     );
+                // nginx reads the console's external certificate only at
+                // startup, so reconcile a console when its certificate Secret
+                // changes, which rolls its pods. Only `kubernetes.io/tls`
+                // Secrets are watched, to avoid listing every Secret in the
+                // cluster; other Secrets are noticed on the periodic requeue.
+                let consoles = controller.store();
+                let controller = controller.watches(
+                    Api::<Secret>::all(client.clone()),
+                    watcher::Config::default()
+                        .fields("type=kubernetes.io/tls")
+                        .timeout(29),
+                    move |secret: Secret| {
+                        let (Some(namespace), Some(name)) =
+                            (secret.metadata.namespace, secret.metadata.name)
+                        else {
+                            return Vec::new();
+                        };
+                        consoles
+                            .state()
+                            .into_iter()
+                            .filter(|console| {
+                                controller::console::console_uses_external_certificate_secret(
+                                    console, &namespace, &name,
+                                )
+                            })
+                            .map(|console| ObjectRef::from_obj(&*console))
+                            .collect()
+                    },
+                );
                 if has_cert_manager {
                     controller.owns(
                         Api::<Certificate>::all(client.clone()),

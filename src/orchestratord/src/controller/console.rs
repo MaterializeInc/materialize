@@ -14,8 +14,8 @@ use k8s_openapi::{
         core::v1::{
             Affinity, Capabilities, ConfigMap, ConfigMapVolumeSource, Container, ContainerPort,
             EnvVar, HTTPGetAction, KeyToPath, PodSecurityContext, PodSpec, PodTemplateSpec, Probe,
-            ResourceRequirements, SeccompProfile, SecretVolumeSource, SecurityContext, Service,
-            ServicePort, ServiceSpec, Toleration, Volume, VolumeMount,
+            ResourceRequirements, SeccompProfile, Secret, SecretVolumeSource, SecurityContext,
+            Service, ServicePort, ServiceSpec, Toleration, Volume, VolumeMount,
         },
         networking::v1::{
             IPBlock, NetworkPolicy, NetworkPolicyIngressRule, NetworkPolicyPeer, NetworkPolicyPort,
@@ -36,6 +36,7 @@ use kube::{
 };
 use maplit::btreemap;
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use tracing::{trace, warn};
 
 use crate::{
@@ -265,7 +266,23 @@ impl Context {
         }
     }
 
-    fn create_console_deployment_object(&self, console: &Console) -> Deployment {
+    /// The name of the Secret holding the console's external certificate, or
+    /// `None` when the console does not serve TLS.
+    fn external_certificate_secret_name(&self, console: &Console) -> Option<String> {
+        external_certificate_secret_name(
+            &self.config.default_certificate_specs.console_external,
+            &console.spec.external_certificate_spec,
+            console.external_certificate_secret_name(),
+        )
+    }
+
+    /// `external_cert_hash` is the [`external_certificate_hash`] of the
+    /// console's external certificate Secret, if it exists yet.
+    fn create_console_deployment_object(
+        &self,
+        console: &Console,
+        external_cert_hash: Option<&str>,
+    ) -> Deployment {
         let mut pod_template_labels = console.default_labels();
         pod_template_labels.insert(
             "materialize.cloud/name".to_owned(),
@@ -288,14 +305,23 @@ impl Context {
                 ..Default::default()
             },
         ];
-        let pod_template_annotations = self.config.enable_prometheus_scrape_annotations.then(|| {
-            btreemap! {
-                "prometheus.io/scrape".to_owned() => "true".to_string(),
-                "prometheus.io/port".to_owned() => self.config.console_internal_http_port.to_string(),
-                "prometheus.io/path".to_owned() => "/metrics".to_string(),
-                "prometheus.io/scheme".to_owned() => "http".to_string(),
-            }
-        });
+        let metrics_port = self.config.console_internal_http_port;
+        let mut pod_template_annotations =
+            self.config.enable_prometheus_scrape_annotations.then(|| {
+                btreemap! {
+                    "prometheus.io/scrape".to_owned() => "true".to_string(),
+                    "prometheus.io/port".to_owned() => metrics_port.to_string(),
+                    "prometheus.io/path".to_owned() => "/metrics".to_string(),
+                    "prometheus.io/scheme".to_owned() => "http".to_string(),
+                }
+            });
+        // nginx reads its certificate only at startup, so a changed
+        // certificate must roll the pods.
+        if let Some(hash) = external_cert_hash {
+            pod_template_annotations
+                .get_or_insert_default()
+                .insert(EXTERNAL_CERT_HASH_ANNOTATION.to_owned(), hash.to_owned());
+        }
 
         let scheme = match console.spec.balancerd.scheme {
             HttpConnectionScheme::Http => "http",
@@ -341,11 +367,7 @@ impl Context {
             ..Default::default()
         }];
 
-        let scheme = if let Some(secret_name) = external_certificate_secret_name(
-            &self.config.default_certificate_specs.console_external,
-            &console.spec.external_certificate_spec,
-            console.external_certificate_secret_name(),
-        ) {
+        let scheme = if let Some(secret_name) = self.external_certificate_secret_name(console) {
             volumes.push(Volume {
                 name: "external-certificate".to_owned(),
                 secret: Some(SecretVolumeSource {
@@ -621,6 +643,50 @@ ssl_certificate_key /nginx/tls/tls.key;",
     }
 }
 
+/// Pod template annotation holding a hash of the console's external
+/// certificate, so that a changed certificate rolls the console pods.
+pub const EXTERNAL_CERT_HASH_ANNOTATION: &str = "materialize.cloud/external-cert-hash";
+
+/// The keys of an external certificate Secret that nginx reads.
+const EXTERNAL_CERT_KEYS: [&str; 2] = ["tls.crt", "tls.key"];
+
+/// A hash of the certificate and key in an external certificate Secret, or
+/// `None` if the Secret holds neither.
+pub fn external_certificate_hash(secret: &Secret) -> Option<String> {
+    let data = secret.data.as_ref()?;
+    if !EXTERNAL_CERT_KEYS.iter().any(|key| data.contains_key(*key)) {
+        return None;
+    }
+    let mut hasher = Sha256::new();
+    for key in EXTERNAL_CERT_KEYS {
+        let value = data
+            .get(key)
+            .map(|value| value.0.as_slice())
+            .unwrap_or_default();
+        // Length-prefix each value so the boundary between them is unambiguous.
+        hasher.update(u64::try_from(value.len()).expect("fits").to_le_bytes());
+        hasher.update(value);
+    }
+    Some(hex::encode(hasher.finalize()))
+}
+
+/// Whether `console` may mount the Secret `name` in `namespace` as its
+/// external certificate.
+///
+/// This matches both a Secret named by `secretName` and the Secret
+/// cert-manager writes the operator-managed Certificate to. It does not
+/// consult the operator's default certificate specs, so it can match a
+/// console that serves no TLS; reconciling that console is harmless.
+pub fn console_uses_external_certificate_secret(
+    console: &Console,
+    namespace: &str,
+    name: &str,
+) -> bool {
+    console.meta().namespace.as_deref() == Some(namespace)
+        && (existing_certificate_secret(&console.spec.external_certificate_spec) == Some(name)
+            || console.external_certificate_secret_name() == name)
+}
+
 #[async_trait::async_trait]
 impl k8s_controller::Context for Context {
     type Resource = Console;
@@ -658,6 +724,7 @@ impl k8s_controller::Context for Context {
         let deployment_api: Api<Deployment> = Api::namespaced(client.clone(), &namespace);
         let service_api: Api<Service> = Api::namespaced(client.clone(), &namespace);
         let certificate_api: Api<Certificate> = Api::namespaced(client.clone(), &namespace);
+        let secret_api: Api<Secret> = Api::namespaced(client.clone(), &namespace);
         let pdb_api: Api<PodDisruptionBudget> = Api::namespaced(client.clone(), &namespace);
 
         // Reject an invalid certificate spec before the deployment mounts it.
@@ -683,7 +750,17 @@ impl k8s_controller::Context for Context {
 
         let step = metadata.step("deployment");
         trace!("creating new console deployment");
-        let console_deployment = self.create_console_deployment_object(console);
+        let external_cert_hash = match self.external_certificate_secret_name(console) {
+            // A Secret that does not exist yet, such as one cert-manager has
+            // not issued, gets no hash. The pods wait for it to be mounted,
+            // and the Secret watch reconciles again once it appears.
+            Some(name) => get_resource(&secret_api, &name)
+                .await?
+                .and_then(|secret| external_certificate_hash(&secret)),
+            None => None,
+        };
+        let console_deployment =
+            self.create_console_deployment_object(console, external_cert_hash.as_deref());
         self.fix_deployment(&deployment_api, &console_deployment)
             .await?;
         apply_resource(&deployment_api, &console_deployment).await?;
@@ -729,6 +806,7 @@ impl k8s_controller::Context for Context {
 
 #[cfg(test)]
 mod tests {
+    use k8s_openapi::ByteString;
     use mz_cloud_resources::crd::MaterializeExternalCertSpec;
     use mz_cloud_resources::crd::console::v1alpha1::ConsoleSpec;
 
@@ -774,7 +852,7 @@ mod tests {
             let mut context = test_context(false);
             context.config.enable_user_namespaces = enabled;
             let pod = context
-                .create_console_deployment_object(&test_console())
+                .create_console_deployment_object(&test_console(), None)
                 .spec
                 .unwrap()
                 .template
@@ -788,7 +866,7 @@ mod tests {
     fn metrics_listener_is_exposed_and_annotated_when_enabled() {
         for annotate in [false, true] {
             let deployment =
-                test_context(annotate).create_console_deployment_object(&test_console());
+                test_context(annotate).create_console_deployment_object(&test_console(), None);
             let template = deployment.spec.unwrap().template;
             let container = &template.spec.unwrap().containers[0];
 
@@ -830,7 +908,7 @@ mod tests {
                 .is_none()
         );
         let pod = context
-            .create_console_deployment_object(&console)
+            .create_console_deployment_object(&console, None)
             .spec
             .unwrap()
             .template
@@ -854,5 +932,103 @@ mod tests {
         assert!(listener.starts_with("listen 8080 ssl;"), "{listener}");
         assert!(listener.contains("ssl_certificate /nginx/tls/tls.crt;"));
         assert!(listener.contains("ssl_certificate_key /nginx/tls/tls.key;"));
+    }
+
+    fn tls_secret(cert: &str, key: &str) -> Secret {
+        Secret {
+            data: Some(btreemap! {
+                "tls.crt".to_owned() => ByteString(cert.as_bytes().to_vec()),
+                "tls.key".to_owned() => ByteString(key.as_bytes().to_vec()),
+                "ca.crt".to_owned() => ByteString(b"ca".to_vec()),
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[mz_ore::test]
+    fn external_certificate_hash_tracks_cert_and_key() {
+        let hash = external_certificate_hash(&tls_secret("cert", "key")).unwrap();
+        assert_eq!(
+            external_certificate_hash(&tls_secret("cert", "key")).as_ref(),
+            Some(&hash)
+        );
+        assert_ne!(
+            external_certificate_hash(&tls_secret("cert2", "key")).as_ref(),
+            Some(&hash)
+        );
+        assert_ne!(
+            external_certificate_hash(&tls_secret("cert", "key2")).as_ref(),
+            Some(&hash)
+        );
+        // Moving bytes between the values changes the hash.
+        assert_ne!(
+            external_certificate_hash(&tls_secret("cer", "tkey")).as_ref(),
+            Some(&hash)
+        );
+        // Other keys do not affect it.
+        let mut secret = tls_secret("cert", "key");
+        secret
+            .data
+            .as_mut()
+            .unwrap()
+            .insert("ca.crt".to_owned(), ByteString(b"other".to_vec()));
+        assert_eq!(external_certificate_hash(&secret), Some(hash));
+        assert_eq!(external_certificate_hash(&Secret::default()), None);
+    }
+
+    #[mz_ore::test]
+    fn external_certificate_hash_annotates_pod_template() {
+        let annotation = |console: &Console, hash: Option<&str>| {
+            test_context(false)
+                .create_console_deployment_object(console, hash)
+                .spec
+                .unwrap()
+                .template
+                .metadata
+                .and_then(|meta| meta.annotations)
+                .and_then(|annotations| annotations.get(EXTERNAL_CERT_HASH_ANNOTATION).cloned())
+        };
+        let mut console = test_console();
+        console.spec.external_certificate_spec = Some(MaterializeExternalCertSpec {
+            secret_name: Some("wildcard-tls".to_owned()),
+            ..Default::default()
+        });
+        let hash_a = external_certificate_hash(&tls_secret("a", "key")).unwrap();
+        let hash_b = external_certificate_hash(&tls_secret("b", "key")).unwrap();
+        assert_eq!(annotation(&console, Some(&hash_a)), Some(hash_a.clone()));
+        assert_eq!(annotation(&console, Some(&hash_b)), Some(hash_b));
+        // No external certificate, so no Secret to hash.
+        let console = test_console();
+        assert_eq!(
+            test_context(false).external_certificate_secret_name(&console),
+            None
+        );
+        assert_eq!(annotation(&console, None), None);
+    }
+
+    #[mz_ore::test]
+    fn console_uses_external_certificate_secret_matches() {
+        let mut console = test_console();
+        let managed = console.external_certificate_secret_name();
+        assert!(console_uses_external_certificate_secret(
+            &console, "test", &managed
+        ));
+        assert!(!console_uses_external_certificate_secret(
+            &console, "other", &managed
+        ));
+        assert!(!console_uses_external_certificate_secret(
+            &console,
+            "test",
+            "wildcard-tls"
+        ));
+        console.spec.external_certificate_spec = Some(MaterializeExternalCertSpec {
+            secret_name: Some("wildcard-tls".to_owned()),
+            ..Default::default()
+        });
+        assert!(console_uses_external_certificate_secret(
+            &console,
+            "test",
+            "wildcard-tls"
+        ));
     }
 }
