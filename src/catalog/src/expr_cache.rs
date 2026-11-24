@@ -532,6 +532,8 @@ impl ExpressionCacheHandle {
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::time::Duration;
 
     use bytes::Bytes;
     use mz_compute_types::dataflows::{DataflowDescription, IndexDesc, IndexImport};
@@ -803,6 +805,79 @@ mod tests {
                 "Previous build version global expressions should be cleared"
             );
         }
+    }
+
+    /// Opens the cache read-only while a leader writes it back to back. With 2000 entries, every
+    /// open attempt takes longer than one leader write, so an open that wrote the shard would lose
+    /// every compare-and-append.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn read_only_open_during_leader_writes() {
+        let leader_build_version = Version::new(0, 1, 0);
+        let new_build_version = Version::new(0, 2, 0);
+        let persist = PersistClient::new_for_tests().await;
+        let shard_id = ShardId::new();
+        let dyncfgs = mz_persist_client::cfg::all_dyncfgs(ConfigSet::default());
+        let config = |build_version: &Version, current_items, read_only| ExpressionCacheConfig {
+            build_version: build_version.clone(),
+            persist: persist.clone(),
+            shard_id,
+            current_items,
+            read_only,
+            compact_shard: false,
+            dyncfgs: dyncfgs.clone(),
+        };
+
+        let (mut leader, _, _) =
+            ExpressionCache::open(config(&leader_build_version, BTreeMap::new(), false)).await;
+
+        // An earlier boot at the new build version cached 2000 items, and the leader has since
+        // dropped half of them.
+        let (mut earlier_boot, _, _) =
+            ExpressionCache::open(config(&new_build_version, BTreeMap::new(), true)).await;
+        let cached: Vec<_> = (0..2000)
+            .map(|id| (GlobalId::User(id), gen_local_expressions()))
+            .collect();
+        earlier_boot
+            .update(cached.clone(), Vec::new(), BTreeSet::new())
+            .await;
+        let current: BTreeMap<_, _> = cached[1000..].iter().cloned().collect();
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let writes = Arc::new(AtomicU64::new(0));
+        let leader_task = mz_ore::task::spawn(|| "leader", {
+            let (stop, writes) = (Arc::clone(&stop), Arc::clone(&writes));
+            async move {
+                for id in 1_000_000.. {
+                    if stop.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    let local = vec![(GlobalId::User(id), gen_local_expressions())];
+                    leader.update(local, Vec::new(), BTreeSet::new()).await;
+                    writes.fetch_add(1, Ordering::SeqCst);
+                }
+            }
+        });
+        while writes.load(Ordering::SeqCst) < 10 {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+
+        let current_items = current
+            .keys()
+            .map(|id| (*id, RelationVersion::root()))
+            .collect();
+        let (_cache, local_exprs, _) = tokio::time::timeout(
+            Duration::from_secs(60),
+            ExpressionCache::open(config(&new_build_version, current_items, true)),
+        )
+        .await
+        .expect("open should not hang");
+        stop.store(true, Ordering::SeqCst);
+        leader_task.await;
+        assert_eq!(
+            local_exprs, current,
+            "a read-only open should return the entries of exactly the current items"
+        );
     }
 
     #[mz_ore::test]
