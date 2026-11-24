@@ -57,6 +57,8 @@ class Benchmark:
         # populated is gated by self._measure_memory.
         self._memory_mz_aggregation = aggregation_class()
         self._memory_clusterd_aggregation = aggregation_class()
+        self._memory_peak_mz_aggregation = aggregation_class()
+        self._memory_peak_clusterd_aggregation = aggregation_class()
 
         # Each measurement stream gets its own filter so the warmup discard
         # counter is not shared. self._filter is the performance stream; a
@@ -65,6 +67,8 @@ class Benchmark:
         # one warmup iteration instead of three.
         self._memory_mz_filter = copy.deepcopy(filter)
         self._memory_clusterd_filter = copy.deepcopy(filter)
+        self._memory_peak_mz_filter = copy.deepcopy(filter)
+        self._memory_peak_clusterd_filter = copy.deepcopy(filter)
 
     def create_scenario_instance(self) -> Scenario:
         scale = self._scenario_cls.SCALE
@@ -102,6 +106,15 @@ class Benchmark:
         # Run the init() section once for each Mz
         self.run_init(scenario)
 
+        try:
+            return self._run_iterations(scenario, start_time)
+        finally:
+            if self._measure_memory:
+                self._executor.MemPeakStop()
+
+    def _run_iterations(
+        self, scenario: Scenario, start_time: float
+    ) -> list[Aggregation]:
         i = 0
         while True:
             # Run the before() section once for each measurement
@@ -119,6 +132,8 @@ class Benchmark:
                     self._performance_aggregation,
                     self._memory_mz_aggregation,
                     self._memory_clusterd_aggregation,
+                    self._memory_peak_mz_aggregation,
+                    self._memory_peak_clusterd_aggregation,
                 ]
 
             i = i + 1
@@ -167,6 +182,11 @@ class Benchmark:
         print(
             f"Running the benchmark for scenario {scenario.name()} with {self._mz_version} ..."
         )
+        # The peak window covers benchmark() only, so before() and init() work
+        # does not count toward the iteration's peak.
+        if self._measure_memory:
+            self._executor.MemPeakWindowStart()
+
         # Collect timestamps from any part of the workload being benchmarked
         timestamps: list[WallclockDuration] = []
         benchmark = scenario.benchmark()
@@ -189,18 +209,39 @@ class Benchmark:
         self._collect_performance_measurement(i, performance_measurement)
 
         if self._measure_memory:
-            self._collect_memory_measurement(
-                i,
-                MeasurementType.MEMORY_MZ,
-                self._memory_mz_aggregation,
-                self._memory_mz_filter,
-            )
-            self._collect_memory_measurement(
-                i,
-                MeasurementType.MEMORY_CLUSTERD,
-                self._memory_clusterd_aggregation,
-                self._memory_clusterd_filter,
-            )
+            # One post-workload reading per container feeds both its current
+            # and its peak measurement, so the peak is never below the current.
+            mem_mz = self._executor.DockerMemMz()
+            mem_clusterd = self._executor.DockerMemClusterd()
+            for measurement_type, value, aggregation, filter in [
+                (
+                    MeasurementType.MEMORY_MZ,
+                    mem_mz,
+                    self._memory_mz_aggregation,
+                    self._memory_mz_filter,
+                ),
+                (
+                    MeasurementType.MEMORY_CLUSTERD,
+                    mem_clusterd,
+                    self._memory_clusterd_aggregation,
+                    self._memory_clusterd_filter,
+                ),
+                (
+                    MeasurementType.MEMORY_PEAK_MZ,
+                    self._executor.DockerMemPeakMz(mem_mz),
+                    self._memory_peak_mz_aggregation,
+                    self._memory_peak_mz_filter,
+                ),
+                (
+                    MeasurementType.MEMORY_PEAK_CLUSTERD,
+                    self._executor.DockerMemPeakClusterd(mem_clusterd),
+                    self._memory_peak_clusterd_aggregation,
+                    self._memory_peak_clusterd_filter,
+                ),
+            ]:
+                self._collect_memory_measurement(
+                    i, measurement_type, value, aggregation, filter
+                )
 
         return performance_measurement
 
@@ -228,15 +269,10 @@ class Benchmark:
         self,
         i: int,
         memory_measurement_type: MeasurementType,
+        value: int,
         aggregation: Aggregation,
         filter: Filter,
     ) -> None:
-        if memory_measurement_type == MeasurementType.MEMORY_MZ:
-            value = self._executor.DockerMemMz()
-        elif memory_measurement_type == MeasurementType.MEMORY_CLUSTERD:
-            value = self._executor.DockerMemClusterd()
-        else:
-            raise ValueError(f"Unknown measurement type {memory_measurement_type}")
         memory_measurement = Measurement(
             type=memory_measurement_type,
             value=value / 2**20,  # Convert to Mb

@@ -152,7 +152,16 @@ output until reliably reproduced locally.
 
 If started with `--measure-memory`, the feature benchmark will measure memory consumption and report any regressions.
 
-`docker stats` is used to measure the memory consumption of the entire Materialize container, which includes CRDB.
+For each iteration the framework records:
+
+* `memory_mz` / `memory_clusterd`: cgroup `memory.current` of the materialized
+  and clusterd containers, sampled once after the workload completes.
+* `peak_mz` / `peak_clusterd`: the maximum cgroup memory usage of the
+  materialized and clusterd containers while the measured workload runs.
+  A background `docker exec` samples `memory.current` every 50 ms, so
+  spikes shorter than that can be missed. The framework samples instead of
+  reading `memory.peak` because an unprivileged container cannot reset its
+  own cgroup's peak.
 
 # Troubleshooting
 
