@@ -614,7 +614,7 @@ mod tests {
                     "table",
                     MAX_TABLES.name(),
                 )
-                .unwrap();
+                .expect("nonpositive growth does not consume quota");
         }
 
         let overflow = format!("more than {}", i64::MAX);
@@ -670,7 +670,7 @@ mod tests {
                     "cluster replica",
                     MAX_CREDIT_CONSUMPTION_RATE.name(),
                 )
-                .unwrap();
+                .expect("nonpositive growth does not consume quota");
         }
         for delta in [1, 2] {
             let calls = Cell::new(0);
@@ -686,7 +686,7 @@ mod tests {
             );
             assert_eq!(calls.get(), 1);
             if delta == 1 {
-                result.unwrap();
+                result.expect("growth within the quota is allowed");
             } else {
                 let Err(AdapterError::ResourceExhaustion {
                     resource_type,
