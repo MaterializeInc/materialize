@@ -21,9 +21,9 @@ out=$(mktemp)
 trap 'rm -f "$out"' EXIT
 
 # Runs on the agent host before ci-builder exists, so it needs only git, tar,
-# docker and jq. Lockfiles go in on stdin rather than a mount, so the scanner
-# can't touch the checkout. osv-scanner exits 1 for any vulnerability, so only
-# 2+ is an error.
+# curl, docker and jq. Lockfiles go in on stdin rather than a mount, so the
+# scanner can't touch the checkout. osv-scanner exits 1 for any vulnerability,
+# so only 2+ is an error.
 status=0
 git ls-files -z -- '*Cargo.lock' '*package-lock.json' '*yarn.lock' \
     '*requirements*.txt' '*uv.lock' '*pom.xml' '*Gemfile.lock' \
@@ -33,6 +33,20 @@ git ls-files -z -- '*Cargo.lock' '*package-lock.json' '*yarn.lock' \
     -c 'mkdir /tmp/src && tar -xf - -C /tmp/src && exec /osv-scanner scan source -r --format json /tmp/src' \
     > "$out" || status=$?
 if [ "$status" -gt 1 ]; then
+    # Fail open only when osv.dev itself is down. Any other scanner error,
+    # such as a crash on a crafted lockfile, still fails the build.
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
+        -d '{}' https://api.osv.dev/v1/query || true)
+    case $code in
+    000 | 5??)
+        msg="osv.dev is unavailable (HTTP $code), so the malicious-dependency check was skipped"
+        echo "$msg" >&2
+        if command -v buildkite-agent > /dev/null; then
+            buildkite-agent annotate --style warning --context malicious-deps "$msg" || true
+        fi
+        exit 0
+        ;;
+    esac
     echo "osv-scanner failed with exit $status" >&2
     exit "$status"
 fi
