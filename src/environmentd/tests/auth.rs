@@ -3324,6 +3324,21 @@ async fn test_auth_admin_superuser_revoked() {
         "off"
     );
 
+    // The WebSocket survives the successful refreshes above.
+    ws.send(Message::Text(r#"{"query": "SHOW is_superuser"}"#.into()))
+        .unwrap();
+    let row = loop {
+        match ws.read().unwrap() {
+            Message::Text(msg) => {
+                if let WebSocketResponse::Row(row) = serde_json::from_str(&msg).unwrap() {
+                    break row;
+                }
+            }
+            msg => panic!("unexpected: {msg}"),
+        }
+    };
+    assert_eq!(row[0].to_string(), "\"off\"");
+
     // Losing `REQUIRED_PERMISSION` fails the next refresh, which closes the WebSocket.
     frontegg_server
         .role_updates_tx
