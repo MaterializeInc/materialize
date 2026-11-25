@@ -6565,9 +6565,9 @@ def workflow_test_adhoc_system_indexes(
         WHERE i.name = 'mz_test_idx1'
         """)
     assert output[0] == ("u1", "mz_tables", "mz_catalog_server"), output
-    output = c.sql_query("EXPLAIN SELECT * FROM mz_tables WHERE char_length(name) = 8")
+    output = c.sql_query("EXPLAIN SELECT * FROM mz_tables WHERE char_length(name) = 12")
     assert "mz_test_idx1" in output[0][0], output
-    output = c.sql_query("SELECT * FROM mz_tables WHERE char_length(name) = 8")
+    output = c.sql_query("SELECT * FROM mz_tables WHERE char_length(name) = 12")
     assert len(output) > 0
 
     # The system user should be able to create a new index on an unstable

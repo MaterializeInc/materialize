@@ -4149,6 +4149,51 @@ mod tests {
         }
     }
 
+    // Make sure the typlen from `from_builtin_oid` equals the one pgwire sends.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn test_builtin_type_typlen_known_and_matches_pgwire() {
+        Catalog::with_debug(|catalog| async move {
+            let conn_catalog = catalog.for_system_session();
+
+            for ty in BUILTINS::types() {
+                let id = conn_catalog
+                    .resolve_type(&PartialItemName {
+                        database: None,
+                        schema: Some(ty.schema.into()),
+                        item: ty.name.to_string(),
+                    })
+                    .expect("unable to resolve type")
+                    .id();
+                let builtin_type = mz_pgrepr::Type::from_builtin_oid(ty.oid);
+                if !matches!(ty.details.typ, CatalogType::Pseudo) {
+                    assert!(
+                        builtin_type.is_some(),
+                        "mz_pgrepr::Type::from_builtin_oid does not know {}, so mz_builtin_types would report a NULL typlen for it",
+                        ty.name
+                    );
+                }
+                let Some(builtin_type) = builtin_type else {
+                    continue;
+                };
+                let Ok(scalar_type) =
+                    mz_sql::plan::scalar_type_from_catalog(&conn_catalog, id, &[])
+                else {
+                    continue;
+                };
+                let pgwire_typlen = mz_pgrepr::Type::from(&scalar_type).typlen();
+                let builtin_typlen = builtin_type.typlen();
+                assert_eq!(
+                    builtin_typlen, pgwire_typlen,
+                    "type {} has typlen {} in mz_builtin_types but pgwire sends {}",
+                    ty.name, builtin_typlen, pgwire_typlen,
+                );
+            }
+            catalog.expire().await;
+        })
+        .await;
+    }
+
     // Make sure pg views don't use types that only exist in Materialize.
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`

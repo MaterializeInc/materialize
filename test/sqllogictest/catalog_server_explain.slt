@@ -469,7 +469,45 @@ mz_catalog.mz_types_ind:
   →Arrange (#2{schema_id})
     →Stream mz_catalog.mz_types
 
-Source mz_catalog.mz_types
+mz_catalog.mz_types:
+  →Union
+    →Read mz_internal.mz_catalog_items
+    →Delta Join [%0[#1{schema_name}, #2{name}] » %1:mz_builtin_object_mappings[#0{schema_name}, #1{name}] » %2:mz_schemas[#1{name}]] [%1:mz_builtin_object_mappings[#0{schema_name}] » %0[#1{schema_name}, #2{name}] » %2:mz_schemas[#1{name}]] [%2:mz_schemas[#1{name}] » %1:mz_builtin_object_mappings[#0{schema_name}] » %0[#1{schema_name}, #2{name}]]
+      path %0:
+        Final closure:
+          Project: #3, #0, #4, #1, #2, #6, #5, #7, #7
+          Map: {=U/s1, s1=U/s1}, "s1", null
+      path %1:
+        Final closure:
+          Project: #3, #0, #4, #1, #2, #6, #5, #7, #7
+          Map: {=U/s1, s1=U/s1}, "s1", null
+      path %2:
+        Final closure:
+          Project: #3, #0, #4, #1, #2, #6, #5, #7, #7
+          Map: {=U/s1, s1=U/s1}, "s1", null
+      →Arrange (#1{schema_name}, #2{name})
+        →Constant (90 rows)
+      →Arrange (#0{schema_name}) (#0{schema_name}, #1{name})
+        →Fused with Child Map/Filter/Project
+          Project: #0, #1, #3
+          Filter: (#2{object_type} = "7")
+            →Arranged mz_internal.mz_builtin_object_mappings
+              Key: (#0{schema_name}, #1{name})
+      →Arrange (#1{name})
+        →Fused with Child Map/Filter/Project
+          Project: #1, #3
+          Filter: (#0{database_id}) IS NULL
+            →Arranged mz_catalog.mz_schemas
+              Key: (#2{database_id})
+
+Source mz_internal.mz_catalog_items
+  project=(#0, #2..=#4, #12, #5, #6, #9, #10)
+  filter=((#8{type} = "type"))
+  map=(coalesce((#11{details} ->> "category"), ""))
+
+Used Indexes:
+  - mz_internal.mz_builtin_object_mappings_ind (*** full scan ***)
+  - mz_catalog.mz_schemas_ind (*** full scan ***)
 
 Target cluster: mz_catalog_server
 
@@ -2982,10 +3020,10 @@ mz_internal.mz_show_types:
             →Arranged mz_catalog.mz_types
               Key: (#2{schema_id})
     cte l1 =
-      →Differential Join %0:l0[#0{id}] » %1:mz_comments[#0{id}]
-        after %1:
-          Project: #0..=#2, #5
-          Filter: (#3{object_type} = "type") AND (#4{object_sub_id}) IS NULL
+      →Differential Join %1:mz_comments[#0{id}] » %0:l0[#0{id}]
+        after %0:
+          Project: #0, #4, #5, #3
+          Filter: (#1{object_type} = "type") AND (#2{object_sub_id}) IS NULL
         →Arranged l0
         →Arranged mz_internal.mz_comments
   →Return
@@ -4360,16 +4398,45 @@ mz_internal.pg_type_all_databases_ind:
 mz_internal.pg_type_all_databases:
   →With
     cte l0 =
+      →Arranged mz_internal.mz_builtin_object_mappings
+    cte l1 =
+      →Delta Join [%0[#0{schema_name}, #1{name}] » %1:l0[#0{schema_name}, #1{name}] » %2:l0[#0{schema_name}, #1{name}]] [%1:l0[#0{schema_name}, #1{name}] » %0[#0{schema_name}, #1{name}] » %2:l0[#0{schema_name}, #1{name}]] [%2:l0[#0{schema_name}, #1{name}] » %0[#2{element_schema_name}, #3{element_name}] » %1:l0[#0{schema_name}, #1{name}]]
+        path %0:
+          after %1:
+            Project: #2, #3, #5
+            Filter: (#4{object_type} = "7")
+          after %2:
+            Project: #2, #4
+            Filter: (#3{object_type} = "7")
+        path %1:
+          after %2:
+            Project: #2, #4
+            Filter: (#3{object_type} = "7")
+        path %2:
+          after %1:
+            Project: #4, #2
+            Filter: (#3{object_type} = "7")
+        →Arrange (#0{schema_name}, #1{name}) (#2{element_schema_name}, #3{element_name})
+          →Constant (38 rows)
+        →Arranged l0
+        →Arranged l0
+    cte l2 =
       →Arrange (#0{id})
         →Fused with Parent Map/Filter/Project
           Project: #1, #2, #0, #3..=#8
           →Arranged mz_catalog.mz_types
-    cte l1 =
-      →Differential Join %0:l0[#0{id}] » %1:mz_type_pg_metadata[#0{id}]
-        →Arranged l0
-        →Arrange (#0{id})
-          →Stream mz_internal.mz_type_pg_metadata
-    cte l2 =
+    cte l3 =
+      →Delta Join [%0:l2[#0{id}] » %2:mz_builtin_object_mappings[#2{id}] » %1[#0{schema_name}, #1{name}]] [%1[#0{schema_name}, #1{name}] » %2:mz_builtin_object_mappings[#0{schema_name}, #1{name}] » %0:l2[#0{id}]] [%2:mz_builtin_object_mappings[#0{schema_name}, #1{name}] » %1[#0{schema_name}, #1{name}] » %0:l2[#0{id}]]
+        →Arranged l2
+        →Arrange (#0{schema_name}, #1{name})
+          →Constant (77 rows)
+        →Arrange (#0{schema_name}, #1{name}) (#2{id})
+          →Fused with Child Map/Filter/Project
+            Project: #0, #1, #3
+            Filter: (#2{object_type} = "7")
+              →Arranged mz_internal.mz_builtin_object_mappings
+                Key: (#0{schema_name}, #1{name})
+    cte l4 =
       →Delta Join [%0[#0{id}] » %1:mz_schemas[#0{id}] » %2[#0{id}]] [%1:mz_schemas[#0{id}] » %0[#2{schema_id}] » %2[#0{id}]] [%2[#0{id}] » %0[#0{id}] » %1:mz_schemas[#0{id}]]
         →Arrange (#0{id}) (#2{schema_id})
           →Union
@@ -4378,19 +4445,19 @@ mz_internal.pg_type_all_databases:
               Map: null, null, null, null, null
                 →Consolidating Union
                   →Negate Diffs
-                    →Differential Join %1[#0] » %0:l0[#0{id}]
-                      →Arranged l0
+                    →Differential Join %1[#0] » %0:l2[#0{id}]
+                      →Arranged l2
                       →Distinct GroupAggregate
                         →Fused with Child Map/Filter/Project
                           Project: #0
-                            →Read l1
+                            →Read l3
                   →Unarranged Raw Stream
                     →Fused with Parent Map/Filter/Project
                       Project: #1, #2, #0, #3..=#8
                       →Arranged mz_catalog.mz_types
             →Fused with Child Map/Filter/Project
               Project: #0..=#8, #0, #9..=#12
-                →Read l1
+                →Read l3
         →Arrange (#0{id})
           →Fused with Parent Map/Filter/Project
             Project: #1, #2, #0, #3..=#5
@@ -4400,25 +4467,56 @@ mz_internal.pg_type_all_databases:
             →Fused with Child Map/Filter/Project
               Project: #0, #2
               Map: "a"
-                →Read mz_catalog.mz_array_types
-            →Read mz_catalog.mz_base_types
+                →Read l1
+            →Map/Filter/Project
+              Project: #0, #1
+              Map: "b"
+                →Union
+                  →Differential Join %0[#0{schema_name}, #1{name}] » %1:l0[#0{schema_name}, #1{name}]
+                    after %1:
+                      Project: #3
+                      Filter: (#2{object_type} = "7")
+                    →Arrange (#0{schema_name}, #1{name})
+                      →Constant (37 rows)
+                    →Arranged l0
+                  →Fused with Child Map/Filter/Project
+                    Project: #0
+                    Filter: (#8{type} = "type") AND ("record" = (#9{details} ->> "type_kind"))
+                      →Arranged mz_internal.mz_catalog_item_metadata
+                        Key: (#0{id})
             →Fused with Child Map/Filter/Project
-              Project: #0, #2
+              Project: #0, #10
+              Filter: (#8{type} = "type") AND ("list" = (#9{details} ->> "type_kind"))
               Map: "l"
-                →Read mz_catalog.mz_list_types
-            →Read mz_catalog.mz_map_types
-            →Read mz_catalog.mz_pseudo_types
-    cte l3 =
-      →Differential Join %1:mz_databases[#0] » %0:l2[#15{database_id}]
+                →Arranged mz_internal.mz_catalog_item_metadata
+                  Key: (#0{id})
+            →Fused with Child Map/Filter/Project
+              Project: #0, #10
+              Filter: (#8{type} = "type") AND ("map" = (#9{details} ->> "type_kind"))
+              Map: "m"
+                →Arranged mz_internal.mz_catalog_item_metadata
+                  Key: (#0{id})
+            →Differential Join %0[#0{schema_name}, #1{name}] » %1:l0[#0{schema_name}, #1{name}]
+              after %1:
+                Project: #3
+                Filter: (#2{object_type} = "7")
+              Final closure:
+                Project: #0, #1
+                Map: "p"
+              →Arrange (#0{schema_name}, #1{name})
+                →Constant (15 rows)
+              →Arranged l0
+    cte l5 =
+      →Differential Join %1:mz_databases[#0] » %0:l4[#15{database_id}]
         →Arrange (#15{database_id})
           →Fused with Child Map/Filter/Project
             Filter: (#15{database_id}) IS NOT NULL
-              →Read l2
+              →Read l4
         →Arrange (#0)
           →Fused with Parent Map/Filter/Project
             Project: #1, #2, #0, #3, #4
             →Arranged mz_catalog.mz_databases
-    cte l4 =
+    cte l6 =
       →Differential Join %1:mz_roles[#0{id}] » %0[#5{owner_id}]
         →Arrange (#5{owner_id})
           →Union
@@ -4429,56 +4527,39 @@ mz_internal.pg_type_all_databases:
                   →Negate Diffs
                     →Fused with Child Map/Filter/Project
                       Project: #0..=#13, #2, #14..=#18, #0, #19
-                        →Read l3
+                        →Read l5
                   →Fused with Child Map/Filter/Project
                     Project: #0..=#13, #2, #14..=#18, #0, #19
-                      →Read l2
+                      →Read l4
             →Fused with Child Map/Filter/Project
               Project: #0..=#13, #2, #14..=#18, #0, #19, #15, #20..=#23
-                →Read l3
+                →Read l5
         →Arranged mz_catalog.mz_roles
-    cte l5 =
+    cte l7 =
       →Distinct GroupAggregate
-        →Stream l4
-    cte l6 =
+        →Stream l6
+    cte l8 =
       →Distinct GroupAggregate
         →Fused with Child Map/Filter/Project
           Project: #0
-            →Arranged l5
+            →Arranged l7
               Key: (#0..=#31)
-    cte l7 =
-      →Arranged l6
-    cte l8 =
-      →Arrange (#0{id}) (#1{element_id})
-        →Stream mz_catalog.mz_array_types
     cte l9 =
+      →Arranged l8
+    cte l10 =
+      →Arrange (#0{id}) (#1{element_id})
+        →Stream l1
+    cte l11 =
       →Arrange (#0{id})
         →Fused with Child Map/Filter/Project
           Project: #1, #2
             →Arranged mz_catalog.mz_types
               Key: (#2{schema_id})
-    cte l10 =
-      →Delta Join [%0:l7[#0] » %1:l8[#0{id}] » %2:l9[#0{id}]] [%1:l8[#0{id}] » %0:l7[#0] » %2:l9[#0{id}]] [%2:l9[#0{id}] » %1:l8[#1{element_id}] » %0:l7[#0]]
-        →Arranged l7
-        →Arranged l8
-        →Arranged l9
-    cte l11 =
-      →Union
-        →Stream l10
-        →Fused with Child Map/Filter/Project
-          Project: #0, #2
-            →Table Function guard_subquery_size(#1)
-              →Accumulable GroupAggregate
-                Simple aggregates: count(*)
-                →Fused with Child Map/Filter/Project
-                  Project: #0
-                    →Read l10
     cte l12 =
-      →Delta Join [%0:l7[#0] » %1:mz_list_types[#0{id}] » %2:l9[#0{id}]] [%1:mz_list_types[#0{id}] » %0:l7[#0] » %2:l9[#0{id}]] [%2:l9[#0{id}] » %1:mz_list_types[#1{element_id}] » %0:l7[#0]]
-        →Arranged l7
-        →Arrange (#0{id}) (#1{element_id})
-          →Read mz_catalog.mz_list_types
+      →Delta Join [%0:l9[#0] » %1:l10[#0{id}] » %2:l11[#0{id}]] [%1:l10[#0{id}] » %0:l9[#0] » %2:l11[#0{id}]] [%2:l11[#0{id}] » %1:l10[#1{element_id}] » %0:l9[#0]]
         →Arranged l9
+        →Arranged l10
+        →Arranged l11
     cte l13 =
       →Union
         →Stream l12
@@ -4491,18 +4572,19 @@ mz_internal.pg_type_all_databases:
                   Project: #0
                     →Read l12
     cte l14 =
-      →Distinct GroupAggregate
-        →Fused with Child Map/Filter/Project
-          Project: #0
-            →Read l4
-    cte l15 =
-      →Delta Join [%0:l14[#0] » %1:l8[#1{element_id}] » %2:l9[#0{id}]] [%1:l8[#0{id}] » %0:l14[#0] » %2:l9[#0{id}]] [%2:l9[#0{id}] » %1:l8[#0{id}] » %0:l14[#0]]
-        →Arranged l14
-        →Arranged l8
+      →Delta Join [%0:l9[#0] » %1:mz_catalog_item_metadata[#0{id}] » %2:l11[#0{id}]] [%1:mz_catalog_item_metadata[#0{id}] » %0:l9[#0] » %2:l11[#0{id}]] [%2:l11[#0{id}] » %1:mz_catalog_item_metadata[#1{element_id}] » %0:l9[#0]]
         →Arranged l9
-    cte l16 =
+        →Arrange (#0{id}) (#1{element_id})
+          →Fused with Child Map/Filter/Project
+            Project: #0, #10
+            Filter: (#8{type} = "type") AND ("list" = (#9{details} ->> "type_kind"))
+            Map: coalesce((#9{details} ->> "element_id"), "")
+              →Arranged mz_internal.mz_catalog_item_metadata
+                Key: (#0{id})
+        →Arranged l11
+    cte l15 =
       →Union
-        →Stream l15
+        →Stream l14
         →Fused with Child Map/Filter/Project
           Project: #0, #2
             →Table Function guard_subquery_size(#1)
@@ -4510,9 +4592,30 @@ mz_internal.pg_type_all_databases:
                 Simple aggregates: count(*)
                 →Fused with Child Map/Filter/Project
                   Project: #0
-                    →Read l15
+                    →Read l14
+    cte l16 =
+      →Distinct GroupAggregate
+        →Fused with Child Map/Filter/Project
+          Project: #0
+            →Read l6
+    cte l17 =
+      →Delta Join [%0:l16[#0] » %1:l10[#1{element_id}] » %2:l11[#0{id}]] [%1:l10[#0{id}] » %0:l16[#0] » %2:l11[#0{id}]] [%2:l11[#0{id}] » %1:l10[#0{id}] » %0:l16[#0]]
+        →Arranged l16
+        →Arranged l10
+        →Arranged l11
+    cte l18 =
+      →Union
+        →Stream l17
+        →Fused with Child Map/Filter/Project
+          Project: #0, #2
+            →Table Function guard_subquery_size(#1)
+              →Accumulable GroupAggregate
+                Simple aggregates: count(*)
+                →Fused with Child Map/Filter/Project
+                  Project: #0
+                    →Read l17
   →Return
-    →Delta Join [%0:l4[#0..=#31] » %1:l5[#0..=#31] » %2[#0] » %3[#0] » %4[#0]] [%1:l5[#0] » %0:l4[#0..=#31] » %2[#0] » %3[#0] » %4[#0]] [%2[#0] » %1:l5[#0] » %0:l4[#0..=#31] » %3[#0] » %4[#0]] [%3[#0] » %1:l5[#0] » %0:l4[#0..=#31] » %2[#0] » %4[#0]] [%4[#0] » %1:l5[#0] » %0:l4[#0..=#31] » %2[#0] » %3[#0]]
+    →Delta Join [%0:l6[#0..=#31] » %1:l7[#0..=#31] » %2[#0] » %3[#0] » %4[#0]] [%1:l7[#0] » %0:l6[#0..=#31] » %2[#0] » %3[#0] » %4[#0]] [%2[#0] » %1:l7[#0] » %0:l6[#0..=#31] » %3[#0] » %4[#0]] [%3[#0] » %1:l7[#0] » %0:l6[#0..=#31] » %2[#0] » %4[#0]] [%4[#0] » %1:l7[#0] » %0:l6[#0..=#31] » %2[#0] » %3[#0]]
       path %0:
         after %3:
           Project: #0..=#6, #8..=#12, #14
@@ -4573,27 +4676,12 @@ mz_internal.pg_type_all_databases:
           Project: #0, #1, #3, #5, #2, #7, #8, #13, #14, #12, #6, #9, #10, #15, #14, #16, #14, #17, #4, #11
           Map: 44, 0, false, -1, null
       →Arrange (#0..=#31)
-        →Stream l4
+        →Stream l6
       →Arrange (#0) (#0..=#31)
         →Fused with Child Map/Filter/Project
           Filter: (#5 = #5)
-            →Arranged l5
+            →Arranged l7
               Key: (#0..=#31)
-      →Arrange (#0)
-        →Union
-          →Stream l11
-          →Map/Filter/Project
-            Project: #0, #1
-            Map: null
-              →Consolidating Union
-                →Negate Diffs
-                  →Unarranged Raw Stream
-                    →Distinct GroupAggregate
-                      →Fused with Child Map/Filter/Project
-                        Project: #0
-                          →Read l11
-                →Unarranged Raw Stream
-                  →Arranged l6
       →Arrange (#0)
         →Union
           →Stream l13
@@ -4608,10 +4696,10 @@ mz_internal.pg_type_all_databases:
                         Project: #0
                           →Read l13
                 →Unarranged Raw Stream
-                  →Arranged l6
+                  →Arranged l8
       →Arrange (#0)
         →Union
-          →Stream l16
+          →Stream l15
           →Map/Filter/Project
             Project: #0, #1
             Map: null
@@ -4621,25 +4709,28 @@ mz_internal.pg_type_all_databases:
                     →Distinct GroupAggregate
                       →Fused with Child Map/Filter/Project
                         Project: #0
-                          →Read l16
+                          →Read l15
                 →Unarranged Raw Stream
-                  →Arranged l14
-
-Source mz_internal.mz_type_pg_metadata
-Source mz_catalog.mz_array_types
-Source mz_catalog.mz_base_types
-  project=(#0, #1)
-  map=("b")
-Source mz_catalog.mz_list_types
-  project=(#0, #1)
-Source mz_catalog.mz_map_types
-  project=(#0, #5)
-  map=("m")
-Source mz_catalog.mz_pseudo_types
-  project=(#0, #1)
-  map=("p")
+                  →Arranged l8
+      →Arrange (#0)
+        →Union
+          →Stream l18
+          →Map/Filter/Project
+            Project: #0, #1
+            Map: null
+              →Consolidating Union
+                →Negate Diffs
+                  →Unarranged Raw Stream
+                    →Distinct GroupAggregate
+                      →Fused with Child Map/Filter/Project
+                        Project: #0
+                          →Read l18
+                →Unarranged Raw Stream
+                  →Arranged l16
 
 Used Indexes:
+  - mz_internal.mz_catalog_item_metadata_ind (*** full scan ***)
+  - mz_internal.mz_builtin_object_mappings_ind (*** full scan ***, differential join, delta join lookup)
   - mz_catalog.mz_roles_ind (differential join)
   - mz_catalog.mz_databases_ind (*** full scan ***)
   - mz_catalog.mz_schemas_ind (*** full scan ***)
@@ -4986,7 +5077,7 @@ mz_catalog.mz_columns:
           Project: #6, #0..=#3, #7, #4, #5
           Map: null
         →Arrange (#0{schema_name}, #1{relation_name})
-          →Constant (1985 rows)
+          →Constant (1997 rows)
         →Arrange (#1{schema_name}, #2{name})
           →Fused with Child Map/Filter/Project
             Project: #6, #4, #3
@@ -5744,7 +5835,7 @@ mz_catalog.mz_tables:
           Project: #3, #0, #4, #1, #5, #2, #6, #6, #6
           Map: "s1", null
       →Arrange (#1{schema_name}, #2{name})
-        →Constant (23 rows)
+        →Constant (16 rows)
       →Arrange (#0{schema_name}) (#0{schema_name}, #1{name})
         →Fused with Child Map/Filter/Project
           Project: #5, #4, #6
@@ -5799,7 +5890,7 @@ mz_catalog.mz_views:
           Project: #5, #0, #6, #1, #2, #8, #3, #4, #7
           Map: "s1"
       →Arrange (#1{schema_name}, #2{name})
-        →Constant (201 rows)
+        →Constant (209 rows)
       →Arrange (#0{schema_name}) (#0{schema_name}, #1{name})
         →Fused with Child Map/Filter/Project
           Project: #5, #4, #6
@@ -5970,7 +6061,7 @@ mz_internal.mz_history_retention_strategies:
           Project: #3, #5
           Map: ("s" || ((#4{data} -> "value") ->> "catalog_id"))
         →Arrange (#2{name}, #0{object_type}, #1{schema_name})
-          →Constant (187 rows)
+          →Constant (180 rows)
         →Arrange (((#0{data} -> "key") ->> "object_name"), ((#0{data} -> "key") ->> "object_type"), ((#0{data} -> "key") ->> "schema_name"))
           →Fused with Child Map/Filter/Project
             Project: #0
@@ -6316,7 +6407,7 @@ mz_internal.mz_object_dependencies:
               Project: #4..=#6, #2
               Filter: case when (#7{ref_kind} = "func") then (#3{object_type} = "8") else case when (#7{ref_kind} = "type") then (#3{object_type} = "7") else ((#3{object_type} != "7") AND (#3{object_type} != "8")) end end
           →Arrange (#0{object_schema}..=#2{object_type}) (#3{ref_schema}, #4{ref_name})
-            →Constant (1118 rows)
+            →Constant (1140 rows)
           →Arrange (#1{schema_name}..=#3{object_type})
             →Fused with Child Map/Filter/Project
               Project: #5, #4, #2, #3
@@ -8760,6 +8851,94 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
+EXPLAIN SELECT * FROM "mz_catalog"."mz_array_types";
+----
+Explained Query:
+  →With
+    cte l0 =
+      →Arranged mz_internal.mz_builtin_object_mappings
+  →Return
+    →One-Shot Delta Join [%0 » %1:l0[#0{schema_name}, #1{name}] » %2:l0[#0{schema_name}, #1{name}]]
+      path %0:
+        after %1:
+          Project: #2, #3, #5
+          Filter: (#4{object_type} = "7")
+        after %2:
+          Project: #2, #4
+          Filter: (#3{object_type} = "7")
+      →Unarranged Raw Stream
+        →Constant (38 rows)
+      →Arranged l0
+      →Arranged l0
+
+Used Indexes:
+  - mz_internal.mz_builtin_object_mappings_ind (delta join lookup)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM "mz_catalog"."mz_base_types";
+----
+Explained Query:
+  →Union
+    →Differential Join %0[#0{schema_name}, #1{name}] » %1:mz_builtin_object_mappings[#0{schema_name}, #1{name}]
+      after %1:
+        Project: #3
+        Filter: (#2{object_type} = "7")
+      →Arrange (#0{schema_name}, #1{name})
+        →Constant (37 rows)
+      →Arranged mz_internal.mz_builtin_object_mappings
+    →Fused with Child Map/Filter/Project
+      Project: #0
+      Filter: (#8{type} = "type") AND ("record" = (#9{details} ->> "type_kind"))
+        →Arranged mz_internal.mz_catalog_item_metadata
+          Key: (#0{id})
+
+Used Indexes:
+  - mz_internal.mz_catalog_item_metadata_ind (*** full scan ***)
+  - mz_internal.mz_builtin_object_mappings_ind (differential join)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM "mz_catalog"."mz_list_types";
+----
+Explained Query (fast path):
+  →Map/Filter/Project
+    Project: #0, #10, #11
+    Filter: (#8{type} = "type") AND ("list" = (#9{details} ->> "type_kind"))
+    Map: coalesce((#9{details} ->> "element_id"), ""), strtolist((#9{details} ->> "element_modifiers"))
+      →Indexed mz_internal.mz_catalog_item_metadata (using mz_internal.mz_catalog_item_metadata_ind)
+
+Used Indexes:
+  - mz_internal.mz_catalog_item_metadata_ind (*** full scan ***)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM "mz_catalog"."mz_map_types";
+----
+Explained Query (fast path):
+  →Map/Filter/Project
+    Project: #0, #10..=#13
+    Filter: (#8{type} = "type") AND ("map" = (#9{details} ->> "type_kind"))
+    Map: coalesce((#9{details} ->> "key_id"), ""), coalesce((#9{details} ->> "value_id"), ""), strtolist((#9{details} ->> "key_modifiers")), strtolist((#9{details} ->> "value_modifiers"))
+      →Indexed mz_internal.mz_catalog_item_metadata (using mz_internal.mz_catalog_item_metadata_ind)
+
+Used Indexes:
+  - mz_internal.mz_catalog_item_metadata_ind (*** full scan ***)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
 EXPLAIN SELECT * FROM "mz_catalog"."mz_objects";
 ----
 Explained Query (fast path):
@@ -8769,6 +8948,25 @@ Explained Query (fast path):
 
 Used Indexes:
   - mz_catalog.mz_objects_ind (*** full scan ***)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM "mz_catalog"."mz_pseudo_types";
+----
+Explained Query:
+  →Differential Join %0[#0{schema_name}, #1{name}] » %1:mz_builtin_object_mappings[#0{schema_name}, #1{name}]
+    after %1:
+      Project: #3
+      Filter: (#2{object_type} = "7")
+    →Arrange (#0{schema_name}, #1{name})
+      →Constant (15 rows)
+    →Arranged mz_internal.mz_builtin_object_mappings
+
+Used Indexes:
+  - mz_internal.mz_builtin_object_mappings_ind (differential join)
 
 Target cluster: mz_catalog_server
 
@@ -8871,6 +9069,21 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
+EXPLAIN SELECT * FROM "mz_catalog"."mz_types";
+----
+Explained Query (fast path):
+  →Map/Filter/Project
+    Project: #1, #2, #0, #3..=#8
+    →Indexed mz_catalog.mz_types (using mz_catalog.mz_types_ind)
+
+Used Indexes:
+  - mz_catalog.mz_types_ind (*** full scan ***)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_activity_log_thinned";
 ----
 Explained Query:
@@ -8929,7 +9142,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_columns";
 ----
 Explained Query (fast path):
-  →Constant (1985 rows)
+  →Constant (1997 rows)
 
 Target cluster: mz_catalog_server
 
@@ -9003,7 +9216,17 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_tables";
 ----
 Explained Query (fast path):
-  →Constant (23 rows)
+  →Constant (16 rows)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_types";
+----
+Explained Query (fast path):
+  →Constant (90 rows)
 
 Target cluster: mz_catalog_server
 
@@ -9013,7 +9236,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_views";
 ----
 Explained Query (fast path):
-  →Constant (201 rows)
+  →Constant (209 rows)
 
 Target cluster: mz_catalog_server
 
@@ -10978,7 +11201,7 @@ Explained Query:
               Project: #3, #4
               Filter: case when (#2{ref_kind} = "func") then (#5{object_type} = "8") else case when (#2{ref_kind} = "type") then (#5{object_type} = "7") else ((#5{object_type} != "7") AND (#5{object_type} != "8")) end end
           →Unarranged Raw Stream
-            →Constant (1118 rows)
+            →Constant (1140 rows)
           →Arrange (#1{schema_name}..=#3{object_type})
             →Fused with Child Map/Filter/Project
               Project: #5, #4, #2, #3
@@ -14380,6 +14603,25 @@ Explained Query:
 
 Source mz_internal.mz_statement_execution_history
   project=(#0..=#11, #13..=#16, #18..=#20)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM "mz_internal"."mz_type_pg_metadata";
+----
+Explained Query:
+  →Differential Join %0[#0{schema_name}, #1{name}] » %1:mz_builtin_object_mappings[#0{schema_name}, #1{name}]
+    after %1:
+      Project: #7, #2..=#5
+      Filter: (#6{object_type} = "7")
+    →Arrange (#0{schema_name}, #1{name})
+      →Constant (77 rows)
+    →Arranged mz_internal.mz_builtin_object_mappings
+
+Used Indexes:
+  - mz_internal.mz_builtin_object_mappings_ind (differential join)
 
 Target cluster: mz_catalog_server
 

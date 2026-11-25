@@ -846,6 +846,7 @@ mz_builtin_materialized_views
 mz_builtin_object_mappings
 mz_builtin_sources
 mz_builtin_tables
+mz_builtin_types
 mz_builtin_views
 mz_catalog_item_metadata
 mz_catalog_items

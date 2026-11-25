@@ -534,18 +534,13 @@ impl Type {
         Type::from_oid_and_typmod(oid, -1)
     }
 
-    /// The name of the type with OID `oid`.
+    /// The type with OID `oid`, for every OID a builtin type carries.
     ///
-    /// Our existing [`Type::from_oid`] only accepts `oid`s that `rust-postgres`
-    /// knows about, thus we need a match statement to handle our custom `oid`s.
-    ///
-    /// We use this function such that our builtin relation `mz_catalog.mz_columns`
-    /// can get a type's name from its durably stored `oid` using a SQL scalar function.
-    /// However, we can replace the scalar function with a join on `mz_builtin_types` once it's been
-    /// implemented.
-    ///
-    /// TODO(SQL-495): Remove this function once `mz_builtin_types` is merged.
-    pub fn name_from_oid(oid: u32) -> Option<&'static str> {
+    /// [`Type::from_oid`] accepts only the OIDs `rust-postgres` knows, so this
+    /// adds Materialize's own types. `None` for a pseudo-type with no wire
+    /// type, such as `list`, `map` and `anyelement`. `record` is a
+    /// [`Type::Record`] without fields.
+    pub fn from_builtin_oid(oid: u32) -> Option<Type> {
         let typ = match oid {
             oid::TYPE_NAME_OID => Type::Name,
             oid::TYPE_NAME_ARRAY_OID => Type::Array(Box::new(Type::Name)),
@@ -565,11 +560,25 @@ impl Type {
             oid::TYPE_MZ_ACL_ITEM_ARRAY_OID => Type::Array(Box::new(Type::MzAclItem)),
             oid::TYPE_RECORD_OID => Type::Record(vec![]),
             oid::TYPE_RECORD_ARRAY_OID => Type::Array(Box::new(Type::Record(vec![]))),
-            oid::TYPE_LIST_OID => return Some(LIST.name()),
-            oid::TYPE_MAP_OID => return Some(MAP.name()),
             _ => Type::from_oid(oid).ok()?,
         };
-        Some(typ.name())
+        Some(typ)
+    }
+
+    /// The name of the type with OID `oid`.
+    ///
+    /// We use this function such that our builtin relation `mz_catalog.mz_columns`
+    /// can get a type's name from its durably stored `oid` using a SQL scalar function.
+    /// However, we can replace the scalar function with a join on `mz_builtin_types` once it's been
+    /// implemented.
+    ///
+    /// TODO(SQL-495): Remove this function once `mz_builtin_types` is merged.
+    pub fn name_from_oid(oid: u32) -> Option<&'static str> {
+        match oid {
+            oid::TYPE_LIST_OID => Some(LIST.name()),
+            oid::TYPE_MAP_OID => Some(MAP.name()),
+            _ => Some(Type::from_builtin_oid(oid)?.name()),
+        }
     }
 
     /// Returns the `Type` corresponding to the provided OID and packed type
