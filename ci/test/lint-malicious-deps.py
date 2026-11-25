@@ -30,6 +30,7 @@ LOCKFILES = [
     "package-lock.json",
     "yarn.lock",
     "requirements*.txt",
+    "uv.lock",
     "pom.xml",
     "Gemfile.lock",
 ]
