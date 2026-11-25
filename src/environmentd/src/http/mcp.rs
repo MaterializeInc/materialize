@@ -25,7 +25,7 @@
 //!
 //! `read_data_product` and the agent and developer `query` tools are
 //! dyncfg-gated. `list_data_products` and `get_data_products` are one tool, and
-//! either name works on every route.
+//! either name works on the agent route and on `/api/mcp`.
 //!
 //! Data products are discovered via `mz_internal.mz_mcp_data_products` system view.
 
@@ -67,7 +67,9 @@ use crate::http::AuthedClient;
 use crate::http::mcp_metrics::{McpCallStatus, McpMetrics, ToolCallGuard};
 use crate::http::sql::{SqlRequest, SqlResponse, SqlResult, execute_request};
 
-// To add a new tool: add entry to tools/list, add handler function, add dispatch case.
+// To add a tool: a `ToolsCallParams` variant and its `route_name` arm, an entry in
+// `handle_tools_list`, a `handle_tools_call` arm, and a mention in each route's
+// `endpoint_instructions`. Nothing checks the instructions at compile time.
 
 /// JSON-RPC protocol version used in all MCP requests and responses.
 const JSONRPC_VERSION: &str = "2.0";
@@ -410,7 +412,6 @@ fn invalid_id() -> McpRequestError {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "method", content = "params")]
 enum McpMethod {
-    /// Initialize method - params accepted but not currently used
     #[serde(rename = "initialize")]
     Initialize(#[allow(dead_code)] InitializeParams),
     /// `params` is accepted and ignored: clients may attach `_meta`, and a unit
@@ -448,17 +449,16 @@ impl std::fmt::Display for McpMethod {
     }
 }
 
+/// The client's `initialize` params. Deserialized so a malformed request fails,
+/// but no field is read.
 #[derive(Debug, Deserialize)]
 struct InitializeParams {
-    /// Protocol version from client. Not currently validated but accepted for MCP compliance.
     #[serde(rename = "protocolVersion")]
     #[allow(dead_code)]
     protocol_version: String,
-    /// Client capabilities. Not currently used but accepted for MCP compliance.
     #[serde(default)]
     #[allow(dead_code)]
     capabilities: serde_json::Value,
-    /// Client information (name, version). Not currently used but accepted for MCP compliance.
     #[serde(rename = "clientInfo")]
     #[allow(dead_code)]
     client_info: Option<ClientInfo>,
@@ -1127,13 +1127,10 @@ async fn handle_mcp_request(
         // gates the whole route.
         McpEndpointType::Unified => true,
     };
-    // `read_data_product` is an agent route tool. The unified route shares the
-    // agent instructions, which must not point it at a tool it rejects.
+    // Only the agent route has `read_data_product`.
     let read_data_product_tool_enabled = match endpoint_type {
-        McpEndpointType::Agent | McpEndpointType::Developer => {
-            ENABLE_MCP_AGENT_READ_DATA_PRODUCT_TOOL.get(dyncfgs)
-        }
-        McpEndpointType::Unified => false,
+        McpEndpointType::Agent => ENABLE_MCP_AGENT_READ_DATA_PRODUCT_TOOL.get(dyncfgs),
+        McpEndpointType::Developer | McpEndpointType::Unified => false,
     };
     let max_response_size = MCP_MAX_RESPONSE_SIZE.get(dyncfgs);
     let request_timeout = MCP_REQUEST_TIMEOUT.get(dyncfgs);
@@ -1348,7 +1345,6 @@ async fn handle_mcp_request_inner(
             McpResponse::success(request_id, result_value.into_body(protocol, endpoint_type))
         }
         Err(e) => {
-            // Log non-trivial errors
             if !matches!(
                 e,
                 McpRequestError::MethodNotFound(_) | McpRequestError::InvalidJsonRpcVersion
@@ -1372,12 +1368,10 @@ async fn handle_mcp_method(
     max_response_size: usize,
     metrics: &McpMetrics,
 ) -> Result<McpResult, McpRequestError> {
-    // Validate JSON-RPC version
     if request.jsonrpc != JSONRPC_VERSION {
         return Err(McpRequestError::InvalidJsonRpcVersion);
     }
 
-    // Handle different MCP methods using pattern matching
     match &request.method {
         // 2026-07-28 removed the handshake.
         McpMethod::Initialize(_) if !protocol.is_modern() => {
@@ -1444,9 +1438,9 @@ fn endpoint_instructions(
         McpEndpointType::Unified => Some(UNIFIED_INSTRUCTIONS.to_string()),
         McpEndpointType::Agent => {
             // Only reference tools that are actually exposed by tools/list.
-            // Both flags off is a valid (if unusual) config where the agent
-            // can only discover products, not read them — we say so instead
-            // of pointing at a hidden tool.
+            // Both flags off is a valid config where the agent can only
+            // discover products, not read them. Say so instead of pointing at
+            // a hidden tool.
             let read_paragraph = match (read_data_product_tool_enabled, query_tool_enabled) {
                 (true, _) => {
                     "`read_data_product` automatically routes the \
@@ -1846,8 +1840,6 @@ async fn handle_tools_call(
             ))
         }
         (McpEndpointType::Agent, ToolsCallParams::Query(p)) => {
-            // Replica pinning is deliberately not part of the agent surface:
-            // drop `cluster_replica` even if a client supplies it.
             execute_query(
                 client,
                 Placement::cluster_or_default(p.cluster.as_deref()),
@@ -1952,9 +1944,8 @@ fn select_single_rows(
 /// Serialize rows to JSON and enforce the response size cap.
 ///
 /// If the serialized response exceeds `max_size` bytes, returns an error
-/// telling the agent to narrow its query. This mirrors how the HTTP SQL
-/// endpoint handles `max_result_size` in sql.rs — fail cleanly rather
-/// than silently truncating.
+/// telling the agent to narrow its query, rather than truncating. The HTTP
+/// SQL endpoint handles `max_result_size` the same way in sql.rs.
 fn format_rows_response(
     rows: Vec<Box<serde_json::value::RawValue>>,
     max_size: usize,
@@ -2054,8 +2045,8 @@ fn safe_data_product_name(name: &str) -> Result<String, McpRequestError> {
 /// fallback is therefore safe (materialized views serve from persist without
 /// recompute).
 ///
-/// `cluster_override` forces the read onto a named cluster instead — useful for
-/// a differently-sized or differently-replicated cluster.
+/// `cluster_override` forces the read onto a named cluster instead, for example
+/// one with more or larger replicas.
 ///
 /// The name is expected to come from `get_data_products()` /
 /// `get_data_product_details()`. The query runs inside a READ ONLY
@@ -2096,17 +2087,14 @@ async fn read_data_product(
         .and_then(|row| row.into_iter().next())
         .and_then(|v| v.as_str().map(|s| s.to_string()));
 
-    // An override wins. Otherwise route to the catalog cluster when the role
-    // can use it (non-null); when it is null the role lacks USAGE on the
-    // object's cluster, so leave the cluster unset and read on the session's
-    // default (serving) cluster. That still works: materialized views serve
-    // from persist and views recompute, just without index benefit.
+    // An override wins. Otherwise use the catalog cluster when the role can use
+    // it (non-null), else the session's default cluster. The doc comment says
+    // why that fallback is safe.
     let target_cluster: Option<&str> = cluster_override.or(catalog_cluster.as_deref());
 
-    // No row cap is applied here: the response is bounded by the size cap
-    // enforced in format_rows_response (MCP_MAX_RESPONSE_SIZE), and by
-    // max_result_size at the adapter layer. Mirrors the SQL HTTP endpoint,
-    // which also leans on a size cap rather than a row cap.
+    // The caller's `limit` is not clamped. The response is bounded by the size
+    // cap in format_rows_response (MCP_MAX_RESPONSE_SIZE), and by
+    // max_result_size at the adapter layer.
     let read_query = build_read_query(
         &safe_name,
         limit,
@@ -2158,7 +2146,6 @@ fn validate_readonly_query(sql: &str) -> Result<(), McpRequestError> {
             McpRequestError::QueryValidationFailed(format!("Failed to parse SQL: {}", e))
         })?;
 
-    // Only allow a single statement
     if stmts.len() != 1 {
         return Err(McpRequestError::QueryValidationFailed(format!(
             "Only one query allowed at a time. Found {} statements.",
@@ -2169,8 +2156,8 @@ fn validate_readonly_query(sql: &str) -> Result<(), McpRequestError> {
     // Allowlist: SELECT, SHOW, and every read-only EXPLAIN variant. EXPLAIN
     // expands to six distinct Statement variants in the parser (ExplainPlan
     // covers only the most common one). Listing them out exhaustively beats
-    // matching by string prefix so a new write-capable EXPLAIN variant — were
-    // one ever added — would have to be considered here.
+    // matching by string prefix, so a new write-capable EXPLAIN variant would
+    // have to be considered here.
     let stmt = &stmts[0];
     use mz_sql_parser::ast::Statement;
 
@@ -2657,11 +2644,10 @@ mod tests {
     }
 
     /// Regression test for DEX-64: without the 1 MB parser guard, the MCP
-    /// validators would happily lex and parse multi-megabyte input. Both
-    /// `validate_readonly_query` and `validate_system_catalog_query` now go
-    /// through `parse_with_limit`, so an oversized batch is rejected with the
-    /// same "statement batch size cannot exceed" message the SQL HTTP path
-    /// emits.
+    /// validators would lex and parse multi-megabyte input. Both
+    /// `validate_readonly_query` and `bind_system_catalog_query` go through
+    /// `parse_with_limit`, so an oversized batch is rejected with the same
+    /// "statement batch size cannot exceed" message the SQL HTTP path emits.
     #[mz_ore::test]
     fn test_validate_readonly_query_enforces_size_limit() {
         use mz_sql_parser::parser::MAX_STATEMENT_BATCH_SIZE;
@@ -2964,7 +2950,7 @@ mod tests {
 
     #[mz_ore::test]
     fn test_validate_system_catalog_query_rejects_constant_queries() {
-        // SELECT without any table reference should be rejected — the developer
+        // SELECT without any table reference is rejected. The developer
         // endpoint is for system catalog queries, not arbitrary computation.
         assert!(
             bind_with_stub_catalog("SELECT 1").is_err(),
@@ -3104,8 +3090,6 @@ mod tests {
             assert!(err.contains(message), "{sql}: {err}");
         }
     }
-
-    // ── Query tool feature flag tests ──────────────────────────────────────
 
     #[mz_ore::test(tokio::test)]
     async fn test_tools_list_agent_query_tool_disabled() {
@@ -3473,15 +3457,13 @@ mod tests {
             );
         }
 
-        // A tool that needs arguments still fails, now on the missing field itself.
+        // A tool that needs arguments still fails, on the missing field itself.
         let err = serde_json::from_str::<McpRequest>(
             r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"query_system_catalog"}}"#,
         )
         .expect_err("query_system_catalog requires sql_query");
         assert!(err.to_string().contains("sql_query"), "{err}");
     }
-
-    // ── Response size cap tests ────────────────────────────────────────
 
     #[mz_ore::test]
     fn test_format_rows_response_within_limit() {
@@ -3522,8 +3504,6 @@ mod tests {
         assert_eq!(content.content.len(), 1);
         assert_eq!(content.content[0].text, "[]");
     }
-
-    // ── Data product name validation tests ─────────────────────────────
 
     #[mz_ore::test]
     fn test_safe_data_product_name_valid() {
@@ -3583,8 +3563,6 @@ mod tests {
             "COMMIT must sit on its own line: {sql}",
         );
     }
-
-    // ── Placement tests (QAR-136) ──────────────────────────────────────
 
     #[mz_ore::test]
     fn test_placement_set_clause() {
@@ -3714,8 +3692,6 @@ mod tests {
         );
     }
 
-    // ── build_read_query tests (DEX-27) ────────────────────────────────
-
     /// The read is wrapped in a `BEGIN READ ONLY` transaction so the
     /// `SET CLUSTER` scope is bounded to this read and does not leak
     /// into the rest of the session.
@@ -3765,8 +3741,8 @@ mod tests {
             sql.contains("SET CLUSTER = 'evil''; DROP TABLE secrets; --'"),
             "single quote should be doubled inside the literal: {sql}",
         );
-        // The injected `DROP TABLE` must remain inside the literal — i.e.
-        // there is no second statement that escapes the SET CLUSTER call.
+        // The injected `DROP TABLE` must remain inside the literal, so there is
+        // no second statement that escapes the SET CLUSTER call.
         assert_eq!(
             sql.matches("SET CLUSTER").count(),
             1,
