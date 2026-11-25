@@ -75,14 +75,15 @@ use crate::catalog::{BuiltinTableUpdate, Catalog, CatalogState, Config, is_reser
 pub struct InitializeStateResult {
     /// An initialized [`CatalogState`].
     pub state: CatalogState,
-    /// Items whose builtin schema migration allocated a fresh, self-owned persist shard. Only used
-    /// by 0dt migration.
+    /// Items whose builtin schema migration allocated a fresh, self-owned persist shard from the
+    /// migration shard: `Replacement`-migrated items and builtin storage collections that had no
+    /// shard yet, in practice new ones. Only used by 0dt migration.
     ///
-    /// `Replacement`-migrated items only: derived by filtering to items with a global id in
-    /// `MigrationRunResult::new_shards`, which only `migrate_replace` populates. `Evolution`
-    /// migrates in place and reuses the leader's shard, so it never lands here. Read-only write
-    /// paths depend on that: force-writing a shard while read-only is safe only because we
-    /// exclusively own it (see `ComputeController::allow_writes_in_read_only`).
+    /// Derived by filtering to items with a global id in `MigrationRunResult::new_shards`, which
+    /// only `get_or_insert_shards` populates. `Evolution` migrates in place and reuses the leader's
+    /// shard, so it never lands here. Read-only write paths depend on that: force-writing a shard
+    /// while read-only is safe only because we exclusively own it (see
+    /// `ComputeController::allow_writes_in_read_only`).
     pub migrated_storage_collections_0dt: BTreeSet<CatalogItemId>,
     /// A set of new builtin items.
     pub new_builtin_collections: BTreeSet<GlobalId>,
@@ -108,8 +109,7 @@ pub struct OpenCatalogResult {
     pub catalog: Catalog,
     /// See [`InitializeStateResult::last_seen_version`].
     pub last_seen_version: Option<Version>,
-    /// See [`InitializeStateResult::migrated_storage_collections_0dt`]; `Replacement`-migrated
-    /// items only.
+    /// See [`InitializeStateResult::migrated_storage_collections_0dt`].
     pub migrated_storage_collections_0dt: BTreeSet<CatalogItemId>,
     /// A set of new builtin items.
     pub new_builtin_collections: BTreeSet<GlobalId>,
