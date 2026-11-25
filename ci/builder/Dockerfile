@@ -505,12 +505,12 @@ RUN arch_zizmor=$(echo "$ARCH_GCC" | sed -e "s/amd64/x86_64/") \
 # MAJOR.MINOR.PATCH), which bin/lint-versions checks. ldconfig makes it
 # loadable by test binaries, since Cargo only adds library paths inside the
 # target dir to their search path.
-RUN curl -fsSL https://github.com/duckdb/duckdb/releases/download/v1.5.6/libduckdb-linux-$ARCH_GO.zip > libduckdb.zip \
-    && if [ $ARCH_GO = amd64 ]; then echo 'b845005f5132a7d8180057c35e14a7626632258782f871a90861b19c1c03841b libduckdb.zip' | sha256sum --check; fi \
-    && if [ $ARCH_GO = arm64 ]; then echo 'b72ed9f05003f5e9d2015f7ceada6416b377d9dd33169cdde3c9e33897856eee libduckdb.zip' | sha256sum --check; fi \
-    && unzip libduckdb.zip libduckdb.so -d /usr/local/lib \
+RUN curl -fsSL https://github.com/duckdb/duckdb/releases/download/v2.0.1/duckdb-shared-libs-linux-$ARCH_GO.tar.gz > libduckdb.tar.gz \
+    && if [ $ARCH_GO = amd64 ]; then echo 'e25502612fed533a243b61f23a2a574daad030e7e88906222a5f0ab30d06769e libduckdb.tar.gz' | sha256sum --check; fi \
+    && if [ $ARCH_GO = arm64 ]; then echo '811e8b4d0226f5e531f583aadc798070ffb33b350e3823be563a2ebeb2c68593 libduckdb.tar.gz' | sha256sum --check; fi \
+    && tar -xzf libduckdb.tar.gz -C /usr/local/lib libduckdb.so \
     && ldconfig \
-    && rm libduckdb.zip
+    && rm libduckdb.tar.gz
 
 # Hardcode some known SSH hosts, or else SSH will ask whether the host is
 # trustworthy on the first connection.

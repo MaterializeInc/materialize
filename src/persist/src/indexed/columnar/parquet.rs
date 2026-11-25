@@ -244,7 +244,7 @@ pub fn encode_parquet_kvtd<W: Write + Send>(
     Ok(())
 }
 
-/// Best effort reporting of metrics from the resulting [`parquet::format::FileMetaData`] returned
+/// Best effort reporting of metrics from the resulting [`ParquetMetaData`] returned
 /// from the [`ArrowWriter`].
 fn report_parquet_metrics(
     metrics: &ColumnarMetrics,
