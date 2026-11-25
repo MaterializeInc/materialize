@@ -286,13 +286,6 @@
       "pinDigests": false
     },
     {
-      // A digest bump is hard to judge in review, so the delay gives a
-      // compromised scanner release time to be pulled before it reaches CI.
-      "matchManagers": ["custom.regex"],
-      "matchPackageNames": ["ghcr.io/google/osv-scanner"],
-      "minimumReleaseAge": "7 days"
-    },
-    {
       "matchManagers": ["custom.regex"],
       "matchFileNames": ["misc/python/**", "misc/monitoring/**", "misc/kind/**", "test/**"],
       "additionalBranchPrefix": "test-tools-",
