@@ -28,7 +28,7 @@ RUN perl -MCPAN -e 'install DBIx::MyParsePP'
 
 RUN git clone --single-branch https://github.com/MaterializeInc/RQG.git \
     && cd RQG \
-    && git checkout 4fe4e6f09f9599ce9f8ffd3f75d593b20518cc50 \
+    && git checkout 9b7a6af386f691d9ea40e4790185617cc164c92c \
     && rm -rf .git
 
 ENTRYPOINT ["/usr/bin/eatmydata", "/usr/bin/perl"]
