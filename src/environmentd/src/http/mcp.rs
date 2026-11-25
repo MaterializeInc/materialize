@@ -2621,6 +2621,13 @@ mod tests {
         assert!(validate_readonly_query("EXPLAIN ANALYZE MEMORY FOR INDEX foo").is_ok());
         assert!(validate_readonly_query("EXPLAIN ANALYZE MEMORY FOR MATERIALIZED VIEW mv").is_ok());
         assert!(validate_readonly_query("EXPLAIN ANALYZE CLUSTER MEMORY").is_ok());
+        assert!(
+            validate_readonly_query(
+                "EXPLAIN VALUE SCHEMA FOR CREATE SINK FROM t INTO KAFKA CONNECTION k \
+                 (TOPIC 't') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION c"
+            )
+            .is_ok()
+        );
     }
 
     #[mz_ore::test]
