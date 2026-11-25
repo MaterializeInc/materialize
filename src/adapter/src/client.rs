@@ -826,7 +826,8 @@ impl SessionClient {
             .execute_attempts(portal_name, &mut logging, cancel_future)
             .await;
 
-        // The statement may have changed what other portals' descriptions depend on.
+        // The statement may have changed session state that the descriptions of prepared
+        // statements and portals depend on, such as `search_path`.
         self.session().advance_state_revision();
 
         logging.retire(&result);
