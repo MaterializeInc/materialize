@@ -57,6 +57,8 @@ Alternatively, configure your deployment with a certificate from a trusted CA
 **Cause:** The MCP endpoint is disabled.
 
 **Fix:** Enable the endpoint. See
+- [MCP server (`/api/mcp`)
+  configuration](/developer-tools/mcp-server/materialize-mcp-config/)
 - [Developer endpoint
   configuration](/developer-tools/mcp-server/mcp-developer-config/)
 - [Agents endpoint
