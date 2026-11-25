@@ -2111,6 +2111,24 @@
       "dyncfg": false
     },
     {
+      "name": "kafka_source_fetch_message_max_bytes",
+      "typeName": "unsigned integer",
+      "default": "134217728",
+      "description": "Sets fetch.message.max.bytes in librdkafka for Kafka source reader consumers. Values are clamped to the range librdkafka accepts, from 1 to 1000000000.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "kafka_source_receive_message_max_bytes",
+      "typeName": "unsigned integer",
+      "default": "100000000",
+      "description": "Sets receive.message.max.bytes in librdkafka for Kafka source reader consumers. Values are clamped to the range librdkafka accepts, from fetch.max.bytes + 512 to 2147483647.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
       "name": "kafka_transaction_timeout",
       "typeName": "duration",
       "default": "10 min",

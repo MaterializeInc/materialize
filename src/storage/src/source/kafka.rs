@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
-use std::ops::ControlFlow;
+use std::ops::{ControlFlow, RangeInclusive};
 use std::rc::Rc;
 use std::str::{self};
 use std::sync::Arc;
@@ -22,6 +22,7 @@ use differential_dataflow::{AsCollection, Hashable};
 use futures::StreamExt;
 use itertools::Itertools;
 use maplit::btreemap;
+use mz_dyncfg::{Config, ConfigSet};
 use mz_kafka_util::client::{
     GetPartitionsError, MzClientContext, PartitionId, TunnelingClientContext, get_partitions,
 };
@@ -34,6 +35,9 @@ use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, Diff, GlobalId, Row, adt::jsonb::Jsonb};
 use mz_ssh_util::tunnel::SshTunnelStatus;
 use mz_storage_types::connections::KafkaConnection;
+use mz_storage_types::dyncfgs::{
+    KAFKA_SOURCE_FETCH_MESSAGE_MAX_BYTES, KAFKA_SOURCE_RECEIVE_MESSAGE_MAX_BYTES,
+};
 use mz_storage_types::errors::{
     ContextCreationError, DataflowError, SourceError, SourceErrorDetails,
 };
@@ -65,7 +69,7 @@ use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
 use timely::progress::Timestamp;
 use tokio::sync::{Notify, OnceCell, mpsc};
-use tracing::{error, info, trace};
+use tracing::{error, info, trace, warn};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::metrics::source::kafka::KafkaSourceMetrics;
@@ -1433,6 +1437,48 @@ type DataOutput = AsyncOutputHandle<
 type HealthOutput =
     AsyncOutputHandle<KafkaTimestamp, CapacityContainerBuilder<Vec<HealthStatusMessage>>>;
 
+/// The librdkafka default `fetch.max.bytes`, set explicitly because
+/// [`RECEIVE_MESSAGE_MAX_BYTES_RANGE`] derives its minimum from it.
+const FETCH_MAX_BYTES: usize = 52_428_800;
+
+/// The librdkafka default `queued.max.messages.kbytes`.
+const QUEUED_MAX_MESSAGES_KBYTES: usize = 65_536;
+
+// NOTE: librdkafka caps `fetch.max.bytes` at `queued.max.messages.kbytes` only when
+// `fetch.max.bytes` is unset, so that one fetch response fits in the pre-fetch queue. Setting
+// `fetch.max.bytes` explicitly disables that cap, and this assertion takes its place.
+const _: () = assert!(FETCH_MAX_BYTES <= QUEUED_MAX_MESSAGES_KBYTES * 1024);
+
+/// The `receive.message.max.bytes` values librdkafka accepts with [`FETCH_MAX_BYTES`]. The maximum
+/// is librdkafka's `INT_MAX` bound on the property.
+const RECEIVE_MESSAGE_MAX_BYTES_RANGE: RangeInclusive<usize> =
+    FETCH_MAX_BYTES + 512..=2_147_483_647;
+
+/// The `fetch.message.max.bytes` values librdkafka accepts.
+const FETCH_MESSAGE_MAX_BYTES_RANGE: RangeInclusive<usize> = 1..=1_000_000_000;
+
+/// Returns the value of `config` in `config_set`, clamped to `range`.
+fn clamp_to_librdkafka_range(
+    config: &Config<usize>,
+    config_set: &ConfigSet,
+    range: RangeInclusive<usize>,
+) -> usize {
+    // librdkafka rejects the client config outside the property's range, which would halt the
+    // source.
+    let configured = config.get(config_set);
+    let (min, max) = range.into_inner();
+    let clamped = configured.clamp(min, max);
+    if clamped != configured {
+        warn!(
+            configured,
+            clamped,
+            "{} outside the range librdkafka accepts",
+            config.name()
+        );
+    }
+    clamped
+}
+
 /// Creates a reader worker's consumer, possibly long after the operator started, and reports
 /// failures to the operator's outputs.
 struct ReaderConsumerSetup {
@@ -1488,6 +1534,7 @@ impl ReaderConsumerSetup {
     }
 
     async fn create(&self) -> Result<Arc<ReaderConsumer>, ContextCreationError> {
+        let config_set = self.config.config.config_set();
         let consumer: ReaderConsumer = self
             .connection
             .create_with_context(
@@ -1512,8 +1559,20 @@ impl ReaderConsumerSetup {
                         self.topic_metadata_refresh_interval
                         .as_millis()
                         .to_string(),
-                    // TODO: document the rationale for this.
-                    "fetch.message.max.bytes" => "134217728".into(),
+                    "fetch.message.max.bytes" => clamp_to_librdkafka_range(
+                        &KAFKA_SOURCE_FETCH_MESSAGE_MAX_BYTES,
+                        config_set,
+                        FETCH_MESSAGE_MAX_BYTES_RANGE,
+                    )
+                    .to_string(),
+                    "fetch.max.bytes" => FETCH_MAX_BYTES.to_string(),
+                    "queued.max.messages.kbytes" => QUEUED_MAX_MESSAGES_KBYTES.to_string(),
+                    "receive.message.max.bytes" => clamp_to_librdkafka_range(
+                        &KAFKA_SOURCE_RECEIVE_MESSAGE_MAX_BYTES,
+                        config_set,
+                        RECEIVE_MESSAGE_MAX_BYTES_RANGE,
+                    )
+                    .to_string(),
                     // Consumer group ID, which may have been overridden by
                     // the user. librdkafka requires this, and we use offset
                     // committing to provide a way for users to monitor
@@ -1703,6 +1762,59 @@ mod tests {
     use rdkafka::consumer::{BaseConsumer, Consumer};
     use rdkafka::{Message, Offset, TopicPartitionList};
     use uuid::Uuid;
+
+    use mz_dyncfg::{ConfigSet, ConfigUpdates};
+    use mz_storage_types::dyncfgs::{
+        KAFKA_SOURCE_FETCH_MESSAGE_MAX_BYTES, KAFKA_SOURCE_RECEIVE_MESSAGE_MAX_BYTES,
+    };
+
+    use super::{
+        FETCH_MAX_BYTES, FETCH_MESSAGE_MAX_BYTES_RANGE, QUEUED_MAX_MESSAGES_KBYTES,
+        RECEIVE_MESSAGE_MAX_BYTES_RANGE, clamp_to_librdkafka_range,
+    };
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
+    fn librdkafka_accepts_clamped_dyncfgs() {
+        let config_set = ConfigSet::default()
+            .add(&KAFKA_SOURCE_FETCH_MESSAGE_MAX_BYTES)
+            .add(&KAFKA_SOURCE_RECEIVE_MESSAGE_MAX_BYTES);
+        for configured in [0, usize::MAX] {
+            let mut updates = ConfigUpdates::default();
+            updates.add(&KAFKA_SOURCE_FETCH_MESSAGE_MAX_BYTES, configured);
+            updates.add(&KAFKA_SOURCE_RECEIVE_MESSAGE_MAX_BYTES, configured);
+            updates.apply(&config_set);
+
+            let mut config = create_new_client_config_simple();
+            config.set(
+                "fetch.message.max.bytes",
+                clamp_to_librdkafka_range(
+                    &KAFKA_SOURCE_FETCH_MESSAGE_MAX_BYTES,
+                    &config_set,
+                    FETCH_MESSAGE_MAX_BYTES_RANGE,
+                )
+                .to_string(),
+            );
+            config.set("fetch.max.bytes", FETCH_MAX_BYTES.to_string());
+            config.set(
+                "queued.max.messages.kbytes",
+                QUEUED_MAX_MESSAGES_KBYTES.to_string(),
+            );
+            config.set(
+                "receive.message.max.bytes",
+                clamp_to_librdkafka_range(
+                    &KAFKA_SOURCE_RECEIVE_MESSAGE_MAX_BYTES,
+                    &config_set,
+                    RECEIVE_MESSAGE_MAX_BYTES_RANGE,
+                )
+                .to_string(),
+            );
+            let _consumer: BaseConsumer<_> =
+                mz_kafka_util::client::create(&config).unwrap_or_else(|e| {
+                    panic!("librdkafka rejected the clamped value of {configured}: {e}")
+                });
+        }
+    }
 
     // Splitting off a partition queue with an `Offset` that is not `Offset::Beginning` seems to
     // lead to a race condition where sometimes we receive messages from polling the main consumer
