@@ -94,8 +94,9 @@
   ],
   "pip-compile": {
     // Matches the compiled output. Renovate reads the source files and the
-    // compile command from its header.
-    "managerFilePatterns": ["/^misc/dbt-materialize/requirements\\.txt$/"]
+    // compile command from its header. check-requirements.sh keeps every
+    // requirements.txt compiled.
+    "managerFilePatterns": ["/(^|/)requirements\\.txt$/"]
   },
   "labels": ["A-dependencies"],
   "timezone": "Etc/UTC",
@@ -234,12 +235,12 @@
       "additionalBranchPrefix": "dbt-"
     },
     {
-      // pip_requirements also matches the compiled requirements.txt. It would
-      // bump each pin on its own, past the caps that dbt's packages declare,
-      // and pip then fails to install the result. pip-compile updates that file
-      // through the resolver instead.
+      // pip_requirements also matches the compiled requirements.txt files. It
+      // would bump each pin on its own, past the caps that their packages
+      // declare, and pip then fails to install the result. pip-compile updates
+      // those files through the resolver instead.
       "matchManagers": ["pip_requirements"],
-      "matchFileNames": ["misc/dbt-materialize/requirements.txt"],
+      "matchFileNames": ["**/requirements.txt"],
       "enabled": false
     },
     {
@@ -378,17 +379,17 @@
       "enabled": false
     },
     {
-      "matchManagers": ["pip_requirements", "pip_setup", "pep621"],
+      "matchManagers": ["pip_requirements", "pip_setup", "pep621", "pip-compile"],
       "matchFileNames": ["ci/builder/*", "test/adbc/*", "test/antithesis/driver/*", "test/terraform/azure-temporary/*"],
       "additionalBranchPrefix": "python-tools-"
     },
     {
       // kubernetes 37.0.2 requires python-dateutil>=3.0.0, while botocore (up
-      // to at least 1.43.127) requires python-dateutil<3.0.0, so the
-      // ci-builder image's `uv pip install` fails to resolve. Lift once either
-      // side relaxes its bound.
-      "matchManagers": ["pip_requirements"],
-      "matchFileNames": ["ci/builder/requirements.txt"],
+      // to at least 1.43.127) requires python-dateutil<3.0.0, so compiling
+      // ci/builder/requirements.txt fails to resolve. Lift once either side
+      // relaxes its bound.
+      "matchManagers": ["pip-compile"],
+      "matchFileNames": ["ci/builder/requirements.in"],
       "matchPackageNames": ["kubernetes"],
       "allowedVersions": "<37.0.2"
     },
@@ -425,7 +426,7 @@
       "matchPackageNames": ["pg", "@types/pg"]
     },
     {
-      "matchManagers": ["pip_requirements", "pip_setup", "pep621"],
+      "matchManagers": ["pip_requirements", "pip_setup", "pep621", "pip-compile"],
       "matchFileNames": ["test/lang/python/*"],
       "additionalBranchPrefix": "python-drivers-"
     },

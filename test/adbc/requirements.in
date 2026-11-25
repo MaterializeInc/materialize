@@ -1,0 +1,7 @@
+# requirements.txt is compiled from this file. Regenerate it with the command in
+# its header.
+
+adbc-driver-manager==1.13.0
+adbc-driver-postgresql==1.13.0
+duckdb==2.0.0
+pyarrow==26.0.1
