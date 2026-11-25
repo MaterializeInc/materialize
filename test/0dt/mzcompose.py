@@ -2052,11 +2052,18 @@ def check_new_builtins_survive_promotion(
                 raise RuntimeError(
                     "leader never recorded the next refresh of refresh_mv"
                 )
+            # Shorten the allowed lag of the caught-up check, so that the wait below can be short.
+            c.sql(
+                "ALTER SYSTEM SET with_0dt_caught_up_check_allowed_lag = '10s'",
+                service="mz_old",
+                port=6877,
+                user="mz_system",
+            )
             c.kill("mz_old")
-            # Wait longer than `with_0dt_caught_up_check_allowed_lag` (60 s). After that, inputs
-            # that only the leader advances are too far behind the current time, so a check that
-            # compared against it would never pass.
-            time.sleep(75)
+            # Wait longer than the allowed lag. After that, inputs that only the leader advances
+            # are too far behind the current time, so a check that compared against it would
+            # never pass.
+            time.sleep(20)
 
         c.up("mz_new")
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
