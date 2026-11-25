@@ -8,20 +8,45 @@
 # by the Apache License, Version 2.0.
 
 import os
+from pathlib import Path
 
 from materialize import ci_util, git, mzbuild
 from materialize.mz_version import MzVersion
+from materialize.rustc_flags import Sanitizer
 from materialize.version_list import get_all_mz_versions
-
-from . import deploy_util
+from materialize.xcompile import Arch
 
 
 def main() -> None:
-    repos = deploy_util.release_repos()
+    repos = [
+        mzbuild.Repository(
+            Path("."),
+            Arch.X86_64,
+            coverage=False,
+            sanitizer=Sanitizer.none,
+            image_registry="materialize",
+        ),
+        mzbuild.Repository(
+            Path("."),
+            Arch.AARCH64,
+            coverage=False,
+            sanitizer=Sanitizer.none,
+            image_registry="materialize",
+        ),
+    ]
     buildkite_tag = os.environ["BUILDKITE_TAG"]
 
+    def include_image(image: mzbuild.Image) -> bool:
+        # Images must always be publishable to be tagged. Only mainline images
+        # get tagged for releases, but even non-mainline images get `unstable`
+        # tags.
+        return image.publish and (not buildkite_tag or image.mainline)
+
     print("--- Tagging Docker images")
-    deps = deploy_util.publishable_image_deps(repos)
+    deps = [
+        repo.resolve_dependencies(image for image in repo if include_image(image))
+        for repo in repos
+    ]
 
     if buildkite_tag:
         # On tag builds, always tag the images as such.
