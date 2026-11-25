@@ -34,6 +34,7 @@ use mz_adapter::{
 };
 use mz_auth::password::Password;
 use mz_catalog::memory::objects::{Cluster, ClusterReplica};
+use mz_frontegg_auth::AuthSessionHandle;
 use mz_interchange::encode::TypedDatum;
 use mz_interchange::json::{JsonNumberPolicy, ToJson};
 use mz_ore::cast::CastFrom;
@@ -415,6 +416,19 @@ async fn run_ws(state: WsState, user: Option<ExistingUser>, peer_addr: IpAddr, m
                 let _ = send_ws_response(&mut ws, WebSocketResponse::Error(err.into())).await;
                 return;
             },
+            // A Frontegg session expires when a refresh fails, for example because the user lost
+            // database access. Without this the socket keeps running SQL with the privileges the
+            // last successful refresh granted.
+            _ = frontegg_session_expired(&mut client.frontegg_session) => {
+                client.client.terminate().await;
+                let _ = ws
+                    .send(Message::Close(Some(CloseFrame {
+                        code: CloseCode::Policy.into(),
+                        reason: "authentication expired".into(),
+                    })))
+                    .await;
+                return;
+            },
             message = ws.recv() => message,
         };
 
@@ -477,6 +491,13 @@ async fn run_ws(state: WsState, user: Option<ExistingUser>, peer_addr: IpAddr, m
             debug!("failed to send response over WebSocket, {err:?}");
             return;
         }
+    }
+}
+
+async fn frontegg_session_expired(session: &mut Option<AuthSessionHandle>) {
+    match session {
+        Some(session) => session.expired().await,
+        None => std::future::pending().await,
     }
 }
 

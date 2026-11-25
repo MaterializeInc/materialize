@@ -86,7 +86,7 @@ use mz_auth::user::ExternalUserMetadata;
 use mz_authenticator::Authenticator;
 use mz_controller::ReplicaHttpLocator;
 use mz_dyncfg::ConfigSet;
-use mz_frontegg_auth::Error as FronteggError;
+use mz_frontegg_auth::{AuthSessionHandle, Error as FronteggError};
 use mz_http_util::DynamicFilterTarget;
 use mz_ore::cast::u64_to_usize;
 use mz_ore::metrics::MetricsRegistry;
@@ -820,6 +820,7 @@ async fn x_materialize_user_header_auth(mut req: Request, next: Next) -> impl In
             authenticated: Authenticated,
             authenticator_kind: mz_auth::AuthenticatorKind::None,
             groups: None,
+            frontegg_session: None,
         });
     }
     Ok(next.run(req).await)
@@ -874,11 +875,14 @@ pub struct AuthedUser {
     authenticator_kind: mz_auth::AuthenticatorKind,
     /// Groups from JWT claims for OIDC group-to-role sync.
     groups: Option<Vec<String>>,
+    /// The refreshing Frontegg session behind an app-password login.
+    frontegg_session: Option<AuthSessionHandle>,
 }
 
 pub struct AuthedClient {
     pub client: SessionClient,
     pub connection_guard: Option<ConnectionHandle>,
+    pub frontegg_session: Option<AuthSessionHandle>,
 }
 
 impl AuthedClient {
@@ -895,6 +899,7 @@ impl AuthedClient {
     where
         F: FnOnce(&mut AdapterSession),
     {
+        let frontegg_session = user.frontegg_session;
         let conn_id = adapter_client.new_conn_id()?;
         let mut session = adapter_client.new_session(
             AdapterSessionConfig {
@@ -932,6 +937,7 @@ impl AuthedClient {
         Ok(AuthedClient {
             client: adapter_client,
             connection_guard,
+            frontegg_session,
         })
     }
 }
@@ -1517,6 +1523,7 @@ pub(crate) async fn ensure_session_unexpired(
         authenticated: session_data.authenticated,
         authenticator_kind: session_data.authenticator_kind,
         groups: None,
+        frontegg_session: None,
     })
 }
 
@@ -1526,6 +1533,7 @@ async fn auth(
     challenges: &WwwAuthenticateChallenges,
     group_claim: Option<&str>,
 ) -> Result<AuthedUser, AuthError> {
+    let mut frontegg_session = None;
     let (name, external_metadata_rx, authenticated, groups) = match authenticator {
         Authenticator::Frontegg(frontegg) => match creds {
             Some(Credentials::Password { username, password }) => {
@@ -1535,6 +1543,7 @@ async fn auth(
                 let name = auth_session.user().into();
                 let groups = auth_session.groups();
                 let external_metadata_rx = Some(auth_session.external_metadata_rx());
+                frontegg_session = Some(auth_session);
                 (name, external_metadata_rx, authenticated, groups)
             }
             Some(Credentials::Token { token }) => {
@@ -1613,6 +1622,7 @@ async fn auth(
         authenticated,
         authenticator_kind: authenticator.kind(),
         groups,
+        frontegg_session,
     })
 }
 

@@ -2851,11 +2851,9 @@ async fn test_auth_required_permission() {
     let metrics_registry = MetricsRegistry::new();
 
     let tenant_id = Uuid::new_v4();
-    // Roles as the Frontegg mock defines them by default. Only the first two carry
-    // `REQUIRED_PERMISSION`.
-    let admin_role = "MaterializePlatformAdmin";
-    let member_role = "MaterializePlatform";
-    let billing_role = "BillingAdmin";
+    let admin_role = "mzadmin";
+    let member_role = "member";
+    let billing_role = "billing";
 
     // (user, role, client_id, secret)
     let accounts = [
@@ -2888,6 +2886,22 @@ async fn test_auth_required_permission() {
             )
         })
         .collect();
+    // The billing role carries an unrelated permission, so its rejection hinges on
+    // `REQUIRED_PERMISSION` specifically.
+    let role_permissions = BTreeMap::from([
+        (
+            admin_role.to_string(),
+            vec![REQUIRED_PERMISSION.to_string()],
+        ),
+        (
+            member_role.to_string(),
+            vec![REQUIRED_PERMISSION.to_string()],
+        ),
+        (
+            billing_role.to_string(),
+            vec!["materialize.invoice.read".to_string()],
+        ),
+    ]);
     let encoding_key =
         EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
     let decoding_key = DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap();
@@ -2900,7 +2914,7 @@ async fn test_auth_required_permission() {
         decoding_key,
         users,
         BTreeMap::new(),
-        None,
+        Some(role_permissions),
         now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
         None,
@@ -3245,6 +3259,29 @@ async fn test_auth_admin_superuser_revoked() {
         .await
         .unwrap();
 
+    let ws_uri = Uri::builder()
+        .scheme("wss")
+        .authority(&*format!(
+            "{}:{}",
+            Ipv4Addr::LOCALHOST,
+            server.http_local_addr().port()
+        ))
+        .path_and_query("/api/experimental/sql")
+        .build()
+        .unwrap();
+    let ws_stream = make_ws_tls(&ws_uri, |b| Ok(b.set_verify(SslVerifyMode::NONE)));
+    let (mut ws, _resp) =
+        tungstenite::client(ClientRequestBuilder::new(ws_uri.clone()), ws_stream).unwrap();
+    let ws_auth = WebSocketAuth::Basic {
+        user: frontegg_user.to_string(),
+        password: Password(frontegg_password.to_string()),
+        options: BTreeMap::new(),
+    };
+    ws.send(Message::Text(
+        serde_json::to_string(&ws_auth).unwrap().into(),
+    ))
+    .unwrap();
+
     assert_eq!(
         pg_client
             .query_one("SHOW is_superuser", &[])
@@ -3271,7 +3308,10 @@ async fn test_auth_admin_superuser_revoked() {
 
     frontegg_server
         .role_updates_tx
-        .send((frontegg_user.to_string(), Vec::new()))
+        .send((
+            frontegg_user.to_string(),
+            vec!["MaterializePlatform".to_string()],
+        ))
         .unwrap();
     frontegg_server.wait_for_auth(EXPIRES_IN_SECS);
 
@@ -3283,6 +3323,20 @@ async fn test_auth_admin_superuser_revoked() {
             .get::<_, String>(0),
         "off"
     );
+
+    // Losing `REQUIRED_PERMISSION` fails the next refresh, which closes the WebSocket.
+    frontegg_server
+        .role_updates_tx
+        .send((frontegg_user.to_string(), Vec::new()))
+        .unwrap();
+    frontegg_server.wait_for_auth(EXPIRES_IN_SECS);
+
+    let close = loop {
+        if let Message::Close(frame) = ws.read().unwrap() {
+            break frame;
+        }
+    };
+    assert_eq!(close.unwrap().reason, "authentication expired");
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
