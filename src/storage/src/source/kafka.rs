@@ -1763,6 +1763,59 @@ mod tests {
     use rdkafka::{Message, Offset, TopicPartitionList};
     use uuid::Uuid;
 
+    use mz_dyncfg::{ConfigSet, ConfigUpdates};
+    use mz_storage_types::dyncfgs::{
+        KAFKA_SOURCE_FETCH_MESSAGE_MAX_BYTES, KAFKA_SOURCE_RECEIVE_MESSAGE_MAX_BYTES,
+    };
+
+    use super::{
+        FETCH_MAX_BYTES, FETCH_MESSAGE_MAX_BYTES_RANGE, QUEUED_MAX_MESSAGES_KBYTES,
+        RECEIVE_MESSAGE_MAX_BYTES_RANGE, clamp_to_librdkafka_range,
+    };
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
+    fn librdkafka_accepts_clamped_dyncfgs() {
+        let config_set = ConfigSet::default()
+            .add(&KAFKA_SOURCE_FETCH_MESSAGE_MAX_BYTES)
+            .add(&KAFKA_SOURCE_RECEIVE_MESSAGE_MAX_BYTES);
+        for configured in [0, usize::MAX] {
+            let mut updates = ConfigUpdates::default();
+            updates.add(&KAFKA_SOURCE_FETCH_MESSAGE_MAX_BYTES, configured);
+            updates.add(&KAFKA_SOURCE_RECEIVE_MESSAGE_MAX_BYTES, configured);
+            updates.apply(&config_set);
+
+            let mut config = create_new_client_config_simple();
+            config.set(
+                "fetch.message.max.bytes",
+                clamp_to_librdkafka_range(
+                    &KAFKA_SOURCE_FETCH_MESSAGE_MAX_BYTES,
+                    &config_set,
+                    FETCH_MESSAGE_MAX_BYTES_RANGE,
+                )
+                .to_string(),
+            );
+            config.set("fetch.max.bytes", FETCH_MAX_BYTES.to_string());
+            config.set(
+                "queued.max.messages.kbytes",
+                QUEUED_MAX_MESSAGES_KBYTES.to_string(),
+            );
+            config.set(
+                "receive.message.max.bytes",
+                clamp_to_librdkafka_range(
+                    &KAFKA_SOURCE_RECEIVE_MESSAGE_MAX_BYTES,
+                    &config_set,
+                    RECEIVE_MESSAGE_MAX_BYTES_RANGE,
+                )
+                .to_string(),
+            );
+            let _consumer: BaseConsumer<_> =
+                mz_kafka_util::client::create(&config).unwrap_or_else(|e| {
+                    panic!("librdkafka rejected the clamped value of {configured}: {e}")
+                });
+        }
+    }
+
     // Splitting off a partition queue with an `Offset` that is not `Offset::Beginning` seems to
     // lead to a race condition where sometimes we receive messages from polling the main consumer
     // instead of on the partition queue. This can be surfaced by running the test in a loop (in
