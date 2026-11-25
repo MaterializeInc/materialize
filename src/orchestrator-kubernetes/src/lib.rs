@@ -1035,15 +1035,14 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             }]
         });
 
-        let env = if self.config.coverage {
-            Some(vec![EnvVar {
+        let mut env = vec![];
+        if self.config.coverage {
+            env.push(EnvVar {
                 name: "LLVM_PROFILE_FILE".to_string(),
                 value: Some(format!("/coverage/{}-%p-%9m%c.profraw", self.namespace)),
                 ..Default::default()
-            }])
-        } else {
-            None
-        };
+            });
+        }
 
         let mut volume_mounts = vec![];
 
@@ -1108,8 +1107,14 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         let mut main_container_security_context = container_security_context;
         if let Some(ctx) = &mut main_container_security_context {
             ctx.read_only_root_filesystem = Some(true);
-            // `/tmp` holds SSH tunnel keys and control sockets, and heap
-            // profile dumps.
+            // `/tmp` holds SSH tunnel keys, heap profile dumps and, through
+            // `XDG_STATE_HOME`, the SSH control sockets openssh would otherwise
+            // put under `$HOME`.
+            env.push(EnvVar {
+                name: "XDG_STATE_HOME".to_string(),
+                value: Some("/tmp".to_string()),
+                ..Default::default()
+            });
             volume_mounts.push(VolumeMount {
                 name: "tmp".to_string(),
                 mount_path: "/tmp".to_string(),
@@ -1239,7 +1244,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                     } else {
                         None
                     },
-                    env,
+                    env: (!env.is_empty()).then_some(env),
                     ..Default::default()
                 }],
                 volumes: (!volumes.is_empty()).then_some(volumes),

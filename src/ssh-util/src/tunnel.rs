@@ -259,9 +259,6 @@ async fn connect(
         builder
             .known_hosts_check(openssh::KnownHosts::Accept)
             .user_known_hosts_file("/dev/null")
-            // The default control directory is under `$HOME`, which is
-            // read-only in Kubernetes deployments.
-            .control_directory(std::env::temp_dir())
             .user(config.user.clone())
             .port(config.port)
             .keyfile(&path)

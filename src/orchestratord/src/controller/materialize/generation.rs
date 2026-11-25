@@ -97,16 +97,6 @@ static V26_50_0: LazyLock<Version> = LazyLock::new(|| Version {
     build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
 });
 
-/// Version at which `environmentd` stopped writing SSH control sockets under
-/// `$HOME`, so it can run with a read-only root filesystem.
-static V26_53_0: LazyLock<Version> = LazyLock::new(|| Version {
-    major: 26,
-    minor: 53,
-    patch: 0,
-    pre: Prerelease::new("dev.0").expect("dev.0 is valid prerelease"),
-    build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
-});
-
 static V26_1_0: LazyLock<Version> = LazyLock::new(|| Version {
     major: 26,
     minor: 1,
@@ -1138,12 +1128,16 @@ fn create_environmentd_statefulset_object(
     } else {
         None
     };
-    if let Some(ctx) = &mut security_context
-        && mz.meets_minimum_version(&V26_53_0)
-    {
+    if let Some(ctx) = &mut security_context {
         ctx.read_only_root_filesystem = Some(true);
-        // `/tmp` holds SSH tunnel keys and control sockets, and heap profile
-        // dumps.
+        // `/tmp` holds SSH tunnel keys, heap profile dumps and, through
+        // `XDG_STATE_HOME`, the SSH control sockets openssh would otherwise put
+        // under `$HOME`.
+        env.push(EnvVar {
+            name: "XDG_STATE_HOME".to_string(),
+            value: Some("/tmp".to_string()),
+            ..Default::default()
+        });
         volume_mounts.push(VolumeMount {
             name: "tmp".to_string(),
             mount_path: "/tmp".to_string(),

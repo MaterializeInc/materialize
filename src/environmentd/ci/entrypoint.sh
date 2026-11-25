@@ -11,6 +11,10 @@
 
 set -eu
 
+# In Kubernetes, /tmp is an emptyDir that outlives container restarts. Remove
+# SSH private keys left behind by a process killed mid-connect.
+rm -rf "${TMPDIR:-/tmp}"/ssh-tunnel-key*
+
 if [ -z "${MZ_EAT_MY_DATA:-}" ]; then
     unset LD_PRELOAD
 else
