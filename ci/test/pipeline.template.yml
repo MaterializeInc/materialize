@@ -263,8 +263,6 @@ steps:
           - "*pom.xml"
           - "*Gemfile.lock"
         depends_on: []
-        # Reports findings without blocking merges until it has a quiet track record.
-        soft_fail: true
         timeout_in_minutes: 15
         agents:
           queue: hetzner-aarch64-4cpu-8gb
