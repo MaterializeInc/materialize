@@ -25,12 +25,12 @@ trap 'rm -f "$out"' EXIT
 # vulnerability. --no-resolve skips guessing transitive versions of manifests
 # (requirements.txt, pom.xml) from registries, the slowest part of the scan.
 status=0
-git ls-files -z -- '*Cargo.lock' '*package-lock.json' '*yarn.lock' \
+git ls-files -z -- ci/osv-scanner.toml '*Cargo.lock' '*package-lock.json' '*yarn.lock' \
     '*requirements*.txt' '*uv.lock' '*pom.xml' '*Gemfile.lock' \
 | tar --null -cf - -T - \
 | docker run --rm -i --user 65534 --cap-drop ALL \
     --security-opt no-new-privileges --pids-limit 256 --entrypoint sh "$image" \
-    -c 'mkdir /tmp/src && tar -xf - -C /tmp/src && exec /osv-scanner scan source -r --no-resolve --format json /tmp/src' \
+    -c 'mkdir /tmp/src && tar -xf - -C /tmp/src && exec /osv-scanner scan source -r --no-resolve --config=/tmp/src/ci/osv-scanner.toml --format json /tmp/src' \
     > "$out" || status=$?
 if [ "$status" -gt 1 ]; then
     # Fail open only when osv.dev itself is down. Any other scanner error,
