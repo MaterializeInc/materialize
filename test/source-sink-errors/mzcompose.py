@@ -56,6 +56,7 @@ SERVICES = [
         ],
     ),
     SchemaRegistry(kafka_servers=[("badkafka", "9092")]),
+    Kafka(),
 ]
 
 
@@ -124,6 +125,85 @@ class KafkaTransactionLogGreaterThan1:
                   WHERE name = 'kafka_sink' and status = 'stalled'
                 true true
                 """))
+
+
+# librdkafka's default receive.message.max.bytes. A record of this size alone puts the fetch response
+# carrying it over the limit, once the record batch and response headers are added.
+OVERSIZED_RECORD_BYTES = 100_000_000
+
+
+@dataclass
+class KafkaOversizedFetchResponse:
+    name: str
+
+    # Uses `Kafka`, not `Redpanda`. Apache Kafka returns a first record batch larger than the
+    # fetch's max_bytes whole (KIP-74), which makes the response size deterministic.
+    def run_test(self, c: Composition) -> None:
+        print(f"+++ Running disruption scenario {self.name}")
+        seed = random.randint(0, 256**4)
+        topic = f"testdrive-source-topic-{seed}"
+
+        c.up(Service("testdrive", idle=True))
+
+        with c.override(
+            Testdrive(
+                no_reset=True,
+                seed=seed,
+                kafka_url="kafka",
+                entrypoint_extra=["--initial-backoff=1s", "--backoff-factor=0"],
+            ),
+        ):
+            c.up("kafka", "materialized")
+            # The broker's message.max.bytes is below the record size, so raise the limit for
+            # this topic. The produce request stays under the broker's socket.request.max.bytes.
+            c.exec(
+                "kafka",
+                "kafka-topics",
+                "--bootstrap-server=localhost:9092",
+                "--create",
+                f"--topic={topic}",
+                "--config=max.message.bytes=104857600",
+            )
+            c.testdrive(dedent("""
+                    > CREATE CONNECTION kafka_conn
+                      TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
+
+                    $ kafka-ingest topic=source-topic format=bytes
+                    ABC
+
+                    > CREATE SOURCE source1
+                      FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-source-topic-${testdrive.seed}')
+
+                    > CREATE TABLE source1_tbl FROM SOURCE source1 (REFERENCE "testdrive-source-topic-${testdrive.seed}")
+                      FORMAT BYTES
+                      ENVELOPE NONE
+
+                    > SELECT count(*) FROM source1_tbl
+                    1
+                    """))
+            c.exec(
+                "kafka",
+                "kafka-producer-perf-test",
+                f"--topic={topic}",
+                "--num-records=1",
+                f"--record-size={OVERSIZED_RECORD_BYTES}",
+                "--throughput=-1",
+                "--producer-props",
+                "bootstrap.servers=localhost:9092",
+                "max.request.size=104857600",
+                "buffer.memory=209715200",
+                env_extra={"KAFKA_HEAP_OPTS": "-Xmx1g"},
+            )
+            # The source may halt and restart after the error, so check the history instead of the
+            # current status.
+            c.testdrive(dedent("""
+                    $ set-sql-timeout duration=120s
+                    > SELECT bool_or(error ~* 'receive.message.max.bytes')
+                      FROM mz_internal.mz_source_status_history
+                      JOIN mz_sources ON mz_sources.id = source_id
+                      WHERE name = 'source1' AND status = 'stalled'
+                    true
+                    """))
 
 
 @dataclass
@@ -509,6 +589,9 @@ disruptions: list[Disruption] = [
     # One-off disruption with a badly configured kafka sink
     KafkaTransactionLogGreaterThan1(
         name="bad-kafka-sink",
+    ),
+    KafkaOversizedFetchResponse(
+        name="oversized-fetch-response",
     ),
 ]
 
