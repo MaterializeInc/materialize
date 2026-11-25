@@ -14,7 +14,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::iter;
-use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::anyhow;
@@ -32,7 +31,7 @@ use mz_ore::iter::IteratorExt;
 use mz_ore::str::StrExt;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_proto::RustType;
-use mz_repr::{CatalogItemId, RelationDesc, RelationVersionSelector, Timestamp, strconv};
+use mz_repr::{CatalogItemId, RelationDesc, RelationVersionSelector, Timestamp};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit::{Visit, visit_function};
 use mz_sql_parser::ast::visit_mut::{VisitMut, visit_expr_mut};
@@ -64,8 +63,6 @@ use mz_storage_types::sources::{
     SqlServerSourceExtras,
 };
 use prost::Message;
-use protobuf_native::MessageLite;
-use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use rdkafka::admin::AdminClient;
 use references::{RetrievedSourceReferences, SourceReferenceClient};
 use uuid::Uuid;
@@ -94,6 +91,7 @@ use self::error::{
 };
 
 pub(crate) mod error;
+mod protobuf;
 mod references;
 mod source_preparation;
 
@@ -2669,6 +2667,8 @@ struct CsrProtobufPreparation {
     connection: mz_storage_types::connections::CsrConnection,
     topic: String,
     require_key: bool,
+    /// Whether this is the explicit `KEY FORMAT` of a key/value format.
+    key_format: bool,
 }
 
 impl CsrProtobufPreparation {
@@ -2680,6 +2680,7 @@ impl CsrProtobufPreparation {
             connection: ccsr_connection,
             topic,
             require_key,
+            key_format,
         } = self;
         let ccsr_client = ccsr_connection
             .connect(storage_configuration, InTask::No)
@@ -2687,9 +2688,24 @@ impl CsrProtobufPreparation {
             .map_err(|e| CsrPurificationError::ClientError(Arc::new(e)))?;
 
         let value = compile_proto(&format!("{}-value", topic), &ccsr_client).await?;
-        let key = compile_proto(&format!("{}-key", topic), &ccsr_client)
-            .await
-            .ok();
+        // An explicit KEY FORMAT decodes keys with the value schema when the key
+        // schema is absent, so there only a missing key subject may leave it
+        // out. Elsewhere the key subject may hold another format, such as Avro.
+        let key = match compile_proto(&format!("{}-key", topic), &ccsr_client).await {
+            Ok(key) => Some(key),
+            Err(PlanError::FetchingCsrSchemaFailed { cause, .. })
+                if matches!(
+                    cause.downcast_ref(),
+                    Some(
+                        GetBySubjectError::SubjectNotFound | GetBySubjectError::VersionNotFound(_)
+                    )
+                ) =>
+            {
+                None
+            }
+            Err(e) if key_format => return Err(e),
+            Err(_) => None,
+        };
 
         if require_key && key.is_none() {
             sql_bail!("Key schema is required for ENVELOPE DEBEZIUM");
@@ -2819,6 +2835,7 @@ fn prepare_csr_connection_proto(
     options: &SourceFormatOptions,
     csr_connection: &CsrConnectionProtobuf<Aug>,
     envelope: &Option<SourceEnvelope>,
+    key_format: bool,
 ) -> Result<Option<CsrProtobufPreparation>, PlanError> {
     let SourceFormatOptions::Kafka { topic } = options else {
         sql_bail!("Confluent Schema Registry is only supported with Kafka sources")
@@ -2844,6 +2861,7 @@ fn prepare_csr_connection_proto(
                 connection: ccsr_connection,
                 topic: topic.clone(),
                 require_key: matches!(envelope, Some(SourceEnvelope::Debezium)),
+                key_format,
             }));
         }
         Some(_) => (),
@@ -3049,45 +3067,12 @@ async fn compile_proto(
             cause: Arc::new(e),
         })?;
 
-    // Compile .proto files into a file descriptor set.
-    let mut source_tree = VirtualSourceTree::new();
-
-    // Add well-known types (e.g., google/protobuf/timestamp.proto) to the source
-    // tree. These are implicitly available to protoc but are typically not
-    // registered in the schema registry.
-    source_tree.as_mut().map_well_known_types();
-
-    for subject in iter::once(&primary_subject).chain(dependency_subjects.iter()) {
-        source_tree.as_mut().add_file(
-            Path::new(&subject.name),
-            subject.schema.raw.as_bytes().to_vec(),
-        );
-    }
-    let mut db = SourceTreeDescriptorDatabase::new(source_tree.as_mut());
-    let fds = db
-        .as_mut()
-        .build_file_descriptor_set(&[Path::new(&primary_subject.name)])
-        .map_err(|cause| PlanError::InvalidProtobufSchema { cause })?;
-
-    // Ensure there is exactly one message in the file.
-    let primary_fd = fds.file(0);
-    let message_name = match primary_fd.message_type_size() {
-        1 => String::from_utf8_lossy(primary_fd.message_type(0).name()).into_owned(),
-        0 => bail_unsupported!(29603, "Protobuf schemas with no messages"),
-        _ => bail_unsupported!(29603, "Protobuf schemas with multiple messages"),
-    };
-
-    // Encode the file descriptor set into a SQL byte string.
-    let bytes = &fds
-        .serialize()
-        .map_err(|cause| PlanError::InvalidProtobufSchema { cause })?;
-    let mut schema = String::new();
-    strconv::format_bytes(&mut schema, bytes);
-
-    Ok(CsrSeedProtobufSchema {
-        schema,
-        message_name,
-    })
+    let primary_name = primary_subject.name.clone();
+    let files = iter::once(primary_subject)
+        .chain(dependency_subjects)
+        .map(|subject| (subject.name, subject.schema.raw))
+        .collect();
+    protobuf::compile_proto_files(&primary_name, files)
 }
 
 const MZ_NOW_NAME: &str = "mz_now";

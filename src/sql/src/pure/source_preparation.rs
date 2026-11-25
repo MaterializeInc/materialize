@@ -308,11 +308,11 @@ impl<'a> Cursor<'a> {
         match format {
             None => {}
             Some(FormatSpecifier::Bare(format)) => {
-                self.single_format(catalog, format, options, envelope)?;
+                self.single_format(catalog, format, options, envelope, false)?;
             }
             Some(FormatSpecifier::KeyValue { key, value }) => {
-                self.single_format(catalog, key, options, envelope)?;
-                self.single_format(catalog, value, options, envelope)?;
+                self.single_format(catalog, key, options, envelope, true)?;
+                self.single_format(catalog, value, options, envelope, false)?;
             }
         }
         Ok(())
@@ -324,6 +324,7 @@ impl<'a> Cursor<'a> {
         format: &mut Format<Aug>,
         options: &SourceFormatOptions,
         envelope: &Option<SourceEnvelope>,
+        key_format: bool,
     ) -> Result<(), ResolveError> {
         match format {
             Format::Avro(AvroSchema::Csr { csr_connection }) => {
@@ -355,9 +356,13 @@ impl<'a> Cursor<'a> {
                 }
             }
             Format::Protobuf(ProtobufSchema::Csr { csr_connection }) => {
-                if let Some(request) =
-                    prepare_csr_connection_proto(catalog, options, csr_connection, envelope)?
-                {
+                if let Some(request) = prepare_csr_connection_proto(
+                    catalog,
+                    options,
+                    csr_connection,
+                    envelope,
+                    key_format,
+                )? {
                     let PreparationValue::Protobuf(seed) =
                         self.request(RequestKind::Protobuf(Box::new(request)))?
                     else {

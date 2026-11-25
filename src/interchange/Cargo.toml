@@ -44,6 +44,8 @@ uuid = { workspace = true, features = ["serde"] }
 mz-alloc-default = { path = "../alloc-default" }
 mz-bench-util = { path = "../bench-util" }
 prost.workspace = true
+# environmentd links `protox`, which turns this feature on.
+prost-reflect = { workspace = true, features = ["text-format"] }
 tokio.workspace = true
 
 [build-dependencies]
