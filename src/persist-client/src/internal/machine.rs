@@ -3057,11 +3057,11 @@ pub mod tests {
             };
             assert!(parts().await > 0);
 
-            // GC on a live shard isn't counted. A GC deletes the rollups the
-            // previous one removed from state, so run two.
             read.expire().await;
             let deleted = |caller| client.metrics.gc.tombstone_deleted_blobs(caller);
             let rollups_before = rollup_keys(&client, shard_id).await.0.len();
+            // The second GC deletes the rollup blobs that the first GC removed
+            // from state.
             for _ in 0..2 {
                 let _ = write.machine.add_rollup_for_current_seqno().await;
                 let req = GcReq {
