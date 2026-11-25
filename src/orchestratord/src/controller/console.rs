@@ -7,15 +7,17 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeMap;
+
 use k8s_controller::{Outcome, TraceMetadata};
 use k8s_openapi::{
     api::{
         apps::v1::{Deployment, DeploymentSpec},
         core::v1::{
             Affinity, Capabilities, ConfigMap, ConfigMapVolumeSource, Container, ContainerPort,
-            EnvVar, HTTPGetAction, KeyToPath, PodSecurityContext, PodSpec, PodTemplateSpec, Probe,
-            ResourceRequirements, SeccompProfile, SecretVolumeSource, SecurityContext, Service,
-            ServicePort, ServiceSpec, Toleration, Volume, VolumeMount,
+            EmptyDirVolumeSource, EnvVar, HTTPGetAction, KeyToPath, PodSecurityContext, PodSpec,
+            PodTemplateSpec, Probe, ResourceRequirements, SeccompProfile, SecretVolumeSource,
+            SecurityContext, Service, ServicePort, ServiceSpec, Toleration, Volume, VolumeMount,
         },
         networking::v1::{
             IPBlock, NetworkPolicy, NetworkPolicyIngressRule, NetworkPolicyPeer, NetworkPolicyPort,
@@ -286,14 +288,15 @@ impl Context {
                 ..Default::default()
             },
         ];
-        let pod_template_annotations = self.config.enable_prometheus_scrape_annotations.then(|| {
-            btreemap! {
+        let mut pod_template_annotations = BTreeMap::new();
+        if self.config.enable_prometheus_scrape_annotations {
+            pod_template_annotations.extend(btreemap! {
                 "prometheus.io/scrape".to_owned() => "true".to_string(),
                 "prometheus.io/port".to_owned() => self.config.console_internal_http_port.to_string(),
                 "prometheus.io/path".to_owned() => "/metrics".to_string(),
                 "prometheus.io/scheme".to_owned() => "http".to_string(),
-            }
-        });
+            });
+        }
 
         let scheme = match console.spec.balancerd.scheme {
             HttpConnectionScheme::Http => "http",
@@ -338,6 +341,29 @@ impl Context {
             mount_path: "/usr/share/nginx/html/app-config".to_string(),
             ..Default::default()
         }];
+        if self.config.enable_security_context {
+            // The security context makes the root filesystem read-only. nginx
+            // writes its pid and temp files to /tmp, and the image entrypoint
+            // renders its config template into /etc/nginx/conf.d.
+            for (name, mount_path) in [("tmp", "/tmp"), ("nginx-conf", "/etc/nginx/conf.d")] {
+                volumes.push(Volume {
+                    name: name.to_string(),
+                    empty_dir: Some(EmptyDirVolumeSource::default()),
+                    ..Default::default()
+                });
+                volume_mounts.push(VolumeMount {
+                    name: name.to_string(),
+                    mount_path: mount_path.to_string(),
+                    ..Default::default()
+                });
+            }
+            // Without this, Cluster Autoscaler won't scale down a node running
+            // a console pod, because the pod has local emptyDir storage.
+            pod_template_annotations.insert(
+                "cluster-autoscaler.kubernetes.io/safe-to-evict-local-volumes".to_owned(),
+                "tmp,nginx-conf".to_owned(),
+            );
+        }
 
         let scheme = if issuer_ref_defined(
             &self.config.default_certificate_specs.console_external,
@@ -404,6 +430,7 @@ ssl_certificate_key /nginx/tls/tls.key;",
                     ..Default::default()
                 }),
                 allow_privilege_escalation: Some(false),
+                read_only_root_filesystem: Some(true),
                 ..Default::default()
             })
         } else {
@@ -454,7 +481,8 @@ ssl_certificate_key /nginx/tls/tls.key;",
                 // owned by the deployment, not the materialize instance
                 metadata: Some(ObjectMeta {
                     labels: Some(pod_template_labels),
-                    annotations: pod_template_annotations,
+                    annotations: (!pod_template_annotations.is_empty())
+                        .then_some(pod_template_annotations),
                     ..Default::default()
                 }),
                 spec: Some(PodSpec {

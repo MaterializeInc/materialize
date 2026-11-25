@@ -5313,9 +5313,23 @@ def workflow_leader_failover(
             assert pods and all(
                 pod["status"]["phase"] == "Running" for pod in pods
             ), f"expected all {name} pods to be running, got {[(pod['metadata']['name'], pod['status']['phase']) for pod in pods]}"
+            for pod in pods:
+                security_context = pod["spec"]["containers"][0]["securityContext"]
+                assert security_context.get(
+                    "readOnlyRootFilesystem"
+                ), f"expected {name} to run with a read-only root filesystem, got {security_context}"
+                # Ready means the HTTP probes pass, so nginx and balancerd are
+                # serving despite the read-only root.
+                ready = any(
+                    c["type"] == "Ready" and c["status"] == "True"
+                    for c in pod["status"].get("conditions", [])
+                )
+                assert (
+                    ready
+                ), f"expected {name} pod {pod['metadata']['name']} to be ready"
 
     retry(balancer_and_console_running, 300)
-    print("Balancerd and console pods are running")
+    print("Balancerd and console pods are ready")
 
     # The chart must create a PodDisruptionBudget so that node drains can't
     # take down all operator replicas at once.
