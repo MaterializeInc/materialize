@@ -326,7 +326,8 @@ buildid = "1.0.4"
 bytefmt = "0.1.7"
 bytemuck = { version = "1.23.1", features = ["extern_crate_alloc", "latest_stable_rust"] }
 byteorder = "1.5"
-bytes = "1.12.1"
+# TODO: Unpin here and in .github/renovate5.json once a bytes release with https://github.com/tokio-rs/bytes/pull/876 is out
+bytes = "=1.12.1"
 bytesize = "2.7.0"
 cc = "1.5.1"
 cfg-if = "1.0.4"

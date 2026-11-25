@@ -74,6 +74,7 @@ steps:
         env:
           CI_ANTITHESIS: 1
           CI_ANTITHESIS_DURATION: 60
+          CI_LTO: 0 # better symbols
         coverage: skip
         sanitizer: skip
         branches: "main"

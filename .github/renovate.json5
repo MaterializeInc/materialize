@@ -173,6 +173,12 @@
       "allowedVersions": "<0.7"
     },
     {
+      // Held back in Cargo.toml
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["bytes"],
+      "allowedVersions": "<1.12.2"
+    },
+    {
       "matchManagers": ["cargo"],
       "matchPackageNames": ["tungstenite"],
       "allowedVersions": "<0.30"

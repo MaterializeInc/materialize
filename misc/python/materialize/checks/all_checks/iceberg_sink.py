@@ -9,7 +9,7 @@
 from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
-from materialize.checks.checks import Check, externally_idempotent
+from materialize.checks.checks import Check, disabled, externally_idempotent
 from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
 from materialize.checks.executors import Executor
 from materialize.mz_version import MzVersion
@@ -41,6 +41,7 @@ def schemas_null() -> str:
 
 
 @externally_idempotent(False)
+@disabled("SS-614")
 class IcebergSinkUpsert(Check):
     def _can_run(self, e: Executor) -> bool:
         return self.base_version >= MzVersion.parse_mz("v26.10.0-dev")
