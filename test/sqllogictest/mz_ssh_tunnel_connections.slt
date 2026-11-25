@@ -49,6 +49,9 @@ CREATE CONNECTION sc TO SSH TUNNEL (HOST 'ssh.example.com', USER 'mz')
 statement error cannot ALTER SSH TUNNEL option PUBLIC KEY 1
 ALTER CONNECTION sc RESET (PUBLIC KEY 1) WITH (VALIDATE = false)
 
+statement error cannot ALTER SSH TUNNEL option PUBLIC KEY 1
+ALTER CONNECTION sc DROP (PUBLIC KEY 1) WITH (VALIDATE = true)
+
 statement error cannot ALTER SSH TUNNEL option PUBLIC KEY 2
 ALTER CONNECTION sc SET (PUBLIC KEY 2 = 'replacement')
 
