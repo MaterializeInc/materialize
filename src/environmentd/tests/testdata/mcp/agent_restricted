@@ -38,11 +38,10 @@ mcp-agent
 200 OK
 {"jsonrpc":"2.0","id":11,"error":{"code":-32602,"message":"Data product not found: nonexistent_product","data":{"error_type":"DataProductNotFound"}}}
 
-# Before the lookup query was rewritten to LEFT JOIN
-# `mz_show_my_cluster_privileges`, this call errored out with a
-# `mz_roles is restricted` planning failure inside `has_cluster_privilege`.
-# Now it correctly reaches the "no rows" branch and returns
-# DataProductNotFound, same shape as the unrestricted variant.
+# A restricted role reaches the "no rows" branch and gets DataProductNotFound,
+# the same shape as the unrestricted variant. The lookup LEFT JOINs
+# `mz_show_my_cluster_privileges`, since `has_cluster_privilege` fails to plan
+# for a restricted role ("mz_roles is restricted").
 mcp-agent
 {"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"read_data_product","arguments":{"name":"nonexistent_product"}}}
 ----

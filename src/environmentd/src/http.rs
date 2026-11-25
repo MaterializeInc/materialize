@@ -171,11 +171,8 @@ pub struct HttpConfig {
     /// `resource` field, RFC 9728). When `None`, callers fall back to the
     /// request's `Host` header, which is correct for unproxied dev setups
     /// but loses fidelity behind a load balancer that rewrites Host.
-    ///
-    /// We deliberately do NOT consult `X-Forwarded-Host` or
-    /// `X-Forwarded-Proto`: there is no proxy-trust model in environmentd
-    /// today, and an attacker reaching the server directly can otherwise
-    /// poison the published metadata URLs.
+    /// `X-Forwarded-*` headers are never consulted, see the
+    /// `oauth_metadata` module docs.
     pub http_host_name: Option<String>,
     pub frontegg_oauth_issuer_url: Option<String>,
     pub concurrent_webhook_req: Arc<tokio::sync::Semaphore>,
@@ -1030,8 +1027,8 @@ where
 /// Per-request decision about which `WWW-Authenticate` challenges to emit
 /// on a 401, computed by the auth middleware.
 ///
-/// Carries both the `Basic` toggle (today's behavior, kept for the SQL HTTP
-/// layer and friends) and an optional `Bearer` challenge with a
+/// Carries both the `Basic` toggle, which the SQL HTTP layer also uses, and
+/// an optional `Bearer` challenge with a
 /// `resource_metadata` URL per RFC 9728. The Bearer challenge is only set on
 /// routes that attach an [`oauth_metadata::McpOAuthConfig`] extension; other
 /// routes emit only `Basic` so their behavior is unchanged.

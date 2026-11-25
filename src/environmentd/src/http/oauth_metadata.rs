@@ -31,8 +31,8 @@
 //!   2. The request's `Host` header.
 //!
 //! We deliberately do **not** consult `X-Forwarded-Host` or
-//! `X-Forwarded-Proto`: environmentd has no proxy-trust configuration
-//! today, and trusting those headers blind would let any client reaching
+//! `X-Forwarded-Proto`: environmentd has no proxy-trust configuration,
+//! and trusting those headers blind would let any client reaching
 //! the server directly poison the published metadata URLs (a host-header
 //! injection on the OAuth flow). Deployments behind a load balancer that
 //! rewrites `Host` are expected to set `http_host_name` explicitly.
@@ -40,10 +40,9 @@
 //! ## When the document is published
 //!
 //! The handler returns 404 when no OAuth flow is meaningful for the
-//! listener: either because `oidc_issuer` is unset (no authorization
-//! server to advertise) or because the listener's authenticator is
-//! [`listeners::AuthenticatorKind::None`] (no token would ever be
-//! validated). Returning an empty or fake document instead would mislead
+//! listener: its authenticator validates no bearer token (see
+//! [`McpOAuthDiscovery`]), or it is an OIDC listener with `oidc_issuer`
+//! unset. Returning an empty or fake document instead would mislead
 //! clients into starting an OAuth dance they cannot complete.
 //!
 //! [RFC 9728]: https://datatracker.ietf.org/doc/html/rfc9728
@@ -187,7 +186,7 @@ impl OauthMetadataMetrics {
 pub(crate) enum McpOAuthDiscovery {
     /// The listener validates no OAuth bearer token, so there is no flow to
     /// advertise. Covers `None`, `Password`, and `Sasl`, plus `Frontegg`
-    /// when no issuer URL is configured.
+    /// when no valid issuer URL is configured.
     Disabled,
     /// Self-managed OIDC: the authorization server is the `oidc_issuer`
     /// dyncfg, read at request time so an operator can change it without a
@@ -251,8 +250,8 @@ pub(crate) struct McpOAuthConfig {
 
 impl McpOAuthConfig {
     /// OAuth scope advertised in the `Bearer` challenge's `scope=`
-    /// parameter on 401 responses. Constant today; method-form keeps the
-    /// auth middleware free of [`MCP_SCOPE`] knowledge.
+    /// parameter on 401 responses. A method so the auth middleware does not
+    /// need [`MCP_SCOPE`].
     pub(crate) fn scope(&self) -> &'static str {
         MCP_SCOPE
     }
@@ -266,9 +265,9 @@ impl McpOAuthConfig {
 ///
 /// Returns 404 when this listener does not advertise OAuth (see
 /// [`McpOAuthDiscovery`]) or has no issuer configured, 503 if the adapter
-/// client is not yet available (a brief window at startup), 400 if the
-/// request has no host information to construct a URL with, and 200 with
-/// the JSON document otherwise.
+/// client is not yet available (a brief window at startup) or `oidc_issuer`
+/// is invalid, 400 if the request has no host information to construct a URL
+/// with, and 200 with the JSON document otherwise.
 pub(crate) async fn handle_protected_resource_metadata(
     Extension(adapter_client_rx): Extension<Delayed<Client>>,
     Extension(config): Extension<McpOAuthConfig>,
