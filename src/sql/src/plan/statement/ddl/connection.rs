@@ -101,8 +101,13 @@ generate_extracted_config!(
 );
 
 /// Options which cannot be changed using ALTER CONNECTION.
-pub(crate) const INALTERABLE_OPTIONS: &[ConnectionOptionName] =
-    &[ProgressTopic, ProgressTopicReplicationFactor];
+pub(crate) const INALTERABLE_OPTIONS: &[ConnectionOptionName] = &[
+    ProgressTopic,
+    ProgressTopicReplicationFactor,
+    // ROTATE KEYS updates the public keys together with their private keys.
+    PublicKey1,
+    PublicKey2,
+];
 
 /// Options of which only one may be specified.
 pub(crate) const MUTUALLY_EXCLUSIVE_SETS: &[&[ConnectionOptionName]] = &[&[Broker, Brokers]];
