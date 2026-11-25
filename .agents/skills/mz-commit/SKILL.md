@@ -158,6 +158,7 @@ Never regenerate the entire Cargo.lock — bare `cargo update` bumps every semve
 * Work against the `main` branch of `MaterializeInc/materialize`.
 * Push branches to your fork.
 * Pull requests target `main` on `MaterializeInc/materialize`.
+* The QA LLM review skips draft PRs unless they carry the `llm-review` label. For drafts aimed at being reviewed by humans and eventually merged use the label.
 * Each PR should contain one semantic change.
 * Put non-trivial user docs for a new feature in a separate PR. See "Adding documentation for new features" in `doc/user/README.md`.
 
