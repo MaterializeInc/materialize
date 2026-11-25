@@ -127,8 +127,8 @@ class KafkaTransactionLogGreaterThan1:
                 """))
 
 
-# librdkafka's default receive.message.max.bytes. A record of this size alone puts the fetch response
-# carrying it over the limit, once the record batch and response headers are added.
+# The default kafka_source_receive_message_max_bytes. A record of this size alone puts the fetch
+# response carrying it over the limit, once the record batch and response headers are added.
 OVERSIZED_RECORD_BYTES = 100_000_000
 
 
@@ -203,6 +203,20 @@ class KafkaOversizedFetchResponse:
                       JOIN mz_sources ON mz_sources.id = source_id
                       WHERE name = 'source1' AND status = 'stalled'
                     true
+                    """))
+            # The source picks up the raised limit when its halt restarts it.
+            c.testdrive(dedent(f"""
+                    $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
+                    ALTER SYSTEM SET kafka_source_receive_message_max_bytes = {2 * OVERSIZED_RECORD_BYTES}
+
+                    $ set-sql-timeout duration=120s
+                    > SELECT count(*), max(octet_length(data)) FROM source1_tbl
+                    2 {OVERSIZED_RECORD_BYTES}
+
+                    > SELECT status, error
+                      FROM mz_internal.mz_source_statuses
+                      WHERE name = 'source1'
+                    running <null>
                     """))
 
 
