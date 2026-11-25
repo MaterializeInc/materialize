@@ -622,7 +622,12 @@ impl AuthenticatorInner {
             }
         }
 
-        if !msg.claims.permissions.iter().any(|p| p == REQUIRED_PERMISSION) {
+        if !msg
+            .claims
+            .permissions
+            .iter()
+            .any(|p| p == REQUIRED_PERMISSION)
+        {
             return Err(Error::MissingPermission);
         }
 
