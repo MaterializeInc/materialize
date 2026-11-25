@@ -6107,7 +6107,7 @@ fn test_mcp_agent_restricted() {
 }
 
 /// Tests the unified `/api/mcp` route. The agent route is on too, so the file
-/// also covers the new tool name there.
+/// also covers `list_data_products` there.
 #[mz_ore::test]
 fn test_mcp_unified() {
     let harness = test_util::TestHarness::default()
@@ -8250,7 +8250,8 @@ fn test_mcp_agent_runtime_flag_toggle() {
 
 /// Tests that the MCP agent endpoint respects RBAC: data products are visible
 /// to any user with SELECT on the view. Cluster USAGE is not required for
-/// discovery — the view appears with a NULL cluster if no accessible index exists.
+/// discovery: a materialized view the role cannot reach the cluster of appears
+/// with a NULL cluster.
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_mcp_agent_rbac() {
