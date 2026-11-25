@@ -118,10 +118,9 @@ pub struct Session {
     #[derivative(Debug = "ignore")]
     qcell_owner: QCellOwner,
     session_oracles: BTreeMap<Timeline, InMemoryTimestampOracle>,
-    /// Incremented when session state that is relevant to prepared statement planning changes.
-    /// Currently, only changes to `portals` are tracked. Changes to `prepared_statements` don't
-    /// need to be tracked, because prepared statements can't depend on other prepared statements.
-    /// TODO: We might want to track changes also to session variables.
+    /// Incremented when session state that is relevant to prepared statement planning may have
+    /// changed: `portals`, `prepared_statements`, anything a statement execution can change, such
+    /// as session variables, and the end of a transaction, which reverts `SET LOCAL`.
     /// (`Catalog::transient_revision` similarly tracks changes on the catalog side.)
     state_revision: u64,
 }
@@ -759,6 +758,7 @@ impl Session {
         state_revision: StateRevision,
         now: EpochMillis,
     ) {
+        let state_revision = self.advance_state_revision_for_insert(state_revision);
         let logging = PreparedStatementLoggingInfo::still_to_log(
             raw_sql,
             stmt.as_ref(),
@@ -780,11 +780,16 @@ impl Session {
     ///
     /// Returns whether a statement previously existed.
     pub fn remove_prepared_statement(&mut self, name: &str) -> bool {
-        self.prepared_statements.remove(name).is_some()
+        let removed = self.prepared_statements.remove(name).is_some();
+        if removed {
+            self.state_revision += 1;
+        }
+        removed
     }
 
     /// Removes all prepared statements.
     pub fn remove_all_prepared_statements(&mut self) {
+        self.state_revision += 1;
         self.prepared_statements.clear();
     }
 
@@ -840,7 +845,7 @@ impl Session {
         if !portal_name.is_empty() && self.portals.contains_key(&portal_name) {
             return Err(AdapterError::DuplicateCursor(portal_name));
         }
-        self.state_revision += 1;
+        let state_revision = self.advance_state_revision_for_insert(state_revision);
         let param_types = desc.param_types.clone();
         self.portals.insert(
             portal_name,
@@ -906,7 +911,7 @@ impl Session {
         result_formats: Vec<Format>,
         state_revision: StateRevision,
     ) -> Result<String, AdapterError> {
-        self.state_revision += 1;
+        let state_revision = self.advance_state_revision_for_insert(state_revision);
 
         // See: https://github.com/postgres/postgres/blob/84f5c2908dad81e8622b0406beea580e40bb03ac/src/backend/utils/mmgr/portalmem.c#L234
         for i in 0usize.. {
@@ -937,7 +942,7 @@ impl Session {
     /// Returns the parameters changed by [`SessionVars::reset_all`].
     pub fn reset(&mut self) -> BTreeMap<&'static str, String> {
         let _ = self.clear_transaction();
-        self.prepared_statements.clear();
+        self.remove_all_prepared_statements();
         self.vars.reset_all()
     }
 
@@ -1045,6 +1050,23 @@ impl Session {
     /// when to re-plan due to session state changes.
     pub fn state_revision(&self) -> u64 {
         self.state_revision
+    }
+
+    /// Advances the state revision after a statement execution.
+    pub(crate) fn advance_state_revision(&mut self) {
+        self.state_revision += 1;
+    }
+
+    /// Advances the state revision for inserting a prepared statement or portal verified at
+    /// `verified`, and returns the revision to record on it.
+    fn advance_state_revision_for_insert(&mut self, mut verified: StateRevision) -> StateRevision {
+        let was_current = verified.session_state_revision == self.state_revision;
+        self.state_revision += 1;
+        // An entry's own insertion does not invalidate it.
+        if was_current {
+            verified.session_state_revision = self.state_revision;
+        }
+        verified
     }
 }
 
