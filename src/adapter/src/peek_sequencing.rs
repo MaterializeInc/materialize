@@ -1657,6 +1657,7 @@ impl PeekClient {
                             logging,
                             Arc::clone(&catalog),
                             cancellation_epoch,
+                            session.user(),
                         )
                         .await?
                     }
@@ -1674,6 +1675,7 @@ impl PeekClient {
                                 cancellation_epoch,
                                 logging,
                                 false,
+                                session.user(),
                             )
                             .await?;
 

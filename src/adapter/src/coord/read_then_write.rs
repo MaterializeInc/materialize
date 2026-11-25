@@ -34,6 +34,7 @@ use crate::coord::appends::{
     InternalWriteResponder, PendingWriteTxn, TableWriteCmd, TimestampedWriteRequest,
     UserWriteResponder, WriteResult, WriteTarget,
 };
+use crate::coord::catalog_serving;
 use crate::error::AdapterError;
 use mz_ore::soft_panic_or_log;
 
@@ -93,6 +94,18 @@ impl Coordinator {
             ActiveSubscribeOwner::Session { conn_id, .. } => {
                 if !self.active_conns.contains_key(conn_id) {
                     let _ = response_tx.send(Err(AdapterError::Canceled));
+                    return;
+                }
+                if let Err(e) = self.ensure_cluster_allows_running_workload(
+                    cluster_id,
+                    catalog_serving::subscribe_workload(
+                        self.catalog().state(),
+                        depends_on.iter().copied(),
+                    ),
+                    conn_id,
+                    "run UPDATE or DELETE",
+                ) {
+                    let _ = response_tx.send(Err(e));
                     return;
                 }
             }

@@ -21,7 +21,7 @@ use mz_catalog::memory::objects::{
 };
 use mz_compute_types::config::ComputeReplicaConfig;
 use mz_controller::clusters::{
-    ManagedReplicaLocation, ReplicaConfig, ReplicaLocation, ReplicaLogging, WorkloadClass,
+    ManagedReplicaLocation, ReplicaConfig, ReplicaLocation, ReplicaLogging,
 };
 use mz_controller_types::{ClusterId, DEFAULT_REPLICA_LOGGING_INTERVAL, ReplicaId};
 use mz_ore::cast::CastFrom;
@@ -50,11 +50,10 @@ use mz_adapter_types::dyncfgs::{
 };
 
 use super::return_if_err;
-use crate::active_compute_sink::{ActiveComputeSink, ActiveSubscribeOwner};
 use crate::catalog::{self, Op, ReplicaCreateDropReason};
 use crate::coord::{
     AlterCluster, AlterClusterAwaitReconfiguration, ClusterStage, Coordinator, Message,
-    PlanValidity, StageResult, Staged, catalog_serving,
+    PlanValidity, StageResult, Staged,
 };
 use crate::{AdapterError, AdapterNotice, ExecuteContext, ExecuteResponse, session::Session};
 
@@ -107,51 +106,6 @@ impl Coordinator {
     ) {
         let stage = return_if_err!(self.alter_cluster_validate(ctx.session(), plan).await, ctx);
         self.sequence_staged(ctx, Span::current(), stage).await;
-    }
-
-    /// Fails if `size` does not allow a workload class that `cluster_id` runs,
-    /// including its active subscribes and `COPY TO` sinks, whose dataflows a
-    /// new replica of `size` would also run.
-    fn ensure_size_allows_cluster_workloads(
-        &self,
-        cluster_id: ClusterId,
-        size: &str,
-        session: &Session,
-    ) -> Result<(), AdapterError> {
-        let state = self.catalog().state();
-        let running = self
-            .active_compute_sinks
-            .values()
-            .filter(|sink| sink.cluster_id() == cluster_id)
-            .filter_map(|sink| {
-                let (conn_id, class) = match sink {
-                    ActiveComputeSink::Subscribe(subscribe) => match &subscribe.owner {
-                        ActiveSubscribeOwner::Session { conn_id, .. } => (
-                            conn_id,
-                            catalog_serving::subscribe_workload(
-                                state,
-                                subscribe.depends_on.iter().copied(),
-                            ),
-                        ),
-                        // Background subscribes are internal, which is exempt.
-                        ActiveSubscribeOwner::Background => return None,
-                    },
-                    ActiveComputeSink::CopyTo(copy_to) => {
-                        (&copy_to.conn_id, WorkloadClass::ComputeInteractive)
-                    }
-                };
-                let internal = self
-                    .active_conns
-                    .get(conn_id)
-                    .map_or(true, |conn| conn.user().is_internal());
-                (!internal).then_some(class)
-            });
-        state.ensure_size_allows_cluster_workloads(
-            state.get_cluster(cluster_id),
-            size,
-            session.user(),
-            running,
-        )
     }
 
     #[instrument]
