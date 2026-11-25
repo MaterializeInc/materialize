@@ -2297,7 +2297,6 @@ async fn test_max_connections_limits() {
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
-            required_permission: None,
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -5552,7 +5551,7 @@ async fn test_cert_reloading() {
         description: None,
         created_at: Utc::now(),
     }];
-    let roles = Vec::new();
+    let roles = vec!["MaterializePlatform".to_string()];
     let users = BTreeMap::from([(
         email.clone(),
         UserConfig {
@@ -5598,7 +5597,6 @@ async fn test_cert_reloading() {
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
-            required_permission: None,
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },

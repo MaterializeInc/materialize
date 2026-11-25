@@ -43,6 +43,7 @@ use mz_environmentd::{WebSocketAuth, WebSocketResponse};
 use mz_frontegg_auth::{
     Authenticator as FronteggAuthentication, AuthenticatorConfig as FronteggConfig, ClaimMetadata,
     ClaimTokenType, Claims, DEFAULT_REFRESH_DROP_FACTOR, DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
+    REQUIRED_PERMISSION,
 };
 use mz_frontegg_mock::{
     FronteggMockServer, models::ApiToken, models::TenantApiTokenConfig, models::UserConfig,
@@ -488,7 +489,7 @@ async fn test_auth_expiry() {
         description: None,
         created_at: Utc::now(),
     }];
-    let roles = Vec::new();
+    let roles = vec!["MaterializePlatform".to_string()];
     let users = BTreeMap::from([(
         email.clone(),
         UserConfig {
@@ -532,7 +533,6 @@ async fn test_auth_expiry() {
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
-            required_permission: None,
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -636,7 +636,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 password,
                 tenant_id,
                 initial_api_tokens,
-                roles: Vec::new(),
+                roles: vec!["MaterializePlatform".to_string()],
                 auth_provider: None,
                 verified: None,
                 metadata: None,
@@ -650,7 +650,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 password: system_password,
                 tenant_id,
                 initial_api_tokens: system_initial_api_tokens,
-                roles: Vec::new(),
+                roles: vec!["MaterializePlatform".to_string()],
                 auth_provider: None,
                 verified: None,
                 metadata: None,
@@ -667,7 +667,7 @@ async fn test_auth_base_require_tls_frontegg() {
             },
             TenantApiTokenConfig {
                 tenant_id,
-                roles: vec![],
+                roles: vec!["MaterializePlatform".to_string()],
                 metadata: Some(ClaimMetadata {
                     user: Some("svc".into()),
                 }),
@@ -685,7 +685,7 @@ async fn test_auth_base_require_tls_frontegg() {
             },
             TenantApiTokenConfig {
                 tenant_id,
-                roles: vec![],
+                roles: vec!["MaterializePlatform".to_string()],
                 metadata: Some(ClaimMetadata {
                     user: Some("mz_system".into()),
                 }),
@@ -712,7 +712,7 @@ async fn test_auth_base_require_tls_frontegg() {
         user_id: None,
         tenant_id,
         roles: Vec::new(),
-        permissions: Vec::new(),
+        permissions: vec![REQUIRED_PERMISSION.to_string()],
         token_type: ClaimTokenType::UserToken,
         metadata: None,
         unknown_claims: Default::default(),
@@ -820,7 +820,6 @@ async fn test_auth_base_require_tls_frontegg() {
             tenant_id: Some(tenant_id),
             now,
             admin_role: "mzadmin".to_string(),
-            required_permission: None,
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -2715,7 +2714,7 @@ async fn test_auth_admin_non_superuser() {
     let admin_frontegg_user = "admin@_.com";
     let created_at = Utc::now();
 
-    let admin_role = "mzadmin";
+    let admin_role = "MaterializePlatformAdmin";
 
     let users = BTreeMap::from([
         (
@@ -2731,7 +2730,7 @@ async fn test_auth_admin_non_superuser() {
                     description: None,
                     created_at,
                 }],
-                roles: Vec::new(),
+                roles: vec!["MaterializePlatform".to_string()],
                 auth_provider: None,
                 verified: None,
                 metadata: None,
@@ -2787,7 +2786,6 @@ async fn test_auth_admin_non_superuser() {
             tenant_id: Some(tenant_id),
             now,
             admin_role: admin_role.to_string(),
-            required_permission: None,
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -2853,10 +2851,11 @@ async fn test_auth_required_permission() {
     let metrics_registry = MetricsRegistry::new();
 
     let tenant_id = Uuid::new_v4();
-    let admin_role = "mzadmin";
-    let member_role = "member";
-    let billing_role = "billing";
-    let required_permission = "materialize.database.access";
+    // Roles as the Frontegg mock defines them by default. Only the first two carry
+    // `REQUIRED_PERMISSION`.
+    let admin_role = "MaterializePlatformAdmin";
+    let member_role = "MaterializePlatform";
+    let billing_role = "BillingAdmin";
 
     // (user, role, client_id, secret)
     let accounts = [
@@ -2889,20 +2888,6 @@ async fn test_auth_required_permission() {
             )
         })
         .collect();
-    let role_permissions = BTreeMap::from([
-        (
-            admin_role.to_string(),
-            vec![required_permission.to_string()],
-        ),
-        (
-            member_role.to_string(),
-            vec![required_permission.to_string()],
-        ),
-        (
-            billing_role.to_string(),
-            vec!["materialize.billing.write".to_string()],
-        ),
-    ]);
     let encoding_key =
         EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
     let decoding_key = DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap();
@@ -2915,7 +2900,7 @@ async fn test_auth_required_permission() {
         decoding_key,
         users,
         BTreeMap::new(),
-        Some(role_permissions),
+        None,
         now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
         None,
@@ -2931,7 +2916,6 @@ async fn test_auth_required_permission() {
             tenant_id: Some(tenant_id),
             now,
             admin_role: admin_role.to_string(),
-            required_permission: Some(required_permission.to_string()),
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -3013,7 +2997,7 @@ async fn test_auth_admin_superuser() {
     let admin_frontegg_user = "admin@_.com";
     let created_at = Utc::now();
 
-    let admin_role = "mzadmin";
+    let admin_role = "MaterializePlatformAdmin";
 
     let users = BTreeMap::from([
         (
@@ -3029,7 +3013,7 @@ async fn test_auth_admin_superuser() {
                     description: None,
                     created_at,
                 }],
-                roles: Vec::new(),
+                roles: vec!["MaterializePlatform".to_string()],
                 auth_provider: None,
                 verified: None,
                 metadata: None,
@@ -3085,7 +3069,6 @@ async fn test_auth_admin_superuser() {
             tenant_id: Some(tenant_id),
             now,
             admin_role: admin_role.to_string(),
-            required_permission: None,
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -3163,7 +3146,7 @@ async fn test_auth_admin_superuser_revoked() {
     let admin_frontegg_user = "admin@_.com";
     let created_at = Utc::now();
 
-    let admin_role = "mzadmin";
+    let admin_role = "MaterializePlatformAdmin";
 
     let users = BTreeMap::from([
         (
@@ -3179,7 +3162,7 @@ async fn test_auth_admin_superuser_revoked() {
                     description: None,
                     created_at,
                 }],
-                roles: Vec::new(),
+                roles: vec!["MaterializePlatform".to_string()],
                 auth_provider: None,
                 verified: None,
                 metadata: None,
@@ -3235,7 +3218,6 @@ async fn test_auth_admin_superuser_revoked() {
             tenant_id: Some(tenant_id),
             now,
             admin_role: admin_role.to_string(),
-            required_permission: None,
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -3334,7 +3316,7 @@ async fn test_auth_deduplication() {
                 description: None,
                 created_at,
             }],
-            roles: Vec::new(),
+            roles: vec!["MaterializePlatform".to_string()],
             auth_provider: None,
             verified: None,
             metadata: None,
@@ -3369,7 +3351,6 @@ async fn test_auth_deduplication() {
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
-            required_permission: None,
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -3508,7 +3489,7 @@ async fn test_refresh_task_metrics() {
                 description: None,
                 created_at,
             }],
-            roles: Vec::new(),
+            roles: vec!["MaterializePlatform".to_string()],
             auth_provider: None,
             verified: None,
             metadata: None,
@@ -3543,7 +3524,6 @@ async fn test_refresh_task_metrics() {
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
-            required_permission: None,
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -3637,7 +3617,7 @@ async fn test_superuser_can_alter_cluster() {
     let frontegg_user = "user@_.com";
     let admin_frontegg_user = "admin@_.com";
 
-    let admin_role = "mzadmin";
+    let admin_role = "MaterializePlatformAdmin";
 
     let users = BTreeMap::from([
         (
@@ -3653,7 +3633,7 @@ async fn test_superuser_can_alter_cluster() {
                     description: None,
                     created_at,
                 }],
-                roles: Vec::new(),
+                roles: vec!["MaterializePlatform".to_string()],
                 auth_provider: None,
                 verified: None,
                 metadata: None,
@@ -3709,7 +3689,6 @@ async fn test_superuser_can_alter_cluster() {
             tenant_id: Some(tenant_id),
             now,
             admin_role: admin_role.to_string(),
-            required_permission: None,
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -3799,7 +3778,7 @@ async fn test_refresh_dropped_session() {
                 description: None,
                 created_at,
             }],
-            roles: Vec::new(),
+            roles: vec!["MaterializePlatform".to_string()],
             auth_provider: None,
             verified: None,
             metadata: None,
@@ -3834,7 +3813,6 @@ async fn test_refresh_dropped_session() {
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
-            required_permission: None,
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             // Make the refresh window very large so it's easy to test.
             refresh_drop_factor: 1.0,
@@ -3967,7 +3945,7 @@ async fn test_refresh_dropped_session_lru() {
                 description: None,
                 created_at,
             }],
-            roles: Vec::new(),
+            roles: vec!["MaterializePlatform".to_string()],
             auth_provider: None,
             verified: None,
             metadata: None,
@@ -4014,7 +3992,6 @@ async fn test_refresh_dropped_session_lru() {
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
-            required_permission: None,
             // Make the refresh LRU cache very small, and the window size very large so it's easy
             // to test.
             refresh_drop_lru_size: NonZeroUsize::new(1).expect("known non-zero"),
@@ -4171,7 +4148,7 @@ async fn test_transient_auth_failures() {
                 description: None,
                 created_at,
             }],
-            roles: Vec::new(),
+            roles: vec!["MaterializePlatform".to_string()],
             auth_provider: None,
             verified: None,
             metadata: None,
@@ -4206,7 +4183,6 @@ async fn test_transient_auth_failures() {
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
-            required_permission: None,
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -4297,7 +4273,7 @@ async fn test_transient_auth_failure_on_refresh() {
                 description: None,
                 created_at,
             }],
-            roles: Vec::new(),
+            roles: vec!["MaterializePlatform".to_string()],
             auth_provider: None,
             verified: None,
             metadata: None,
@@ -4332,7 +4308,6 @@ async fn test_transient_auth_failure_on_refresh() {
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
-            required_permission: None,
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -5325,7 +5300,7 @@ async fn test_auth_autoprovision_frontegg_audit_log() {
                 description: None,
                 created_at: Utc::now(),
             }],
-            roles: Vec::new(),
+            roles: vec!["MaterializePlatform".to_string()],
             auth_provider: None,
             verified: None,
             metadata: None,
@@ -5360,7 +5335,6 @@ async fn test_auth_autoprovision_frontegg_audit_log() {
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
-            required_permission: None,
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },

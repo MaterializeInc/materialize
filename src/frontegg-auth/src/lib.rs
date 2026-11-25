@@ -17,7 +17,7 @@ use std::path::PathBuf;
 
 pub use auth::{
     Authenticator, AuthenticatorConfig, ClaimMetadata, ClaimTokenType, Claims,
-    DEFAULT_REFRESH_DROP_FACTOR, DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
+    DEFAULT_REFRESH_DROP_FACTOR, DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE, REQUIRED_PERMISSION,
 };
 pub use client::Client;
 pub use client::tokens::{ApiTokenArgs, ApiTokenResponse};
@@ -51,13 +51,6 @@ pub struct FronteggCliArgs {
     /// The name of the admin role in Frontegg.
     #[clap(long, env = "FRONTEGG_ADMIN_ROLE", requires = "frontegg_tenant")]
     frontegg_admin_role: Option<String>,
-    /// The Frontegg permission a token must carry to authenticate.
-    #[clap(
-        long,
-        env = "FRONTEGG_REQUIRED_PERMISSION",
-        requires = "frontegg_tenant"
-    )]
-    frontegg_required_permission: Option<String>,
     /// Issuer URL of the Frontegg workspace, advertised in MCP OAuth discovery.
     #[clap(long, env = "FRONTEGG_OAUTH_ISSUER_URL")]
     frontegg_oauth_issuer_url: Option<String>,

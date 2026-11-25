@@ -42,6 +42,10 @@ pub const DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE: NonZeroUsize =
 /// assumption that a new instance of this session will be started soon.
 pub const DEFAULT_REFRESH_DROP_FACTOR: f64 = 0.05;
 
+/// The Frontegg permission a token must carry to connect to Materialize. Roles without it, like
+/// billing-only roles, are rejected.
+pub const REQUIRED_PERMISSION: &str = "materialize.database.access";
+
 /// The maximum length of a user name.
 pub const MAX_USER_NAME_LENGTH: usize = 255;
 
@@ -60,8 +64,6 @@ pub struct AuthenticatorConfig {
     pub now: NowFn,
     /// Name of admin role.
     pub admin_role: String,
-    /// Permission that tokens must carry to authenticate, if any.
-    pub required_permission: Option<String>,
     /// How many [`AppPassword`]s we'll track the last dropped time for.
     ///
     /// TODO(parkmycar): Wire this up to LaunchDarkly.
@@ -117,7 +119,6 @@ impl Authenticator {
                 decoding_key: config.decoding_key,
                 tenant_id: config.tenant_id,
                 admin_role: config.admin_role,
-                required_permission: config.required_permission,
                 now: config.now,
                 active_sessions,
                 dropped_sessions,
@@ -161,7 +162,6 @@ impl Authenticator {
                     tenant_id: Some(tenant_id),
                     now: mz_ore::now::SYSTEM_TIME.clone(),
                     admin_role,
-                    required_permission: args.frontegg_required_permission,
                     refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
                     refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
                 }
@@ -323,7 +323,7 @@ impl Authenticator {
     ///
     ///   * The tenant ID in the token matches the `Authentication`'s tenant ID.
     ///
-    ///   * The token carries the `Authentication`'s required permission, if any.
+    ///   * The token carries [`REQUIRED_PERMISSION`].
     ///
     /// If `expected_user` is provided, the token's user name is additionally
     /// validated to match `expected_user`.
@@ -422,7 +422,6 @@ struct AuthenticatorInner {
     decoding_key: DecodingKey,
     tenant_id: Option<Uuid>,
     admin_role: String,
-    required_permission: Option<String>,
     now: NowFn,
     /// Session tracking.
     active_sessions: Mutex<BTreeMap<AppPassword, AuthSession>>,
@@ -623,10 +622,8 @@ impl AuthenticatorInner {
             }
         }
 
-        if let Some(permission) = &self.required_permission {
-            if !msg.claims.permissions.contains(permission) {
-                return Err(Error::MissingPermission);
-            }
+        if !msg.claims.permissions.iter().any(|p| p == REQUIRED_PERMISSION) {
+            return Err(Error::MissingPermission);
         }
 
         let user = msg.claims.user()?;
