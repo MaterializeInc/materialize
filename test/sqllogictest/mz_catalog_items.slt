@@ -1,0 +1,86 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+reset-server
+
+statement ok
+CREATE TABLE t (a INT DEFAULT 1, b TEXT)
+
+statement ok
+CREATE VIEW v AS SELECT 'secret' AS s, a FROM t
+
+statement ok
+CREATE DEFAULT INDEX ON v
+
+# mz_catalog_items decodes every item the way the existing decoders do.
+
+simple conn=mz_system,user=mz_system
+SELECT
+    count(*) FILTER (WHERE name IN ('t', 'v', 'v_primary_idx')),
+    count(*) FILTER (
+        WHERE type IS DISTINCT FROM details->>'type'
+        OR details IS DISTINCT FROM mz_internal.parse_catalog_create_sql(create_sql)
+        OR redacted_create_sql IS DISTINCT FROM mz_internal.redact_sql(create_sql)
+    )
+FROM mz_internal.mz_catalog_items;
+----
+3,0
+COMPLETE 1
+
+# Its identity columns match mz_objects, and every user object is in it.
+
+simple conn=mz_system,user=mz_system
+WITH items AS (SELECT id, oid, schema_id, name, owner_id, type FROM mz_internal.mz_catalog_items),
+objects AS (SELECT id, oid, schema_id, name, owner_id, type FROM mz_catalog.mz_objects)
+SELECT count(*) FROM (
+    (SELECT * FROM items EXCEPT ALL SELECT * FROM objects)
+    UNION ALL
+    (SELECT * FROM objects WHERE id LIKE 'u%' EXCEPT ALL SELECT * FROM items)
+);
+----
+0
+COMPLETE 1
+
+# mz_builtin_object_mappings names every builtin object it maps.
+
+simple conn=mz_system,user=mz_system
+SELECT count(*) > 800, count(*) FILTER (WHERE o.id IS NULL OR o.name <> m.name OR s.name <> m.schema_name)
+FROM mz_internal.mz_builtin_object_mappings m
+LEFT JOIN (SELECT DISTINCT id, name, schema_id FROM mz_catalog.mz_objects) o ON o.id = m.id
+LEFT JOIN mz_catalog.mz_schemas s ON s.id = o.schema_id;
+----
+t,0
+COMPLETE 1
+
+# A runtime-alterable builtin has an Item record, so it is in mz_catalog_items
+# and not in mz_builtin_object_mappings.
+
+simple conn=mz_system,user=mz_system
+SELECT
+    (SELECT count(*) FROM mz_internal.mz_catalog_items WHERE name = 'mz_analytics'),
+    (SELECT count(*) FROM mz_internal.mz_builtin_object_mappings WHERE name = 'mz_analytics'),
+    (SELECT count(*) FROM mz_internal.mz_catalog_items JOIN mz_internal.mz_builtin_object_mappings USING (id));
+----
+1,0,0
+COMPLETE 1
+
+# A temporary item carries the session that owns it.
+
+statement ok
+CREATE TEMPORARY TABLE temp_t (a INT)
+
+simple conn=mz_system,user=mz_system
+SELECT name, schema_id, ephemeral_owner_session IN (SELECT id FROM mz_internal.mz_sessions)
+FROM mz_internal.mz_catalog_items
+WHERE ephemeral_owner_session IS NOT NULL;
+----
+temp_t,u0,t
+COMPLETE 1
