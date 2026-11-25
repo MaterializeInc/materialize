@@ -1717,6 +1717,64 @@ mod tests {
         }
     }
 
+    /// A resource mid-rollout whose status has no `phase`, with the `UpToDate`
+    /// condition `reason` and the `resources_hash` that went with it: empty
+    /// while applying, the candidate's once ready.
+    fn mz_without_phase(reason: &str, resources_hash: &str) -> Materialize {
+        let mut mz = mz_in(MaterializePhase::Idle);
+        mz.spec.request_rollout = Uuid::from_u128(2);
+        let status = mz.status.as_mut().unwrap();
+        status.phase = None;
+        status.resources_hash = resources_hash.into();
+        status.conditions = vec![condition("Unknown", reason)];
+        mz
+    }
+
+    fn plan_derived(mz: &Materialize, observed: &Observed) -> Step {
+        let status = current_status(mz, mz.status.clone().unwrap());
+        plan_step(mz, &status, observed)
+    }
+
+    #[mz_ore::test]
+    fn reverting_the_spec_under_a_derived_status() {
+        // The spec matches the active generation again, but the status no
+        // longer holds the active generation's hash to tell.
+        let reverted = Observed {
+            candidate_hash: "reverted".into(),
+            ..observed()
+        };
+        for (reason, resources_hash) in [("Applying", ""), ("ReadyToPromote", CANDIDATE_HASH)] {
+            let mut mz = mz_without_phase(reason, resources_hash);
+            assert_eq!(plan_derived(&mz, &reverted), Step::BeginRollout, "{reason}");
+
+            mz.spec.request_rollout = Uuid::from_u128(1);
+            assert_eq!(
+                plan_derived(&mz, &reverted),
+                Step::CancelRollout(Cancel::Reverted),
+                "{reason}",
+            );
+        }
+    }
+
+    #[mz_ore::test]
+    fn derived_status_times_out_from_its_condition() {
+        for (reason, resources_hash, in_time) in [
+            ("Applying", "", Step::BeginRollout),
+            ("ReadyToPromote", CANDIDATE_HASH, Step::AwaitCandidate),
+        ] {
+            let mut mz = mz_without_phase(reason, resources_hash);
+            assert_eq!(plan_derived(&mz, &observed()), in_time, "{reason}");
+
+            mz.status.as_mut().unwrap().conditions[0].last_transition_time =
+                Time(Timestamp::UNIX_EPOCH);
+            assert_eq!(
+                plan_derived(&mz, &observed()),
+                Step::CancelRollout(Cancel::TimedOut),
+                "{reason}",
+            );
+        }
+    }
+
     #[mz_ore::test]
     fn test_transition_event_type() {
         for (status, reason, expected) in [
