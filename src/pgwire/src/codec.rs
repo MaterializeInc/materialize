@@ -533,8 +533,8 @@ impl Decoder for Codec {
                     if src.len() < frame_len {
                         return Ok(None);
                     }
-                    let buf = src.split_to(frame_len).freeze();
-                    let buf = Cursor::new(&buf);
+                    let frame = src.split_to(frame_len).freeze();
+                    let buf = Cursor::new(&frame);
                     let msg = match msg_type {
                         // Simple query flow.
                         b'Q' => decode_query(buf)?,
@@ -556,7 +556,7 @@ impl Decoder for Codec {
 
                         // Copy from flow.
                         b'f' => decode_copy_fail(buf)?,
-                        b'd' => decode_copy_data(buf, frame_len)?,
+                        b'd' => decode_copy_data(&frame)?,
                         b'c' => decode_copy_done(buf)?,
 
                         // Invalid.
@@ -871,12 +871,10 @@ fn decode_bind(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
         if len == -1 {
             raw_params.push(None); // NULL
         } else {
+            // Other negative lengths have historically decoded as empty values.
+            let len = usize::try_from(len).unwrap_or(0);
             // TODO(benesch): this should use bytes::Bytes to avoid the copy.
-            let mut value = Vec::new();
-            for _ in 0..len {
-                value.push(buf.read_byte()?);
-            }
-            raw_params.push(Some(value));
+            raw_params.push(Some(buf.read_bytes(len)?.to_vec()));
         }
     }
 
@@ -913,12 +911,8 @@ fn decode_sync(mut _buf: Cursor) -> Result<FrontendMessage, io::Error> {
     Ok(FrontendMessage::Sync)
 }
 
-fn decode_copy_data(mut buf: Cursor, frame_len: usize) -> Result<FrontendMessage, io::Error> {
-    let mut data = Vec::with_capacity(frame_len);
-    for _ in 0..frame_len {
-        data.push(buf.read_byte()?);
-    }
-    Ok(FrontendMessage::CopyData(data))
+fn decode_copy_data(frame: &[u8]) -> Result<FrontendMessage, io::Error> {
+    Ok(FrontendMessage::CopyData(frame.to_vec()))
 }
 
 fn decode_copy_done(mut _buf: Cursor) -> Result<FrontendMessage, io::Error> {

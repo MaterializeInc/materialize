@@ -3747,8 +3747,11 @@ impl CsvScanState {
                 .double_quote(double_quote)
                 .escape(escape)
                 .build(),
-            output: vec![0; 1],
-            ends: vec![0; 1],
+            // NOTE: csv-core's `read_record` returns once `output` or `ends`
+            // is full, so their lengths bound how much input one call can
+            // scan. The scanner never reads their contents.
+            output: vec![0; 64 * 1024],
+            ends: vec![0; 1024],
             skip_first_record: header,
         }
     }
@@ -3803,6 +3806,19 @@ mod test {
             // Quoted "\." is data, not the marker.
             let data = join(&["before", "\"\\.\"", "after"]);
             assert_eq!(marker_end(&data), None, "quoted marker, eol={eol:?}");
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_copy_row_scanner_csv_row_larger_than_scan_buffers() {
+        let params = CopyFormatParams::Csv(CopyCsvFormatParams::default());
+        let long_field = "x".repeat(200_000);
+        let many_fields = vec!["x"; 3_000].join(",");
+        for row in [long_field, many_fields] {
+            let mut scanner = CopyRowScanner::new(&params);
+            let data = format!("{row}\n{row}");
+            scanner.scan_new_bytes(data.as_bytes());
+            assert_eq!(scanner.last_row_end(), Some(row.len() + 1));
         }
     }
 
