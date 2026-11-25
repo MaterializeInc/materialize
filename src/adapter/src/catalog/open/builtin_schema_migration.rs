@@ -630,6 +630,27 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_CATALOG_SCHEMA,
             "mz_pseudo_types",
         ),
+        // The function and operator relations became views, so their shards
+        // are dropped. See the NOTE above: this version must stay at the
+        // workspace's current dev version until the change ships.
+        MigrationStep::drop(
+            "26.52.0-dev.0",
+            CatalogItemType::View,
+            MZ_CATALOG_SCHEMA,
+            "mz_functions",
+        ),
+        MigrationStep::drop(
+            "26.52.0-dev.0",
+            CatalogItemType::View,
+            MZ_CATALOG_SCHEMA,
+            "mz_operators",
+        ),
+        MigrationStep::drop(
+            "26.52.0-dev.0",
+            CatalogItemType::View,
+            MZ_INTERNAL_SCHEMA,
+            "mz_aggregates",
+        ),
     ]
 });
 

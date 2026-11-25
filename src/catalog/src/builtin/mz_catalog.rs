@@ -2721,144 +2721,212 @@ WHERE t.type_kind = 'pseudo'",
         column_semantic_types: &[("id", SemanticType::CatalogItemId)],
     }),
 });
-pub static MZ_FUNCTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| {
-    BuiltinTable {
-        name: "mz_functions",
-        schema: MZ_CATALOG_SCHEMA,
-        oid: oid::TABLE_MZ_FUNCTIONS_OID,
-        desc: RelationDesc::builder()
-            .with_column("id", SqlScalarType::String.nullable(false)) // not a key!
-            .with_column("oid", SqlScalarType::Oid.nullable(false))
-            .with_column("schema_id", SqlScalarType::String.nullable(false))
-            .with_column("name", SqlScalarType::String.nullable(false))
-            .with_column(
-                "argument_type_ids",
-                SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false),
-            )
-            .with_column(
-                "variadic_argument_type_id",
-                SqlScalarType::String.nullable(true),
-            )
-            .with_column("return_type_id", SqlScalarType::String.nullable(true))
-            .with_column("returns_set", SqlScalarType::Bool.nullable(false))
-            .with_column("owner_id", SqlScalarType::String.nullable(false))
-            .finish(),
-        column_comments: BTreeMap::from_iter([
-            ("id", "Materialize's unique ID for the function."),
-            ("oid", "A PostgreSQL-compatible OID for the function."),
-            (
-                "schema_id",
-                "The ID of the schema to which the function belongs. Corresponds to `mz_schemas.id`.",
-            ),
-            ("name", "The name of the function."),
-            (
-                "argument_type_ids",
-                "The ID of each argument's type. Each entry refers to `mz_types.id`.",
-            ),
-            (
-                "variadic_argument_type_id",
-                "The ID of the variadic argument's type, or `NULL` if the function does not have a variadic argument. Refers to `mz_types.id`.",
-            ),
-            (
-                "return_type_id",
-                "The returned value's type, or `NULL` if the function does not return a value. Refers to `mz_types.id`. Note that for table functions with > 1 column, this type corresponds to [`record`].",
-            ),
-            (
-                "returns_set",
-                "Whether the function returns a set, i.e. the function is a table function.",
-            ),
-            (
-                "owner_id",
-                "The role ID of the owner of the function. Corresponds to `mz_roles.id`.",
-            ),
-        ]),
-        is_retained_metrics_object: false,
-        access: vec![PUBLIC_SELECT],
-        ontology: Some(Ontology {
-            entity_name: "function",
-            description: "A built-in or user-defined function",
-            links: &const {
-                [
-                    OntologyLink {
-                        name: "in_schema",
-                        target: "schema",
-                        properties: LinkProperties::fk("schema_id", "id", Cardinality::ManyToOne),
-                    },
-                    OntologyLink {
-                        name: "owned_by",
-                        target: "role",
-                        properties: LinkProperties::fk("owner_id", "id", Cardinality::ManyToOne),
-                    },
-                    OntologyLink {
-                        name: "returns_type",
-                        target: "type",
-                        properties: LinkProperties::fk_nullable(
-                            "return_type_id",
-                            "id",
-                            Cardinality::ManyToOne,
-                        ),
-                    },
-                    OntologyLink {
-                        name: "has_variadic_arg_type",
-                        target: "type",
-                        properties: LinkProperties::fk_nullable(
-                            "variadic_argument_type_id",
-                            "id",
-                            Cardinality::ManyToOne,
-                        ),
-                    },
-                ]
-            },
-            column_semantic_types: &const {
-                [
-                    ("id", SemanticType::CatalogItemId),
-                    ("oid", SemanticType::OID),
-                    ("schema_id", SemanticType::SchemaId),
-                    ("variadic_argument_type_id", SemanticType::CatalogItemId),
-                    ("return_type_id", SemanticType::CatalogItemId),
-                    ("owner_id", SemanticType::RoleId),
-                ]
-            },
-        }),
-    }
-});
-pub static MZ_OPERATORS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_operators",
+pub static MZ_FUNCTIONS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_functions",
     schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_OPERATORS_OID,
+    oid: oid::VIEW_MZ_FUNCTIONS_OID,
     desc: RelationDesc::builder()
+        .with_column("id", SqlScalarType::String.nullable(false)) // not a key!
         .with_column("oid", SqlScalarType::Oid.nullable(false))
+        .with_column("schema_id", SqlScalarType::String.nullable(false))
         .with_column("name", SqlScalarType::String.nullable(false))
         .with_column(
             "argument_type_ids",
             SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false),
         )
+        .with_column(
+            "variadic_argument_type_id",
+            SqlScalarType::String.nullable(true),
+        )
         .with_column("return_type_id", SqlScalarType::String.nullable(true))
+        .with_column("returns_set", SqlScalarType::Bool.nullable(false))
+        .with_column("owner_id", SqlScalarType::String.nullable(false))
         .finish(),
-    column_comments: BTreeMap::new(),
-    is_retained_metrics_object: false,
+    column_comments: BTreeMap::from_iter([
+        ("id", "Materialize's unique ID for the function."),
+        ("oid", "A PostgreSQL-compatible OID for the function."),
+        (
+            "schema_id",
+            "The ID of the schema to which the function belongs. Corresponds to `mz_schemas.id`.",
+        ),
+        ("name", "The name of the function."),
+        (
+            "argument_type_ids",
+            "The ID of each argument's type. Each entry refers to `mz_types.id`.",
+        ),
+        (
+            "variadic_argument_type_id",
+            "The ID of the variadic argument's type, or `NULL` if the function does not have a variadic argument. Refers to `mz_types.id`.",
+        ),
+        (
+            "return_type_id",
+            "The returned value's type, or `NULL` if the function does not return a value. Refers to `mz_types.id`. Note that for table functions with > 1 column, this type corresponds to [`record`].",
+        ),
+        (
+            "returns_set",
+            "Whether the function returns a set, i.e. the function is a table function.",
+        ),
+        (
+            "owner_id",
+            "The role ID of the owner of the function. Corresponds to `mz_roles.id`.",
+        ),
+    ]),
+    sql: Box::leak(
+        format!(
+            "
+WITH
+    argument_type_ids AS (
+        SELECT func.oid, array_agg(type_mapping.id ORDER BY arg.ordinality) AS argument_type_ids
+        FROM
+            mz_internal.mz_builtin_functions func,
+            unnest(func.argument_type_names) WITH ORDINALITY AS arg (name, ordinality),
+            mz_internal.mz_builtin_object_mappings type_mapping
+        WHERE type_mapping.object_type = {ty} AND type_mapping.name = arg.name
+        GROUP BY func.oid
+    )
+SELECT
+    func_mapping.id,
+    func.oid,
+    func_schema.id AS schema_id,
+    func.name,
+    COALESCE(args.argument_type_ids, ARRAY[]::text[]) AS argument_type_ids,
+    variadic_type_mapping.id AS variadic_argument_type_id,
+    return_type_mapping.id AS return_type_id,
+    func.returns_set,
+    '{MZ_SYSTEM_ROLE_ID}' AS owner_id
+FROM mz_internal.mz_builtin_functions func
+JOIN mz_internal.mz_builtin_object_mappings func_mapping
+    ON func_mapping.schema_name = func.schema_name
+        AND func_mapping.name = func.name
+        AND func_mapping.object_type = {func}
+JOIN mz_catalog.mz_schemas func_schema
+    ON func_schema.name = func.schema_name AND func_schema.database_id IS NULL
+LEFT JOIN argument_type_ids args ON args.oid = func.oid
+LEFT JOIN mz_internal.mz_builtin_object_mappings variadic_type_mapping
+    ON variadic_type_mapping.object_type = {ty}
+        AND variadic_type_mapping.name = func.variadic_argument_type_name
+LEFT JOIN mz_internal.mz_builtin_object_mappings return_type_mapping
+    ON return_type_mapping.object_type = {ty}
+        AND return_type_mapping.name = func.return_type_name",
+            ty = gid_mapping_object_type(CatalogItemType::Type),
+            func = gid_mapping_object_type(CatalogItemType::Func),
+        )
+        .into_boxed_str(),
+    ),
     access: vec![PUBLIC_SELECT],
     ontology: Some(Ontology {
-        entity_name: "operator",
-        description: "A built-in SQL operator",
+        entity_name: "function",
+        description: "A built-in or user-defined function",
         links: &const {
-            [OntologyLink {
-                name: "returns_type",
-                target: "type",
-                properties: LinkProperties::fk_nullable(
-                    "return_type_id",
-                    "id",
-                    Cardinality::ManyToOne,
-                ),
-            }]
+            [
+                OntologyLink {
+                    name: "in_schema",
+                    target: "schema",
+                    properties: LinkProperties::fk("schema_id", "id", Cardinality::ManyToOne),
+                },
+                OntologyLink {
+                    name: "owned_by",
+                    target: "role",
+                    properties: LinkProperties::fk("owner_id", "id", Cardinality::ManyToOne),
+                },
+                OntologyLink {
+                    name: "returns_type",
+                    target: "type",
+                    properties: LinkProperties::fk_nullable(
+                        "return_type_id",
+                        "id",
+                        Cardinality::ManyToOne,
+                    ),
+                },
+                OntologyLink {
+                    name: "has_variadic_arg_type",
+                    target: "type",
+                    properties: LinkProperties::fk_nullable(
+                        "variadic_argument_type_id",
+                        "id",
+                        Cardinality::ManyToOne,
+                    ),
+                },
+            ]
         },
         column_semantic_types: &const {
             [
+                ("id", SemanticType::CatalogItemId),
                 ("oid", SemanticType::OID),
+                ("schema_id", SemanticType::SchemaId),
+                ("variadic_argument_type_id", SemanticType::CatalogItemId),
                 ("return_type_id", SemanticType::CatalogItemId),
+                ("owner_id", SemanticType::RoleId),
             ]
         },
     }),
+});
+pub static MZ_OPERATORS: LazyLock<BuiltinView> = LazyLock::new(|| {
+    BuiltinView {
+        name: "mz_operators",
+        schema: MZ_CATALOG_SCHEMA,
+        oid: oid::VIEW_MZ_OPERATORS_OID,
+        desc: RelationDesc::builder()
+            .with_column("oid", SqlScalarType::Oid.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column(
+                "argument_type_ids",
+                SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false),
+            )
+            .with_column("return_type_id", SqlScalarType::String.nullable(true))
+            .finish(),
+        column_comments: BTreeMap::new(),
+        // See `make_builtin_operators`; type ids resolve as for `mz_functions`.
+        sql: Box::leak(
+            format!(
+                "
+WITH
+    argument_type_ids AS (
+        SELECT op.oid, array_agg(type_mapping.id ORDER BY arg.ordinality) AS argument_type_ids
+        FROM
+            mz_internal.mz_builtin_operators op,
+            unnest(op.argument_type_names) WITH ORDINALITY AS arg (name, ordinality),
+            mz_internal.mz_builtin_object_mappings type_mapping
+        WHERE type_mapping.object_type = {ty} AND type_mapping.name = arg.name
+        GROUP BY op.oid
+    )
+SELECT
+    op.oid,
+    op.name,
+    COALESCE(args.argument_type_ids, ARRAY[]::text[]) AS argument_type_ids,
+    return_type_mapping.id AS return_type_id
+FROM mz_internal.mz_builtin_operators op
+JOIN argument_type_ids args ON args.oid = op.oid
+LEFT JOIN mz_internal.mz_builtin_object_mappings return_type_mapping
+    ON return_type_mapping.object_type = {ty}
+        AND return_type_mapping.name = op.return_type_name",
+                ty = gid_mapping_object_type(CatalogItemType::Type),
+            )
+            .into_boxed_str(),
+        ),
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "operator",
+            description: "A built-in SQL operator",
+            links: &const {
+                [OntologyLink {
+                    name: "returns_type",
+                    target: "type",
+                    properties: LinkProperties::fk_nullable(
+                        "return_type_id",
+                        "id",
+                        Cardinality::ManyToOne,
+                    ),
+                }]
+            },
+            column_semantic_types: &const {
+                [
+                    ("oid", SemanticType::OID),
+                    ("return_type_id", SemanticType::CatalogItemId),
+                ]
+            },
+        }),
+    }
 });
 
 pub static MZ_CLUSTERS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {

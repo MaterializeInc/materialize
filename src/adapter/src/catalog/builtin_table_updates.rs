@@ -12,24 +12,20 @@ mod notice;
 use bytesize::ByteSize;
 use ipnet::IpNet;
 use mz_audit_log::VersionedStorageUsage;
-use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::{
-    BuiltinTable, MZ_AGGREGATES, MZ_CLUSTER_REPLICA_SIZE_INTERNAL, MZ_CLUSTER_REPLICA_SIZES,
-    MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_LICENSE_KEYS, MZ_OPERATORS, MZ_ROLE_AUTH, MZ_SESSIONS,
-    MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_WEBHOOKS_SOURCES,
+    BuiltinTable, MZ_CLUSTER_REPLICA_SIZE_INTERNAL, MZ_CLUSTER_REPLICA_SIZES, MZ_EGRESS_IPS,
+    MZ_LICENSE_KEYS, MZ_ROLE_AUTH, MZ_SESSIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS,
+    MZ_WEBHOOKS_SOURCES,
 };
 use mz_catalog::memory::error::Error;
-use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Func};
+use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc};
 use mz_controller::clusters::ReplicaAllocation;
 use mz_license_keys::ValidatedLicenseKey;
 use mz_orchestrator::{CpuLimit, DiskLimit, MemoryLimit};
 use mz_ore::cast::CastFrom;
 use mz_persist_client::batch::ProtoBatch;
-use mz_repr::adt::array::ArrayDimension;
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, Datum, Diff, GlobalId, Row};
-use mz_sql::func::FuncImplCatalogDetails;
-use mz_sql::names::SchemaSpecifier;
 use mz_storage_client::client::TableData;
 use smallvec::smallvec;
 use uuid::Uuid;
@@ -116,16 +112,6 @@ impl CatalogState {
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
         let entry = self.get_entry(&id);
-        let conn_id = entry.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);
-        let schema_id = &self
-            .get_schema(
-                &entry.name().qualifiers.database_spec,
-                &entry.name().qualifiers.schema_spec,
-                conn_id,
-            )
-            .id;
-        let name = &entry.name().item;
-        let owner_id = entry.owner_id();
         let updates = match entry.item() {
             CatalogItem::Source(source) => {
                 match &source.data_source {
@@ -146,18 +132,16 @@ impl CatalogState {
             // mz_sinks, mz_kafka_sinks and mz_iceberg_sinks read create_sql
             // out of mz_catalog_raw, so there is nothing to pack here.
             CatalogItem::Sink(_) => vec![],
-            CatalogItem::Func(func) => {
-                self.pack_func_update(id, schema_id, name, owner_id, func, diff)
-            }
-            // Tables, views, materialized views, indexes, types and metric
-            // sinks are exposed through relations derived from
-            // `mz_catalog_raw`, and logs and secrets never had builtin-table
-            // rows, so none pack a row here.
+            // Tables, views, materialized views, indexes, types, functions
+            // and metric sinks are exposed through materialized views derived
+            // from `mz_catalog_raw`, and logs and secrets never had
+            // builtin-table rows, so none pack a row here.
             CatalogItem::Table(_)
             | CatalogItem::View(_)
             | CatalogItem::MaterializedView(_)
             | CatalogItem::Index(_)
             | CatalogItem::Type(_)
+            | CatalogItem::Func(_)
             | CatalogItem::Log(_)
             | CatalogItem::Secret(_)
             | CatalogItem::MetricSink(_) => vec![],
@@ -169,120 +153,6 @@ impl CatalogState {
         };
 
         updates
-    }
-
-    fn pack_func_update(
-        &self,
-        id: CatalogItemId,
-        schema_id: &SchemaSpecifier,
-        name: &str,
-        owner_id: &RoleId,
-        func: &Func,
-        diff: Diff,
-    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        let mut updates = vec![];
-        for func_impl_details in func.inner.func_impls() {
-            let arg_type_ids = func_impl_details
-                .arg_typs
-                .iter()
-                .map(|typ| self.get_system_type(typ).id().to_string())
-                .collect::<Vec<_>>();
-
-            let mut row = Row::default();
-            row.packer()
-                .try_push_array(
-                    &[ArrayDimension {
-                        lower_bound: 1,
-                        length: arg_type_ids.len(),
-                    }],
-                    arg_type_ids.iter().map(|id| Datum::String(id)),
-                )
-                .expect(
-                    "arg_type_ids is 1 dimensional, and its length is used for the array length",
-                );
-            let arg_type_ids = row.unpack_first();
-
-            updates.push(BuiltinTableUpdate::row(
-                &*MZ_FUNCTIONS,
-                Row::pack_slice(&[
-                    Datum::String(&id.to_string()),
-                    Datum::UInt32(func_impl_details.oid),
-                    Datum::String(&schema_id.to_string()),
-                    Datum::String(name),
-                    arg_type_ids,
-                    Datum::from(
-                        func_impl_details
-                            .variadic_typ
-                            .map(|typ| self.get_system_type(typ).id().to_string())
-                            .as_deref(),
-                    ),
-                    Datum::from(
-                        func_impl_details
-                            .return_typ
-                            .map(|typ| self.get_system_type(typ).id().to_string())
-                            .as_deref(),
-                    ),
-                    func_impl_details.return_is_set.into(),
-                    Datum::String(&owner_id.to_string()),
-                ]),
-                diff,
-            ));
-
-            if let mz_sql::func::Func::Aggregate(_) = func.inner {
-                updates.push(BuiltinTableUpdate::row(
-                    &*MZ_AGGREGATES,
-                    Row::pack_slice(&[
-                        Datum::UInt32(func_impl_details.oid),
-                        // TODO(database-issues#1064): Support ordered-set aggregate functions.
-                        Datum::String("n"),
-                        Datum::Int16(0),
-                    ]),
-                    diff,
-                ));
-            }
-        }
-        updates
-    }
-
-    pub fn pack_op_update(
-        &self,
-        operator: &str,
-        func_impl_details: FuncImplCatalogDetails,
-        diff: Diff,
-    ) -> BuiltinTableUpdate<&'static BuiltinTable> {
-        let arg_type_ids = func_impl_details
-            .arg_typs
-            .iter()
-            .map(|typ| self.get_system_type(typ).id().to_string())
-            .collect::<Vec<_>>();
-
-        let mut row = Row::default();
-        row.packer()
-            .try_push_array(
-                &[ArrayDimension {
-                    lower_bound: 1,
-                    length: arg_type_ids.len(),
-                }],
-                arg_type_ids.iter().map(|id| Datum::String(id)),
-            )
-            .expect("arg_type_ids is 1 dimensional, and its length is used for the array length");
-        let arg_type_ids = row.unpack_first();
-
-        BuiltinTableUpdate::row(
-            &*MZ_OPERATORS,
-            Row::pack_slice(&[
-                Datum::UInt32(func_impl_details.oid),
-                Datum::String(operator),
-                arg_type_ids,
-                Datum::from(
-                    func_impl_details
-                        .return_typ
-                        .map(|typ| self.get_system_type(typ).id().to_string())
-                        .as_deref(),
-                ),
-            ]),
-            diff,
-        )
     }
 
     pub fn pack_storage_usage_update(

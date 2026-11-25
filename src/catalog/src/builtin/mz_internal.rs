@@ -1088,17 +1088,23 @@ WHERE t.typinput IS NOT NULL AND t.typreceive IS NOT NULL AND t.typsend IS NOT N
     access: vec![PUBLIC_SELECT],
     ontology: None,
 });
-pub static MZ_AGGREGATES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+pub static MZ_AGGREGATES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_aggregates",
     schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::TABLE_MZ_AGGREGATES_OID,
+    oid: oid::VIEW_MZ_AGGREGATES_OID,
     desc: RelationDesc::builder()
         .with_column("oid", SqlScalarType::Oid.nullable(false))
         .with_column("agg_kind", SqlScalarType::String.nullable(false))
         .with_column("agg_num_direct_args", SqlScalarType::Int16.nullable(false))
+        .with_key(vec![0])
         .finish(),
     column_comments: BTreeMap::new(),
-    is_retained_metrics_object: false,
+    // TODO(database-issues#1064): Support ordered-set aggregate functions,
+    // which have an agg_kind of 'o' and direct arguments.
+    sql: "
+SELECT oid, 'n' AS agg_kind, 0::int2 AS agg_num_direct_args
+FROM mz_internal.mz_builtin_functions
+WHERE kind = 'aggregate'",
     access: vec![PUBLIC_SELECT],
     ontology: Some(Ontology {
         entity_name: "aggregate",
