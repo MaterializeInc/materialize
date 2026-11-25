@@ -1132,12 +1132,15 @@ fn create_environmentd_statefulset_object(
         ctx.read_only_root_filesystem = Some(true);
         // `/tmp` holds SSH tunnel keys, heap profile dumps and, through
         // `XDG_STATE_HOME`, the SSH control sockets openssh would otherwise put
-        // under `$HOME`.
-        env.push(EnvVar {
-            name: "XDG_STATE_HOME".to_string(),
-            value: Some("/tmp".to_string()),
-            ..Default::default()
-        });
+        // under `$HOME`. Server-side apply rejects duplicate names, so an
+        // `environmentdExtraEnv` value wins.
+        if !env.iter().any(|e| e.name == "XDG_STATE_HOME") {
+            env.push(EnvVar {
+                name: "XDG_STATE_HOME".to_string(),
+                value: Some("/tmp".to_string()),
+                ..Default::default()
+            });
+        }
         volume_mounts.push(VolumeMount {
             name: "tmp".to_string(),
             mount_path: "/tmp".to_string(),
