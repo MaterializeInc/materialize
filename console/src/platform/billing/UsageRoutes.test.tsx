@@ -162,6 +162,16 @@ describe("UsageRoutes", () => {
     expect(screen.queryByRole("link", { name: "Billing" })).toBeNull();
   });
 
+  it("lands on Overview when the organization lookup fails", async () => {
+    server.use(
+      buildCloudOrganizationsResponse({ status: 503 }),
+      buildInvoicesResponse({ invoices: oneInvoice }),
+    );
+    await renderAt("/usage");
+
+    expect(await screen.findByText("Usage Page")).toBeVisible();
+  });
+
   it("lands an evaluation org without Billing on Pricing", async () => {
     server.use(
       buildCloudOrganizationsResponse({
