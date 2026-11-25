@@ -684,6 +684,36 @@ impl<'a> CopyCsvFormatParams<'a> {
         }
         Ok(params)
     }
+
+    /// Returns a reader for these options that never strips a BOM.
+    pub fn reader(&self) -> csv_core::Reader {
+        let double_quote = self.quote == self.escape;
+        let mut reader = csv_core::ReaderBuilder::new()
+            .delimiter(self.delimiter)
+            .quote(self.quote)
+            .escape((!double_quote).then_some(self.escape))
+            .double_quote(double_quote)
+            .build();
+        // csv-core strips a BOM from the first input it reads. A chunk past
+        // the first starts mid-stream, where those bytes are data.
+        reader.read_field(b"\n", &mut [0]);
+        reader
+    }
+}
+
+/// Returns whether a blank line in CSV `COPY FROM STDIN` input is a record
+/// when `column_count` columns are copied.
+///
+/// A blank line is one unquoted empty field. For one column that is a full
+/// row, and how `COPY TO` writes a NULL under the default NULL marker. For no
+/// columns it is the only way to write a row.
+///
+/// NOTE: For several columns PostgreSQL fails a blank line with `missing data
+/// for column`. We skip it there, so that files with a stray blank line keep
+/// loading: COPY skipped every blank line before one could be a record. With
+/// `HEADER`, the header is then the first line that is not blank.
+pub fn csv_blank_line_is_record(column_count: usize) -> bool {
+    column_count <= 1
 }
 
 /// One field decoded out of a CSV record by [`decode_copy_format_csv`]:
@@ -699,31 +729,22 @@ struct DecodedField {
     quoted: bool,
 }
 
+/// Decodes one chunk of CSV `COPY FROM STDIN` data into rows.
+///
+/// The caller cuts the stream into chunks, and must uphold:
+///
+/// * `data` does not start with the stream's BOM. It would decode as data.
+/// * `data` does not start between the CR and the LF of a line ending. The LF
+///   would decode as a blank line.
+/// * `params.quote` is neither CR nor LF. A record that starts with a quoted
+///   field would decode as a blank line.
 pub fn decode_copy_format_csv(
     data: &[u8],
     column_types: &[mz_pgrepr::Type],
-    CopyCsvFormatParams {
-        delimiter,
-        quote,
-        escape,
-        null,
-        header,
-    }: CopyCsvFormatParams,
+    params: CopyCsvFormatParams,
 ) -> Result<Vec<Row>, io::Error> {
-    let (double_quote, escape) = if quote == escape {
-        (true, None)
-    } else {
-        (false, Some(escape))
-    };
-
-    let mut rdr = csv_core::ReaderBuilder::new()
-        .delimiter(delimiter)
-        .quote(quote)
-        .escape(escape)
-        .double_quote(double_quote)
-        .build();
-
-    let null_as_bytes = null.as_bytes();
+    let mut rdr = params.reader();
+    let null_as_bytes = params.null.as_bytes();
     let mut rows = Vec::new();
     // We use csv-core (rather than the higher-level csv crate) so we can
     // recover per-field "was this field quoted?" information by inspecting the
@@ -737,51 +758,46 @@ pub fn decode_copy_format_csv(
     let mut fields: Vec<DecodedField> = Vec::new();
     let mut field_start = 0;
     let mut field_quoted: Option<bool> = None;
-    let mut skip_header = header;
-    // True at the start of a record (including the very first), where csv-core
-    // may have left an orphaned terminator byte; false for fields that follow a
-    // delimiter within a record.
-    let mut at_record_start = true;
+    let mut skip_header = params.header;
+    let blank_line_is_record = csv_blank_line_is_record(column_types.len());
 
     loop {
+        // csv-core skips blank lines without reporting them, so they are
+        // handled here.
+        let empty_line = fields.is_empty()
+            && field_quoted.is_none()
+            && matches!(input.first(), Some(b'\r' | b'\n'));
+        if empty_line && !blank_line_is_record {
+            input = &input[1..];
+            continue;
+        }
         if field_quoted.is_none() {
-            if at_record_start {
-                // csv-core's default terminator is CRLF, and it reports a
-                // record complete after consuming the `\r`, leaving the
-                // trailing `\n` as the first byte of the next record's input
-                // (and, after a worker chunk is split at a `\r` boundary, a
-                // chunk can likewise begin with that orphan `\n`). csv-core
-                // itself consumes and ignores those stray terminator bytes when
-                // parsing the field, but the quote probe below must skip them
-                // so it inspects the field's real first byte rather than an
-                // orphan — otherwise a quoted field on any non-first CRLF record
-                // is misclassified as unquoted. Only skip at a record boundary:
-                // a `\r`/`\n` after a delimiter legitimately terminates an empty
-                // trailing field and must not be swallowed.
-                while matches!(input.first(), Some(&b'\r') | Some(&b'\n')) {
-                    input = &input[1..];
-                }
-            }
-            field_quoted = Some(input.first() == Some(&quote));
+            field_quoted = Some(input.first() == Some(&params.quote));
             field_start = out_pos;
         }
-
-        let (result, nin, nout) = rdr.read_field(input, &mut output[out_pos..]);
+        let (result, nin, nout) = if empty_line {
+            (csv_core::ReadFieldResult::Field { record_end: true }, 1, 0)
+        } else {
+            rdr.read_field(input, &mut output[out_pos..])
+        };
+        let ends_in_cr = input[..nin].ends_with(b"\r");
         input = &input[nin..];
         out_pos += nout;
 
         match result {
             csv_core::ReadFieldResult::Field { record_end } => {
-                fields.push(DecodedField {
-                    start: field_start,
-                    end: out_pos,
-                    quoted: field_quoted.take().unwrap(),
-                });
-                // The next field begins a new record only if this field ended
-                // one; otherwise it follows a delimiter mid-record.
-                at_record_start = record_end;
-
+                let quoted = field_quoted.take().unwrap();
+                if !empty_line || !column_types.is_empty() {
+                    fields.push(DecodedField {
+                        start: field_start,
+                        end: out_pos,
+                        quoted,
+                    });
+                }
                 if record_end {
+                    if ends_in_cr && input.starts_with(b"\n") {
+                        input = &input[1..];
+                    }
                     if skip_header {
                         skip_header = false;
                     } else if let [
@@ -1143,6 +1159,68 @@ mod tests {
     }
 
     #[mz_ore::test]
+    fn test_decode_copy_format_csv_empty_line() {
+        use mz_pgrepr::Type::Text;
+        let decode = |types: &[mz_pgrepr::Type]| {
+            decode_copy_format_csv(b"\n\r\n\r", types, Default::default())
+        };
+        assert_eq!(decode(&[Text]).unwrap(), vec![Row::pack([Datum::Null]); 3]);
+        assert_eq!(decode(&[]).unwrap(), vec![Row::default(); 3]);
+        assert_eq!(decode(&[Text, Text]).unwrap(), vec![]);
+    }
+
+    #[mz_ore::test]
+    fn test_decode_copy_format_csv_skipped_blank_lines() {
+        use mz_pgrepr::Type::Text;
+        let strings = |a, b| Row::pack([Datum::String(a), Datum::String(b)]);
+        let decode = |data: &[u8], header| {
+            let params = CopyCsvFormatParams {
+                header,
+                ..Default::default()
+            };
+            decode_copy_format_csv(data, &[Text, Text], params).unwrap()
+        };
+        assert_eq!(
+            decode(b"\na,b\r\n\r\n\"\",d\r\r", false),
+            vec![strings("a", "b"), strings("", "d")],
+            "a quoted field after skipped lines stays quoted"
+        );
+        assert_eq!(
+            decode(b"\r\n\nh,h\n\na,b\n\n", true),
+            vec![strings("a", "b")],
+            "the header is the first line that is not blank"
+        );
+        assert_eq!(
+            decode(b"a,b\n\n\\.\nc,d\n", false),
+            vec![strings("a", "b")],
+            "the end marker ends the chunk after skipped lines"
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_decode_copy_format_csv_blank_header() {
+        let params = CopyCsvFormatParams {
+            header: true,
+            ..Default::default()
+        };
+        let rows = decode_copy_format_csv(b"\nh\n", &[mz_pgrepr::Type::Text], params).unwrap();
+        assert_eq!(rows, [Row::pack([Datum::String("h")])]);
+    }
+
+    #[mz_ore::test]
+    fn test_csv_record_start() {
+        for (header, data) in [(false, "\u{feff}\\.\n"), (true, "\n\u{feff}\\.\n")] {
+            let params = CopyCsvFormatParams {
+                header,
+                ..Default::default()
+            };
+            let rows =
+                decode_copy_format_csv(data.as_bytes(), &[mz_pgrepr::Type::Text], params).unwrap();
+            assert_eq!(rows, [Row::pack([Datum::String("\u{feff}\\.")])]);
+        }
+    }
+
+    #[mz_ore::test]
     fn test_decode_copy_format_csv_end_marker() {
         // Bare `\.` on its own line terminates the COPY. A quoted `"\."`
         // decodes to the same bytes but must be treated as data. This must
@@ -1186,35 +1264,6 @@ mod tests {
                 "bare marker, eol={eol:?}"
             );
         }
-    }
-
-    #[mz_ore::test]
-    fn test_decode_copy_format_csv_leading_orphan() {
-        // Worker chunks after the first begin at a `\r` boundary, so for CRLF
-        // input a chunk's bytes start with the orphan `\n` that csv-core left
-        // behind. The decoder must still classify the first field's quote
-        // state from its real first byte, not the stray `\n`. Regression test
-        // for the per-chunk quote probe.
-        let column_types = vec![
-            mz_pgrepr::Type::from(&mz_repr::SqlScalarType::String),
-            mz_pgrepr::Type::from(&mz_repr::SqlScalarType::String),
-        ];
-
-        let rows = decode_copy_format_csv(
-            b"\n\"\",x\r\ny,z\r\n",
-            &column_types,
-            CopyCsvFormatParams::default(),
-        )
-        .expect("decode should succeed");
-        let got: Vec<Vec<Datum>> = rows.iter().map(|r| r.iter().collect()).collect();
-        assert_eq!(got.len(), 2);
-        // Quoted empty first field on the leading-orphan record must decode to
-        // the empty string, not SQL NULL (the bug would misread it as
-        // unquoted and match the default empty NULL marker).
-        assert_eq!(got[0][0], Datum::String(""));
-        assert_eq!(got[0][1], Datum::String("x"));
-        assert_eq!(got[1][0], Datum::String("y"));
-        assert_eq!(got[1][1], Datum::String("z"));
     }
 
     #[mz_ore::test]
@@ -1287,6 +1336,7 @@ mod tests {
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)]
         fn proptest_csv_roundtrips(copy_csv_params: CopyCsvFormatParams)  {
+            prop_assume!(!matches!(copy_csv_params.quote, b'\r' | b'\n'));
             // Given a SqlScalarType and Datum roundtrips it through the CSV COPY format.
             let try_roundtrip_datum = |scalar_type: &SqlScalarType, datum| {
                 let row = Row::pack_slice(&[datum]);

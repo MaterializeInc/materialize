@@ -4787,6 +4787,31 @@ fn copy_from() {
     assert_eq!(rows.len(), 2);
 }
 
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn copy_from_csv_batch_end_at_cr() {
+    let server = test_util::TestHarness::default().start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client.execute("CREATE TABLE t (a text)", &[]).unwrap();
+
+    // Pgwire ends a batch after 2^20 blank lines. The CR of that line is the
+    // last byte of a message in the first run (1 + 275 * 3813 lines), and inside
+    // one large message in the second. A batch that ended at the CR would leave
+    // the LF to the next batch, where it is a blank line and one more row.
+    for (lines, messages) in [(3813, 400), (1_638_400, 1)] {
+        let message = format!("\n{}\r", "\r\n".repeat(lines - 1));
+        let mut writer = client.copy_in("COPY t FROM STDIN (FORMAT CSV)").unwrap();
+        for _ in 0..messages {
+            // The writer sends a write of over 4 KiB as one message.
+            writer.write_all(message.as_bytes()).unwrap();
+        }
+        writer.write_all(b"\n").unwrap();
+        let rows = usize::cast_from(writer.finish().unwrap());
+        assert_eq!(rows, 1 + messages * lines);
+    }
+}
+
 // Test that a cluster dropped mid transaction results in an error.
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow

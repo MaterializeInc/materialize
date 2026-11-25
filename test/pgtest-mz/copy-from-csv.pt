@@ -425,15 +425,16 @@ DataRow {"fields":["3","after"]}
 CommandComplete {"tag":"SELECT 3"}
 ReadyForQuery {"status":"I"}
 
-# CRLF line endings (RFC 4180, the Windows/Excel default). csv-core places the
-# record boundary between \r and \n, so every non-first record's input begins
-# with an orphaned \n. Both the decoder's per-field quote probe and the pgwire
-# scanner's end-of-copy marker check must account for that, or a quoted NULL
-# marker corrupts to SQL NULL and a quoted "\." (plus every row after it) is
-# silently dropped. This single COPY exercises all of those on CRLF input:
+# CRLF line endings (RFC 4180, the Windows/Excel default). csv-core ends a
+# record at the \r, and the decoder and the pgwire scanner both take the \n
+# after it as part of the same line ending. A \n left to start the next record
+# would hide that record's leading quote, so that a quoted NULL marker loads as
+# SQL NULL and a quoted "\." ends the COPY, and would keep a bare \. from
+# matching the end-of-copy marker. This single COPY exercises all of those on
+# CRLF input:
 #   a,        -> unquoted empty NULL marker  => NULL
 #   b,""      -> quoted empty                => ""
-#   "",c      -> quoted empty leading field on an orphan-led record => ""
+#   "",c      -> quoted empty leading field after a CRLF => ""
 #   d,"\."    -> quoted "\." is data         => \.
 #   \.        -> bare end-of-copy marker; the trailing e,ignored is discarded
 send
@@ -473,9 +474,8 @@ DataRow {"fields":["d","\\."]}
 CommandComplete {"tag":"SELECT 4"}
 ReadyForQuery {"status":"I"}
 
-# Lone CR line endings (old-Mac style). csv-core ends a CR record on the bare
-# \r, so the scanner's raw marker span is "\.\r"; a trailing-only strip would
-# miss it. Same expectations as the CRLF case above.
+# Lone CR line endings (old-Mac style). A \r ends a record whether or not a
+# \n follows it. Same expectations as the CRLF case above.
 send
 Query {"query": "CREATE TABLE t8 (a TEXT, b TEXT)"}
 ----
@@ -553,4 +553,178 @@ DataRow {"fields":["1","NULL"]}
 DataRow {"fields":["2","\\."]}
 DataRow {"fields":["3","after"]}
 CommandComplete {"tag":"SELECT 3"}
+ReadyForQuery {"status":"I"}
+
+# A blank line in one-column input is a record. COPY TO writes a NULL as a
+# blank line and an empty string as "", and COPY FROM reads both back.
+send
+Query {"query": "CREATE TABLE t10 (s TEXT)"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "COPY (SELECT s FROM (VALUES (1, NULL), (2, ''), (3, 'x')) AS v (i, s) ORDER BY i) TO STDOUT WITH (FORMAT CSV)"}
+----
+
+until
+ReadyForQuery
+----
+CopyOut {"format":"text","column_formats":["text"]}
+CopyData "\n"
+CopyData "\"\"\n"
+CopyData "x\n"
+CopyDone
+CommandComplete {"tag":"COPY 3"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "COPY t10 FROM STDIN WITH (FORMAT CSV)"}
+CopyData "\n"
+CopyData "\"\"\n"
+CopyData "x\n"
+CopyDone
+Query {"query": "SELECT s IS NULL AS n, s FROM t10 ORDER BY n, s"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+----
+CopyIn {"format":"text","column_formats":["text"]}
+CommandComplete {"tag":"COPY 3"}
+ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"n"},{"name":"s"}]}
+DataRow {"fields":["f",""]}
+DataRow {"fields":["f","x"]}
+DataRow {"fields":["t","NULL"]}
+CommandComplete {"tag":"SELECT 3"}
+ReadyForQuery {"status":"I"}
+
+# A CR and its LF can arrive in separate messages. They stay one line ending,
+# so the LF is not read as a blank line of its own. The third line is blank.
+send
+Query {"query": "DELETE FROM t10"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"DELETE 3"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "COPY t10 FROM STDIN WITH (FORMAT CSV)"}
+CopyData "a\r"
+CopyData "\nb\r"
+CopyData "\n\r"
+CopyData "\n"
+CopyDone
+Query {"query": "SELECT s IS NULL AS n, s FROM t10 ORDER BY n, s"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+----
+CopyIn {"format":"text","column_formats":["text"]}
+CommandComplete {"tag":"COPY 3"}
+ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"n"},{"name":"s"}]}
+DataRow {"fields":["f","a"]}
+DataRow {"fields":["f","b"]}
+DataRow {"fields":["t","NULL"]}
+CommandComplete {"tag":"SELECT 3"}
+ReadyForQuery {"status":"I"}
+
+# A blank line is a one-column header too. The bare \. after it is then not
+# the header, and ends the COPY.
+send
+Query {"query": "DELETE FROM t10"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"DELETE 3"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "COPY t10 FROM STDIN WITH (FORMAT CSV, HEADER true)"}
+CopyData "\n"
+CopyData "\\.\n"
+CopyData "ignored\n"
+CopyDone
+Query {"query": "SELECT count(*) FROM t10"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+----
+CopyIn {"format":"text","column_formats":["text"]}
+CommandComplete {"tag":"COPY 0"}
+ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"count"}]}
+DataRow {"fields":["0"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+
+# With several columns a blank line cannot be a row, and is skipped. The
+# header is then the first line that is not blank.
+send
+Query {"query": "CREATE TABLE t11 (a TEXT, b TEXT)"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "COPY t11 FROM STDIN WITH (FORMAT CSV, HEADER true)"}
+CopyData "\r\n"
+CopyData "h1,h2\r\n"
+CopyData "\r\n"
+CopyData "a,b\r\n"
+CopyData "\n"
+CopyData "\"\",d\n"
+CopyData "\n"
+CopyDone
+Query {"query": "SELECT a, b FROM t11 ORDER BY b"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+----
+CopyIn {"format":"text","column_formats":["text","text"]}
+CommandComplete {"tag":"COPY 2"}
+ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"a"},{"name":"b"}]}
+DataRow {"fields":["a","b"]}
+DataRow {"fields":["","d"]}
+CommandComplete {"tag":"SELECT 2"}
+ReadyForQuery {"status":"I"}
+
+# CR and LF end records, so COPY FROM STDIN rejects both as the quote.
+send
+Query {"query": "COPY t10 FROM STDIN WITH (FORMAT CSV, QUOTE E'\\n')"}
+Query {"query": "COPY t10 FROM STDIN WITH (FORMAT CSV, QUOTE E'\\r')"}
+----
+
+until
+ErrorResponse
+ReadyForQuery
+ErrorResponse
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"XX000"},{"typ":"M","value":"COPY CSV quote cannot be a line feed or carriage return"}]}
+ReadyForQuery {"status":"I"}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"XX000"},{"typ":"M","value":"COPY CSV quote cannot be a line feed or carriage return"}]}
 ReadyForQuery {"status":"I"}

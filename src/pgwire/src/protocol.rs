@@ -40,7 +40,9 @@ use mz_ore::netio::AsyncReady;
 use mz_ore::now::{EpochMillis, SYSTEM_TIME};
 use mz_ore::str::StrExt;
 use mz_ore::{assert_none, assert_ok, instrument, soft_assert_eq_or_log, soft_assert_or_log};
-use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
+use mz_pgcopy::{
+    CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams, csv_blank_line_is_record,
+};
 use mz_pgwire_common::{
     ConnectionCounter, Cursor, ErrorResponse, Format, FrontendMessage, Severity, VERSION_3,
     VERSIONS,
@@ -3163,7 +3165,7 @@ where
             .unwrap_or(usize::MAX);
 
         let mut data = Vec::new();
-        let mut row_scanner = CopyRowScanner::new(&params);
+        let mut row_scanner = CopyRowScanner::new(&params, row_desc.arity());
         let num_workers = writer.batch_txs.len();
         let mut next_worker: usize = 0;
         let mut saw_copy_done = false;
@@ -3182,7 +3184,7 @@ where
                         continue;
                     }
                     data.extend(buf);
-                    row_scanner.scan_new_bytes(&data);
+                    row_scanner.scan_new_bytes(&mut data);
 
                     if let Some(end_pos) = row_scanner.end_marker_end() {
                         data.truncate(end_pos);
@@ -3202,9 +3204,26 @@ where
                         break;
                     }
 
+                    let mut send_failed = false;
+                    // NOTE: A batch that reached the cap on blank records is
+                    // copied out. Splitting it off would move the rest of the
+                    // buffer once per batch, and leave each batch with the
+                    // capacity of the whole buffer.
+                    let mut sent = 0;
+                    for end in row_scanner.take_batch_ends() {
+                        let chunk = data[sent..end].to_vec();
+                        sent = end;
+                        if writer.batch_txs[next_worker].send(chunk).await.is_err() {
+                            send_failed = true;
+                            break;
+                        }
+                        next_worker = (next_worker + 1) % num_workers;
+                    }
+                    data.drain(..sent);
+                    row_scanner.on_split(sent);
+
                     // When buffer exceeds batch size, split at the last complete row
                     // and send the complete rows chunk to the next worker.
-                    let mut send_failed = false;
                     while data.len() >= BATCH_SIZE {
                         let split_pos = match row_scanner.last_row_end() {
                             Some(pos) => pos,
@@ -3553,15 +3572,19 @@ enum FetchResult {
     Notice(AdapterNotice),
 }
 
+/// Cap on the blank lines that are records in one batch of CSV data.
+///
+/// NOTE: A worker decodes a batch into rows before it writes any of them, and a
+/// blank line is a `Row` from one byte of input. Without the cap, a batch of
+/// blank lines would decode into `size_of::<Row>()` times its size.
+const MAX_BLANK_RECORDS_PER_BATCH: usize = 1 << 20;
+
 #[derive(Debug)]
 struct CopyRowScanner {
     scan_pos: usize,
     last_row_end: Option<usize>,
     end_marker_end: Option<usize>,
-    // Byte offset within `data` at which the in-progress CSV record begins.
-    // Used to verify the end-of-copy marker against the raw input bytes,
-    // distinguishing a literal `\.` line from a quoted CSV value `"\."`
-    // whose decoded form is also `\.`.
+    // Start of the current CSV record, including any bytes read in prior messages.
     record_start: usize,
     csv: Option<CsvScanState>,
 }
@@ -3571,19 +3594,33 @@ struct CsvScanState {
     reader: csv_core::Reader,
     output: Vec<u8>,
     ends: Vec<usize>,
+    pending_cr: bool,
+    at_stream_start: bool,
     skip_first_record: bool,
+    blank_line_is_record: bool,
+    // Blank lines that are records since the last of `batch_ends`.
+    blank_records: usize,
+    // Row ends at which a batch reached `MAX_BLANK_RECORDS_PER_BATCH`.
+    batch_ends: Vec<usize>,
 }
 
 impl CopyRowScanner {
-    fn new(params: &CopyFormatParams<'_>) -> Self {
+    fn new(params: &CopyFormatParams<'_>, column_count: usize) -> Self {
         let csv = match params {
-            CopyFormatParams::Csv(CopyCsvFormatParams {
-                delimiter,
-                quote,
-                escape,
-                header,
-                ..
-            }) => Some(CsvScanState::new(*delimiter, *quote, *escape, *header)),
+            CopyFormatParams::Csv(params) => Some(CsvScanState {
+                reader: params.reader(),
+                // NOTE: csv-core's `read_record` returns once `output` or `ends`
+                // is full, so their lengths bound how much input one call can
+                // scan. The scanner never reads their contents.
+                output: vec![0; 64 * 1024],
+                ends: vec![0; 1024],
+                pending_cr: false,
+                at_stream_start: true,
+                skip_first_record: params.header,
+                blank_line_is_record: csv_blank_line_is_record(column_count),
+                blank_records: 0,
+                batch_ends: Vec::new(),
+            }),
             _ => None,
         };
 
@@ -3596,78 +3633,72 @@ impl CopyRowScanner {
         }
     }
 
-    fn scan_new_bytes(&mut self, data: &[u8]) {
+    fn scan_new_bytes(&mut self, data: &mut Vec<u8>) {
         if self.scan_pos >= data.len() {
             return;
         }
 
         if let Some(csv) = self.csv.as_mut() {
-            let mut input = &data[self.scan_pos..];
-            let mut consumed = 0usize;
-            while !input.is_empty() {
-                let (result, n_input, _n_output, _n_ends) =
-                    csv.reader
-                        .read_record(input, &mut csv.output, &mut csv.ends);
-                consumed += n_input;
-                input = &input[n_input..];
-
-                match result {
-                    ReadRecordResult::InputEmpty => break,
-                    ReadRecordResult::OutputFull => {
-                        if n_input == 0 {
-                            csv.output
-                                .resize(csv.output.len().saturating_mul(2).max(1), 0);
-                        }
+            if csv.at_stream_start {
+                const BOM: &[u8] = b"\xef\xbb\xbf";
+                if data.len() < BOM.len() && BOM.starts_with(data) {
+                    return;
+                }
+                if data.starts_with(BOM) {
+                    data.drain(..BOM.len());
+                }
+                csv.at_stream_start = false;
+            }
+            let mut pos = self.scan_pos;
+            while pos < data.len() {
+                if csv.pending_cr {
+                    // A split between CR and LF would turn the LF into another record.
+                    pos += usize::from(data[pos] == b'\n');
+                    csv.pending_cr = false;
+                    self.last_row_end = Some(pos);
+                    self.record_start = pos;
+                    continue;
+                }
+                if csv.blank_records >= MAX_BLANK_RECORDS_PER_BATCH {
+                    // NOTE: `pos` is a row end here. A check where the count
+                    // grows would end a batch at a CR whose LF is still to come.
+                    csv.batch_ends.push(pos);
+                    csv.blank_records = 0;
+                }
+                let blank_record = csv.blank_line_is_record
+                    && pos == self.record_start
+                    && matches!(data[pos], b'\r' | b'\n');
+                if blank_record {
+                    csv.blank_records += 1;
+                    pos += 1;
+                } else {
+                    let (result, n, _, _) =
+                        csv.reader
+                            .read_record(&data[pos..], &mut csv.output, &mut csv.ends);
+                    pos += n;
+                    match result {
+                        ReadRecordResult::Record => {}
+                        ReadRecordResult::OutputFull | ReadRecordResult::OutputEndsFull => continue,
+                        ReadRecordResult::End | ReadRecordResult::InputEmpty => break,
                     }
-                    ReadRecordResult::OutputEndsFull => {
-                        if n_input == 0 {
-                            csv.ends.resize(csv.ends.len().saturating_mul(2).max(1), 0);
-                        }
-                    }
-                    ReadRecordResult::Record | ReadRecordResult::End => {
-                        let row_end = self.scan_pos + consumed;
-                        self.last_row_end = Some(row_end);
-                        if self.end_marker_end.is_none() {
-                            let is_marker = if csv.skip_first_record {
-                                csv.skip_first_record = false;
-                                false
-                            } else {
-                                // Detect the marker against the raw input
-                                // bytes, not the CSV-decoded record. A quoted
-                                // data row `"\."` decodes to `\.` but must be
-                                // imported as data; only a bare `\.` line
-                                // terminates the COPY.
-                                let raw = &data[self.record_start..row_end];
-                                // csv-core ends a CRLF record after the `\r`,
-                                // leaving the trailing `\n` as the leading byte
-                                // of the next record's span; a CR-only record
-                                // ends in a lone `\r`. So a `\.` marker record's
-                                // raw span can be `\.\n` (LF), `\n\.\r` (CRLF)
-                                // or `\.\r` (CR). Trim CR/LF from both ends
-                                // before comparing — a trailing-only strip would
-                                // miss the CRLF/CR forms. Quoted `"\."` data
-                                // keeps its surrounding quotes after trimming and
-                                // is therefore correctly rejected.
-                                let start = raw
-                                    .iter()
-                                    .take_while(|&&b| b == b'\r' || b == b'\n')
-                                    .count();
-                                let trailing = raw[start..]
-                                    .iter()
-                                    .rev()
-                                    .take_while(|&&b| b == b'\r' || b == b'\n')
-                                    .count();
-                                let trimmed = &raw[start..raw.len() - trailing];
-                                trimmed == b"\\."
-                            };
-                            if is_marker {
-                                self.end_marker_end = Some(row_end);
-                                self.record_start = row_end;
-                                break;
-                            }
-                        }
-                        self.record_start = row_end;
-                    }
+                }
+                // Where blank lines are not records, csv-core skips them as
+                // part of the record that follows.
+                let record = &data[self.record_start..pos - 1];
+                let skipped = record
+                    .iter()
+                    .take_while(|b| matches!(b, b'\r' | b'\n'))
+                    .count();
+                let is_marker = !csv.skip_first_record && &record[skipped..] == b"\\.";
+                csv.skip_first_record = false;
+                csv.pending_cr = data[pos - 1] == b'\r' && !is_marker;
+                if !csv.pending_cr {
+                    self.last_row_end = Some(pos);
+                }
+                self.record_start = pos;
+                if is_marker {
+                    self.end_marker_end = Some(pos);
+                    break;
                 }
             }
         } else {
@@ -3699,23 +3730,30 @@ impl CopyRowScanner {
         self.end_marker_end
     }
 
+    fn take_batch_ends(&mut self) -> Vec<usize> {
+        match &mut self.csv {
+            Some(csv) => std::mem::take(&mut csv.batch_ends),
+            None => Vec::new(),
+        }
+    }
+
     fn current_row_size(&self, data_len: usize) -> usize {
-        data_len.saturating_sub(self.last_row_end.unwrap_or(0))
+        // A CSV record that ends in `\r` is complete at `record_start` before
+        // it becomes splittable at `last_row_end`.
+        let row_start = self.last_row_end.unwrap_or(0).max(self.record_start);
+        data_len.saturating_sub(row_start)
     }
 
     fn on_split(&mut self, split_pos: usize) {
         self.scan_pos = self.scan_pos.saturating_sub(split_pos);
-        self.last_row_end = None;
+        // A split ahead of the last row end keeps that row end.
+        self.last_row_end = self
+            .last_row_end
+            .and_then(|end| end.checked_sub(split_pos))
+            .filter(|&end| end > 0);
         self.end_marker_end = self
             .end_marker_end
             .and_then(|end| end.checked_sub(split_pos));
-        // `record_start` is only maintained for the CSV path; the text and
-        // binary paths leave it at 0. For CSV, splits always occur at a
-        // completed-row boundary, so the in-progress record (if any) starts at
-        // the new beginning of the buffer. Assert that invariant so the
-        // `saturating_sub` below doesn't silently paper over a bug that
-        // bisected an in-progress record — but only when CSV is in use, since
-        // otherwise `record_start` is meaninglessly 0.
         soft_assert_or_log!(
             self.csv.is_none() || self.record_start >= split_pos,
             "split bisected an in-progress CSV record: record_start={} < split_pos={}",
@@ -3733,80 +3771,125 @@ impl CopyRowScanner {
     }
 }
 
-impl CsvScanState {
-    fn new(delimiter: u8, quote: u8, escape: u8, header: bool) -> Self {
-        let (double_quote, escape) = if quote == escape {
-            (true, None)
-        } else {
-            (false, Some(escape))
-        };
-        CsvScanState {
-            reader: csv_core::ReaderBuilder::new()
-                .delimiter(delimiter)
-                .quote(quote)
-                .double_quote(double_quote)
-                .escape(escape)
-                .build(),
-            // NOTE: csv-core's `read_record` returns once `output` or `ends`
-            // is full, so their lengths bound how much input one call can
-            // scan. The scanner never reads their contents.
-            output: vec![0; 64 * 1024],
-            ends: vec![0; 1024],
-            skip_first_record: header,
-        }
-    }
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
 
     #[mz_ore::test]
-    fn test_copy_row_scanner_end_marker_line_endings() {
-        // The pgwire COPY row scanner must detect a bare `\.` end-of-copy
-        // marker for every line ending, and must never mistake a quoted
-        // `"\."` data row for it. csv-core ends a CRLF record after the `\r`
-        // (leaving the `\n` as the next record's leading byte), so the raw
-        // record span of a `\.` marker is `\.\n` (LF), `\n\.\r` (CRLF) or
-        // `\.\r` (CR); a trailing-only strip would miss the CRLF/CR forms and
-        // silently import post-marker rows.
-        let params = CopyFormatParams::Csv(CopyCsvFormatParams::default());
-
-        let marker_end = |data: &[u8]| -> Option<usize> {
-            let mut scanner = CopyRowScanner::new(&params);
-            scanner.scan_new_bytes(data);
-            scanner.end_marker_end()
-        };
-
-        for eol in [&b"\n"[..], b"\r\n", b"\r"] {
-            let join = |lines: &[&str]| -> Vec<u8> {
-                let mut out = Vec::new();
-                for line in lines {
-                    out.extend_from_slice(line.as_bytes());
-                    out.extend_from_slice(eol);
+    fn test_copy_row_scanner_csv_boundaries() {
+        let format = CopyFormatParams::Csv(CopyCsvFormatParams {
+            header: true,
+            ..Default::default()
+        });
+        for (input, row_end, marker, partial) in [
+            ("\n\n\r\n\r", 4, None, 0),
+            ("a\rb\r\nc", 5, None, 1),
+            ("h\ra\r", 2, None, 0),
+            ("\u{feff}\n\\.\nignored", 4, Some(4), 0),
+            ("\n\\.\nignored", 4, Some(4), 0),
+            ("h\r\\.\rignored", 5, Some(5), 0),
+            ("h\r\n\"\\.\"\r\n\\.\r\nignored", 12, Some(12), 0),
+            ("\n\"a\n\\.\nb\"\n", 10, None, 0),
+        ] {
+            for split in 0..=input.len() {
+                let mut scanner = CopyRowScanner::new(&format, 1);
+                let mut data = input.as_bytes()[..split].to_vec();
+                scanner.scan_new_bytes(&mut data);
+                if scanner.end_marker_end().is_none() {
+                    data.extend_from_slice(&input.as_bytes()[split..]);
+                    scanner.scan_new_bytes(&mut data);
                 }
-                out
-            };
-
-            // Bare `\.` (the marker is the second record, so record_start has
-            // already advanced past the orphaned terminator of `first`).
-            // csv-core reports the record after a single terminator byte, so
-            // the marker boundary sits just past `first<eol>\.` + one byte.
-            let data = join(&["first", "\\.", "after"]);
-            let mut prefix = Vec::new();
-            prefix.extend_from_slice(b"first");
-            prefix.extend_from_slice(eol);
-            prefix.extend_from_slice(b"\\.");
-            assert_eq!(
-                marker_end(&data),
-                Some(prefix.len() + 1),
-                "bare marker, eol={eol:?}"
-            );
-
-            // Quoted "\." is data, not the marker.
-            let data = join(&["before", "\"\\.\"", "after"]);
-            assert_eq!(marker_end(&data), None, "quoted marker, eol={eol:?}");
+                assert_eq!(
+                    scanner.end_marker_end(),
+                    marker,
+                    "{input:?} split at {split}"
+                );
+                if let Some(end) = marker {
+                    data.truncate(end);
+                    scanner.on_truncate(end);
+                }
+                assert_eq!(
+                    scanner.last_row_end(),
+                    Some(row_end),
+                    "{input:?} split at {split}"
+                );
+                assert_eq!(scanner.current_row_size(data.len()), partial);
+                scanner.on_split(row_end);
+            }
         }
+    }
+
+    #[mz_ore::test]
+    fn test_copy_row_scanner_csv_skipped_blank_lines() {
+        let format = CopyFormatParams::Csv(CopyCsvFormatParams {
+            header: true,
+            ..Default::default()
+        });
+        for (input, row_end, marker, partial) in [
+            // The blank line is skipped, so `\.` is the header.
+            ("\n\\.\na,b\n", Some(8), None, 0),
+            // No chunk ends ahead of the header, and the lines count as its size.
+            ("\n\r\n", None, None, 3),
+            ("\nh,h\n\r\n\\.\nignored", Some(10), Some(10), 0),
+        ] {
+            for split in 0..=input.len() {
+                let mut scanner = CopyRowScanner::new(&format, 2);
+                let mut data = input.as_bytes()[..split].to_vec();
+                scanner.scan_new_bytes(&mut data);
+                if scanner.end_marker_end().is_none() {
+                    data.extend_from_slice(&input.as_bytes()[split..]);
+                    scanner.scan_new_bytes(&mut data);
+                }
+                assert_eq!(
+                    scanner.end_marker_end(),
+                    marker,
+                    "{input:?} split at {split}"
+                );
+                if let Some(end) = marker {
+                    data.truncate(end);
+                    scanner.on_truncate(end);
+                }
+                assert_eq!(
+                    scanner.last_row_end(),
+                    row_end,
+                    "{input:?} split at {split}"
+                );
+                assert_eq!(
+                    scanner.current_row_size(data.len()),
+                    partial,
+                    "{input:?} split at {split}"
+                );
+            }
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_copy_row_scanner_csv_blank_record_cap() {
+        let params = CopyFormatParams::Csv(CopyCsvFormatParams::default());
+        let cap = MAX_BLANK_RECORDS_PER_BATCH;
+
+        // With several columns the lines are skipped, and need no cap.
+        let mut scanner = CopyRowScanner::new(&params, 2);
+        scanner.scan_new_bytes(&mut vec![b'\n'; 2 * cap + 1]);
+        assert!(scanner.take_batch_ends().is_empty());
+
+        let mut scanner = CopyRowScanner::new(&params, 1);
+        let mut data = vec![b'\n'; 2 * cap + 1];
+        scanner.scan_new_bytes(&mut data);
+        assert_eq!(scanner.take_batch_ends(), [cap, 2 * cap]);
+        scanner.on_split(2 * cap);
+        assert_eq!(scanner.last_row_end(), Some(1));
+
+        // The last blank line of a batch ends in a CR, and its LF is in the
+        // next message.
+        let mut scanner = CopyRowScanner::new(&params, 1);
+        let mut data = b"\r\n".repeat(cap - 1);
+        data.push(b'\r');
+        scanner.scan_new_bytes(&mut data);
+        assert!(scanner.take_batch_ends().is_empty());
+        data.extend_from_slice(b"\n\r\n");
+        scanner.scan_new_bytes(&mut data);
+        assert_eq!(scanner.take_batch_ends(), [2 * cap]);
     }
 
     #[mz_ore::test]
@@ -3815,9 +3898,9 @@ mod test {
         let long_field = "x".repeat(200_000);
         let many_fields = vec!["x"; 3_000].join(",");
         for row in [long_field, many_fields] {
-            let mut scanner = CopyRowScanner::new(&params);
-            let data = format!("{row}\n{row}");
-            scanner.scan_new_bytes(data.as_bytes());
+            let mut scanner = CopyRowScanner::new(&params, 1);
+            let mut data = format!("{row}\n{row}").into_bytes();
+            scanner.scan_new_bytes(&mut data);
             assert_eq!(scanner.last_row_end(), Some(row.len() + 1));
         }
     }
@@ -3834,10 +3917,10 @@ mod test {
             CopyFormatParams::Text(CopyTextFormatParams::default()),
             CopyFormatParams::Binary,
         ] {
-            let mut scanner = CopyRowScanner::new(&params);
+            let mut scanner = CopyRowScanner::new(&params, 4);
             let data = b"1\thello world\t2\tsome text value here\n\
                          3\thello world\t6\tsome text value here\n";
-            scanner.scan_new_bytes(data);
+            scanner.scan_new_bytes(&mut data.to_vec());
             let split_pos = scanner.last_row_end().expect("a complete row");
             assert!(split_pos > 0, "params={params:?}");
             // Must not panic via the CSV-only `on_split` soft-assert.
