@@ -18,10 +18,11 @@ use k8s_openapi::{
     api::{
         apps::v1::{StatefulSet, StatefulSetSpec},
         core::v1::{
-            Capabilities, ConfigMap, ConfigMapVolumeSource, Container, ContainerPort, EnvVar,
-            EnvVarSource, KeyToPath, PodSecurityContext, PodSpec, PodTemplateSpec, Probe,
-            SeccompProfile, Secret, SecretKeySelector, SecretVolumeSource, SecurityContext,
-            Service, ServicePort, ServiceSpec, TCPSocketAction, Toleration, Volume, VolumeMount,
+            Capabilities, ConfigMap, ConfigMapVolumeSource, Container, ContainerPort,
+            EmptyDirVolumeSource, EnvVar, EnvVarSource, KeyToPath, PodSecurityContext, PodSpec,
+            PodTemplateSpec, Probe, SeccompProfile, Secret, SecretKeySelector, SecretVolumeSource,
+            SecurityContext, Service, ServicePort, ServiceSpec, TCPSocketAction, Toleration,
+            Volume, VolumeMount,
         },
     },
     apimachinery::pkg::{apis::meta::v1::LabelSelector, util::intstr::IntOrString},
@@ -1107,7 +1108,7 @@ fn create_environmentd_statefulset_object(
         )
     });
 
-    let security_context = if config.enable_security_context {
+    let mut security_context = if config.enable_security_context {
         // Since we want to adhere to the most restrictive security context, all
         // of these fields have to be set how they are.
         // See https://kubernetes.io/docs/concepts/security/pod-security-standards/#restricted
@@ -1127,6 +1128,30 @@ fn create_environmentd_statefulset_object(
     } else {
         None
     };
+    if let Some(ctx) = &mut security_context {
+        ctx.read_only_root_filesystem = Some(true);
+        // `/tmp` holds SSH tunnel keys, heap profile dumps and, through
+        // `XDG_STATE_HOME`, the SSH control sockets openssh would otherwise put
+        // under `$HOME`. Server-side apply rejects duplicate names, so an
+        // `environmentdExtraEnv` value wins.
+        if !env.iter().any(|e| e.name == "XDG_STATE_HOME") {
+            env.push(EnvVar {
+                name: "XDG_STATE_HOME".to_string(),
+                value: Some("/tmp".to_string()),
+                ..Default::default()
+            });
+        }
+        volume_mounts.push(VolumeMount {
+            name: "tmp".to_string(),
+            mount_path: "/tmp".to_string(),
+            ..Default::default()
+        });
+        volumes.push(Volume {
+            name: "tmp".to_string(),
+            empty_dir: Some(EmptyDirVolumeSource::default()),
+            ..Default::default()
+        });
+    }
 
     let ports = vec![
         ContainerPort {
@@ -1230,7 +1255,7 @@ fn create_environmentd_statefulset_object(
             .environmentd_resource_requirements
             .clone()
             .or_else(|| config.environmentd_default_resources.clone()),
-        security_context: security_context.clone(),
+        security_context,
         ..Default::default()
     };
 
