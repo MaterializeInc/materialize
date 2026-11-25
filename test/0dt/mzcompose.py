@@ -25,6 +25,8 @@ from psycopg.errors import OperationalError
 from psycopg.sql import SQL, Identifier
 
 from materialize import buildkite
+from materialize.docker import image_registry
+from materialize.mz_version import MzVersion
 from materialize.mzcompose import get_default_system_parameters, sanitizer_enabled
 from materialize.mzcompose.composition import Composition, Service
 from materialize.mzcompose.service import Service as DockerService
@@ -1937,6 +1939,70 @@ def workflow_builtin_schema_migrations_replacement(c: Composition) -> None:
         new_mv_shard_id = get_persist_shard_id(mv_gid, "mz_new")
         assert new_mz_tables_shard_id != mz_tables_shard_id
         assert new_mv_shard_id == mv_shard_id
+
+        reused, replaced = fetch_reconciliation_metrics(c, "mz_new")
+        assert reused > 0
+        assert (
+            replaced == 0
+        ), f"{replaced} dataflows have been replaced, expected all to be reused"
+
+
+def workflow_new_builtins_survive_promotion(c: Composition) -> None:
+    """
+    Verify that a builtin materialized view that is new in this version is
+    hydrated before promotion and keeps its dataflow across it.
+
+    The old generation runs a pinned release, and `new_mv` names a builtin
+    materialized view that release lacks. Both need to move together once we
+    no longer support upgrading from the pinned release.
+    """
+    from_version = "v26.47.1"
+    new_mv = "mz_query_policies"
+
+    c.down(destroy_volumes=True)
+    with c.override(
+        Materialized(
+            name="mz_old",
+            image=f"{image_registry()}/materialized:{from_version}",
+            sanity_restart=False,
+            deploy_generation=0,
+            system_parameter_defaults=get_default_system_parameters(
+                version=MzVersion.parse_mz(from_version)
+            ),
+            external_metadata_store=True,
+            default_replication_factor=2,
+        ),
+        Materialized(
+            name="mz_new",
+            sanity_restart=False,
+            deploy_generation=1,
+            system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
+            restart="on-failure",
+            external_metadata_store=True,
+            healthcheck=LEADER_STATUS_HEALTHCHECK,
+            default_replication_factor=2,
+        ),
+    ):
+        c.up("mz_old")
+        exists = c.sql_query(
+            f"SELECT count(*) FROM mz_objects WHERE name = '{new_mv}'",
+            service="mz_old",
+        )[0][0]
+        assert exists == 0, f"{from_version} already has {new_mv}, move the pin"
+
+        c.up("mz_new")
+        c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+
+        # A new builtin MV is only readable on the read-only generation if that
+        # generation wrote its shard. Nothing else does.
+        c.sql_query(
+            f"SELECT count(*) FROM mz_internal.{new_mv}",
+            service="mz_new",
+            reuse_connection=False,
+        )
+
+        c.promote_mz("mz_new", retire_mz_service="mz_old")
+        c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new")
 
         reused, replaced = fetch_reconciliation_metrics(c, "mz_new")
         assert reused > 0
