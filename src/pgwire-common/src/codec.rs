@@ -341,6 +341,13 @@ impl<'a> Cursor<'a> {
         Ok(byte)
     }
 
+    /// Returns the next `len` bytes and advances the cursor past them.
+    pub fn read_bytes(&mut self, len: usize) -> Result<&'a [u8], io::Error> {
+        self.buf
+            .split_off(..len)
+            .ok_or_else(|| input_err("No byte to read"))
+    }
+
     /// Returns the next null-terminated string. The null character is not
     /// included the returned string. The cursor is advanced past the null-
     /// terminated string.

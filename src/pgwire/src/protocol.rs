@@ -3810,6 +3810,19 @@ mod test {
     }
 
     #[mz_ore::test]
+    fn test_copy_row_scanner_csv_row_larger_than_scan_buffers() {
+        let params = CopyFormatParams::Csv(CopyCsvFormatParams::default());
+        let long_field = "x".repeat(200_000);
+        let many_fields = vec!["x"; 3_000].join(",");
+        for row in [long_field, many_fields] {
+            let mut scanner = CopyRowScanner::new(&params);
+            let data = format!("{row}\n{row}");
+            scanner.scan_new_bytes(data.as_bytes());
+            assert_eq!(scanner.last_row_end(), Some(row.len() + 1));
+        }
+    }
+
+    #[mz_ore::test]
     fn test_copy_row_scanner_non_csv_split() {
         // Regression: `record_start` is only maintained for the CSV path; the
         // text and binary paths leave it at 0. `on_split` must therefore not

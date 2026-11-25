@@ -871,12 +871,10 @@ fn decode_bind(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
         if len == -1 {
             raw_params.push(None); // NULL
         } else {
+            // Other negative lengths have historically decoded as empty values.
+            let len = usize::try_from(len).unwrap_or(0);
             // TODO(benesch): this should use bytes::Bytes to avoid the copy.
-            let mut value = Vec::new();
-            for _ in 0..len {
-                value.push(buf.read_byte()?);
-            }
-            raw_params.push(Some(value));
+            raw_params.push(Some(buf.read_bytes(len)?.to_vec()));
         }
     }
 
