@@ -21,6 +21,10 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
+# Runs before the ci-builder bootstrap and every later step, since those
+# install and build the dependencies this checks.
+ci/lint-malicious-deps.sh
+
 pipeline=${1:-test}
 if [ "$#" -gt 0 ]; then
   shift

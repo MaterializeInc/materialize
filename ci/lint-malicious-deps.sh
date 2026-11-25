@@ -20,8 +20,10 @@ image=ghcr.io/google/osv-scanner:v2.7.1@sha256:a70ffffc2bfd33482953e5d6b64c6fcdb
 out=$(mktemp)
 trap 'rm -f "$out"' EXIT
 
-# Lockfiles go in on stdin rather than a mount, so the scanner can't touch the
-# checkout. osv-scanner exits 1 for any vulnerability, so only 2+ is an error.
+# Runs on the agent host before ci-builder exists, so it needs only git, tar,
+# docker and jq. Lockfiles go in on stdin rather than a mount, so the scanner
+# can't touch the checkout. osv-scanner exits 1 for any vulnerability, so only
+# 2+ is an error.
 status=0
 git ls-files -z -- '*Cargo.lock' '*package-lock.json' '*yarn.lock' \
     '*requirements*.txt' '*uv.lock' '*pom.xml' '*Gemfile.lock' \

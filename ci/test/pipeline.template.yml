@@ -249,26 +249,6 @@ steps:
         coverage: skip
         sanitizer: skip
 
-      - id: lint-malicious-deps
-        label: Malicious dependencies (OSV)
-        command: bin/ci-builder run stable ci/test/lint-malicious-deps.sh
-        inputs:
-          - ci/test/lint-malicious-deps.sh
-          # git pathspecs: `*` crosses directories, `**/` would miss root files.
-          - "*Cargo.lock"
-          - "*package-lock.json"
-          - "*yarn.lock"
-          - "*requirements*.txt"
-          - "*uv.lock"
-          - "*pom.xml"
-          - "*Gemfile.lock"
-        depends_on: []
-        timeout_in_minutes: 15
-        agents:
-          queue: hetzner-aarch64-4cpu-8gb
-        coverage: skip
-        sanitizer: skip
-
       - id: lint-cargo-doc-test
         label: Cargo doc tests
         command: bin/ci-builder run stable ci/test/lint-cargo-doc-test.sh
