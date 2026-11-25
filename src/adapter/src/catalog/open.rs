@@ -996,9 +996,6 @@ fn add_new_remove_old_builtin_items_migration(
     //
     // Objects can be removed from this set after one release.
     let delete_exceptions: HashSet<SystemObjectDescription> = [].into();
-    // TODO(jkosh44) Technically we could support changing the type of a builtin object outside
-    // of unstable schemas (i.e. from a table to a view). However, builtin migrations don't currently
-    // handle that scenario correctly.
     assert!(
         deleted_system_objects
             .iter()
