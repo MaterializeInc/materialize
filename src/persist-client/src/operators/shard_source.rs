@@ -53,7 +53,9 @@ use crate::cfg::{
     RetryParameters, SOURCE_FETCH_CONCURRENCY, SOURCE_HYDRATION_FRONTIER_COALESCE_BYTES,
     USE_CRITICAL_SINCE_SOURCE,
 };
-use crate::fetch::{ExchangeableBatchPart, FetchedBlob, Lease, MissingBlobDiagnosis};
+use crate::fetch::{
+    ExchangeableBatchPart, FetchedBlob, Lease, MissingBlobDiagnosis, MissingBlobExit,
+};
 use crate::internal::state::BatchPart;
 use crate::read::READER_LEASE_EXPIRED_EXIT_CODE;
 use crate::stats::{STATS_AUDIT_PERCENT, STATS_FILTER_ENABLED};
@@ -161,12 +163,9 @@ fn missing_blob_error(
         "batch fetcher could not fetch batch part {}: {}",
         blob_key, diagnosis
     );
-    match diagnosis {
-        MissingBlobDiagnosis::LeaseExpired { .. } => {
-            expired_live_read.inc();
-            anyhow::Error::new(ReaderLeaseExpired(message))
-        }
-        _ => anyhow!(message),
+    match diagnosis.exit(expired_live_read) {
+        MissingBlobExit::LeaseExpired => anyhow::Error::new(ReaderLeaseExpired(message)),
+        MissingBlobExit::Halt | MissingBlobExit::Panic => anyhow!(message),
     }
 }
 

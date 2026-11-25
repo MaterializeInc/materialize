@@ -199,6 +199,14 @@ where
     pub async fn fetch_batch_part(&mut self, part: LeasedBatchPart<T>) -> FetchedPart<K, V, T, D> {
         self.listen.fetch_batch_part(part).await
     }
+
+    /// Expires this subscribe's reader out of state but keeps the handle, as a
+    /// missed heartbeat would. Tests only: GC no longer protects its parts.
+    #[doc(hidden)]
+    pub async fn expire_lease_for_tests(&self) {
+        let handle = &self.listen.handle;
+        let _ = handle.machine.expire_leased_reader(&handle.reader_id).await;
+    }
 }
 
 impl<K, V, T, D> Subscribe<K, V, T, D>
