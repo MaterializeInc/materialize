@@ -24,7 +24,8 @@ use itertools::Itertools;
 use maplit::btreemap;
 use mz_dyncfg::{Config, ConfigSet};
 use mz_kafka_util::client::{
-    GetPartitionsError, MzClientContext, PartitionId, TunnelingClientContext, get_partitions,
+    GetPartitionsError, MzClientContext, MzKafkaError, PartitionId, TunnelingClientContext,
+    get_partitions,
 };
 use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
@@ -804,6 +805,24 @@ fn render_reader<'scope>(
                     }
                 }
 
+                // NOTE: librdkafka retries a fetch whose response exceeds
+                // receive.message.max.bytes indefinitely, and the metadata consumer's small
+                // responses keep the source running. Halt, since the next metadata update would
+                // reset a stalled status to running.
+                if let Some(error) = polled_consumer
+                    .as_ref()
+                    .and_then(|consumer| consumer.context().inner().take_response_too_large())
+                {
+                    consumer_setup.report_health(
+                        StatusNamespace::Kafka,
+                        HealthStatusUpdate::halting(error.to_string(), None),
+                    );
+                    // Wedge until the `SuspendAndRestart` is processed, as on a failed consumer
+                    // creation.
+                    std::future::pending::<()>().await;
+                    unreachable!("pending future never returns");
+                }
+
                 reader.update_stats();
 
                 // Take the consumers temporarily to get around borrow checker errors
@@ -1389,6 +1408,10 @@ struct GlueConsumerContext {
     notificator: Arc<Notify>,
     stats_tx: crossbeam_channel::Sender<Jsonb>,
     inner: MzClientContext,
+    /// The errors `inner` records. The channel is unbounded but stays small. The reader drains it
+    /// on every loop iteration, at least once per `kafka_poll_max_wait`, and each error is one
+    /// librdkafka log line. Repeated oversized responses produced under two errors per second.
+    errors: crossbeam_channel::Receiver<MzKafkaError>,
 }
 
 impl ClientContext for GlueConsumerContext {
@@ -1417,6 +1440,14 @@ impl ClientContext for GlueConsumerContext {
 impl GlueConsumerContext {
     fn activate(&self) {
         self.notificator.notify_one();
+    }
+
+    /// Drains the recorded errors up to the first one reporting a broker response over
+    /// `receive.message.max.bytes`, and returns it.
+    fn take_response_too_large(&self) -> Option<MzKafkaError> {
+        self.errors
+            .try_iter()
+            .find(|error| matches!(error, MzKafkaError::ResponseTooLarge(_)))
     }
 }
 
@@ -1535,6 +1566,7 @@ impl ReaderConsumerSetup {
 
     async fn create(&self) -> Result<Arc<ReaderConsumer>, ContextCreationError> {
         let config_set = self.config.config.config_set();
+        let (inner, errors) = MzClientContext::with_errors();
         let consumer: ReaderConsumer = self
             .connection
             .create_with_context(
@@ -1542,7 +1574,8 @@ impl ReaderConsumerSetup {
                 GlueConsumerContext {
                     notificator: Arc::clone(&self.notificator),
                     stats_tx: self.stats_tx.clone(),
-                    inner: MzClientContext::default(),
+                    inner,
+                    errors,
                 },
                 &btreemap! {
                     // Disable Kafka auto commit. We manually commit offsets
