@@ -163,6 +163,7 @@ pub struct CopyTextFormatParser<'a> {
     position: usize,
     column_delimiter: u8,
     null_string: &'a str,
+    check_cr_prefixes: bool,
     buffer: Vec<u8>,
 }
 
@@ -173,6 +174,9 @@ impl<'a> CopyTextFormatParser<'a> {
             position: 0,
             column_delimiter,
             null_string,
+            // A marker can span several columns. Skip the CR probe across them on CR-free input.
+            check_cr_prefixes: !null_string.is_empty()
+                && (!null_string.as_bytes().contains(&column_delimiter) || data.contains(&b'\r')),
             buffer: Vec::new(),
         }
     }
@@ -246,24 +250,53 @@ impl<'a> CopyTextFormatParser<'a> {
         }
     }
 
-    fn consume_null_string(&mut self) -> bool {
-        if self.null_string.is_empty() {
-            // An empty NULL marker is supported. Look ahead to ensure that is followed by
-            // a column delimiter, an end of line or it is at the end of the data.
-            self.is_column_delimiter()
-                || self.is_end_of_line()
-                || self.is_end_of_copy_marker()
-                || self.is_eof()
-        } else {
-            self.consume_bytes(self.null_string.as_bytes())
+    // A marker followed by an unsupported CR record ending must still fail the import.
+    #[cold]
+    fn ambiguous_cr(&self, data: &[u8], marker_len: usize) -> bool {
+        let mut probe = CopyTextFormatParser::new(data, self.column_delimiter, "");
+        loop {
+            probe.consume_text_field();
+            if probe.position >= marker_len {
+                break;
+            }
+            if probe.expect_column_delimiter().is_err() {
+                return false;
+            }
         }
+        probe.is_end_of_line()
+            && data[..probe.position]
+                .strip_suffix(b"\r")
+                .is_some_and(|before_cr| {
+                    self.column_delimiter == b'\\' || !ends_with_escape(before_cr)
+                })
     }
 
     pub fn consume_raw_value(&mut self) -> Result<Option<&[u8]>, io::Error> {
-        if self.consume_null_string() {
-            return Ok(None);
+        let data = &self.data[self.position..];
+        let marker = self.null_string.as_bytes();
+        if let Some((prefix, rest)) = data.split_at_checked(marker.len()) {
+            let boundary = matches!(rest, [] | [b'\n', ..])
+                || rest.first() == Some(&self.column_delimiter)
+                || (marker.is_empty() && self.is_end_of_copy_marker());
+            if (boundary || self.check_cr_prefixes) && prefix == marker {
+                if boundary {
+                    self.consume_n(marker.len());
+                    return Ok(None);
+                }
+                if self.ambiguous_cr(data, marker.len()) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "ambiguous COPY marker in field containing a carriage return",
+                    ));
+                }
+            }
         }
 
+        Ok(Some(self.consume_text_field()))
+    }
+
+    #[inline(always)]
+    fn consume_text_field(&mut self) -> &[u8] {
         let mut start = self.position;
 
         // buffer where unescaped data is accumulated
@@ -366,12 +399,12 @@ impl<'a> CopyTextFormatParser<'a> {
 
         // Return a slice of the original buffer if no escaped characters where processed
         if self.buffer.is_empty() {
-            Ok(Some(&self.data[start..self.position]))
+            &self.data[start..self.position]
         } else {
             // ... otherwise, add the remaining non-escaped data to the decoding buffer
             // and return a pointer to it
             self.buffer.extend(&self.data[start..self.position]);
-            Ok(Some(&self.buffer[..]))
+            &self.buffer
         }
     }
 
@@ -542,6 +575,43 @@ impl<'a> Default for CopyTextFormatParams<'a> {
             delimiter: b'\t',
             null: Cow::from("\\N"),
         }
+    }
+}
+
+fn ends_with_escape(bytes: &[u8]) -> bool {
+    bytes.iter().rev().take_while(|&&b| b == b'\\').count() % 2 == 1
+}
+
+impl CopyTextFormatParams<'_> {
+    /// Whether a physical LF after these bytes continues the field when text escapes are active.
+    pub fn escapes_newline(&self, row: &[u8]) -> bool {
+        ends_with_escape(row) && !(self.null.ends_with('\\') && self.ends_with_null_field(row))
+    }
+
+    fn ends_with_null_field(&self, row: &[u8]) -> bool {
+        let line = row.rsplit(|&b| b == b'\n').next().unwrap();
+        let Some(prefix) = line.strip_suffix(self.null.as_bytes()) else {
+            return false;
+        };
+        let continued = line.len() < row.len();
+        if prefix.is_empty() {
+            return !continued;
+        }
+        if prefix.last() != Some(&self.delimiter) {
+            return false;
+        }
+        // After an escaped LF the first field continues from the previous line.
+        let mut parser = CopyTextFormatParser::new(line, self.delimiter, &self.null);
+        if continued {
+            parser.null_string = "";
+        }
+        while parser.position < prefix.len() {
+            if parser.consume_raw_value().is_err() || parser.expect_column_delimiter().is_err() {
+                return false;
+            }
+            parser.null_string = &self.null;
+        }
+        parser.position == prefix.len()
     }
 }
 
@@ -921,6 +991,8 @@ mod tests {
 
     #[mz_ore::test]
     fn test_copy_format_text_empty_null_string() {
+        let mut end_marker = CopyTextFormatParser::new(br"\.", b'\t', "");
+        assert_eq!(end_marker.consume_raw_value().unwrap(), None);
         let text = "\t\n10\t20\n30\t\n40\t".as_bytes();
         let expect = vec![
             vec![None, None],
@@ -936,23 +1008,53 @@ mod tests {
                         .expect_column_delimiter()
                         .expect("expected column delimiter");
                 }
-                match value {
-                    Some(s) => {
-                        assert!(!parser.consume_null_string());
-                        assert_eq!(
-                            parser
-                                .consume_raw_value()
-                                .expect("unexpected error")
-                                .expect("unexpected empty result"),
-                            s.as_bytes()
-                        );
-                    }
-                    None => {
-                        assert!(parser.consume_null_string());
-                    }
-                }
+                assert_eq!(
+                    parser.consume_raw_value().unwrap(),
+                    value.map(str::as_bytes)
+                );
             }
             parser.expect_end_of_line().expect("expected eol");
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_copy_text_null_boundaries() {
+        for (marker, delimiter, input, expected) in [
+            ("NULL", b'\t', &b"NULL"[..], Some(Datum::Null)),
+            (
+                "NULL",
+                b'\t',
+                b"NULLABLE\n",
+                Some(Datum::String("NULLABLE")),
+            ),
+            ("NULL", b'\t', b"\\116ULL\n", Some(Datum::String("NULL"))),
+            (
+                "NULL",
+                b'\t',
+                b"NULL\rmore\n",
+                Some(Datum::String("NULL\rmore")),
+            ),
+            ("", b'\t', b"\r\n", Some(Datum::String("\r"))),
+            (r"X\", b'\t', b"X\\\n", Some(Datum::Null)),
+            (r"X\", b'\t', b"X\\\r\n", Some(Datum::String("X\r"))),
+            (r"X\", b'\t', b"X\\\r", Some(Datum::String("X\r"))),
+            ("A|B", b'|', b"A|B\n", Some(Datum::Null)),
+            (r"\N", b'\t', b"\\N\r\n", None),
+            (r"\N", b'\t', b"\\N\rnext\r", None),
+            (r"\N", b'\t', b"\\Nprefix\r\n", None),
+            (r"\N", b'\t', b"\\Nprefix\r", None),
+            ("A|B", b'|', b"A|B\rx\\|y\r", None),
+        ] {
+            let params = CopyTextFormatParams {
+                null: marker.into(),
+                delimiter,
+            };
+            let result = decode_copy_format_text(input, &[mz_pgrepr::Type::Text], params);
+            assert_eq!(
+                result.ok(),
+                expected.map(|d| vec![Row::pack([d])]),
+                "{input:?}"
+            );
         }
     }
 

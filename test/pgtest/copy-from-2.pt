@@ -151,7 +151,7 @@ send
 Query {"query": "DROP TABLE t"}
 Query {"query": "CREATE TABLE t (i INT8, t TEXT)"}
 Query {"query": "COPY t FROM STDIN WITH (NULL 'NS')"}
-CopyData "1\tblah\n"
+CopyData "1\tNStuff\n"
 CopyData "2\t\\N\n"
 CopyData "3\tNS\n"
 CopyData "\\.\n"
@@ -173,7 +173,7 @@ CopyIn {"format":"text","column_formats":["text","text"]}
 CommandComplete {"tag":"COPY 3"}
 ReadyForQuery {"status":"I"}
 RowDescription {"fields":[{"name":"i"},{"name":"t"}]}
-DataRow {"fields":["1","blah"]}
+DataRow {"fields":["1","NStuff"]}
 DataRow {"fields":["2","N"]}
 DataRow {"fields":["3","NULL"]}
 CommandComplete {"tag":"SELECT 3"}
@@ -334,6 +334,22 @@ ErrorResponse
 ReadyForQuery
 ----
 ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"XX000"},{"typ":"M","value":"COPY delimiter must be a single one-byte character"}]}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "COPY t FROM STDIN WITH (NULL 'a\nb')"}
+Query {"query": "COPY t FROM STDIN WITH (NULL 'a\rb')"}
+----
+
+until err_field_typs=M
+ErrorResponse
+ReadyForQuery
+ErrorResponse
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"M","value":"COPY null representation cannot use newline or carriage return"}]}
+ReadyForQuery {"status":"I"}
+ErrorResponse {"fields":[{"typ":"M","value":"COPY null representation cannot use newline or carriage return"}]}
 ReadyForQuery {"status":"I"}
 
 send

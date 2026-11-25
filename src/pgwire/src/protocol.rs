@@ -3554,7 +3554,7 @@ enum FetchResult {
 }
 
 #[derive(Debug)]
-struct CopyRowScanner {
+struct CopyRowScanner<'a> {
     scan_pos: usize,
     last_row_end: Option<usize>,
     end_marker_end: Option<usize>,
@@ -3563,6 +3563,7 @@ struct CopyRowScanner {
     // distinguishing a literal `\.` line from a quoted CSV value `"\."`
     // whose decoded form is also `\.`.
     record_start: usize,
+    text: Option<&'a CopyTextFormatParams<'a>>,
     csv: Option<CsvScanState>,
 }
 
@@ -3574,8 +3575,8 @@ struct CsvScanState {
     skip_first_record: bool,
 }
 
-impl CopyRowScanner {
-    fn new(params: &CopyFormatParams<'_>) -> Self {
+impl<'a> CopyRowScanner<'a> {
+    fn new(params: &'a CopyFormatParams<'a>) -> Self {
         let csv = match params {
             CopyFormatParams::Csv(CopyCsvFormatParams {
                 delimiter,
@@ -3592,6 +3593,10 @@ impl CopyRowScanner {
             last_row_end: None,
             end_marker_end: None,
             record_start: 0,
+            text: match params {
+                CopyFormatParams::Text(p) if p.delimiter != b'\\' => Some(p),
+                _ => None,
+            },
             csv,
         }
     }
@@ -3675,13 +3680,19 @@ impl CopyRowScanner {
             for (offset, b) in data[self.scan_pos..].iter().enumerate() {
                 if *b == b'\n' {
                     let row_end = self.scan_pos + offset + 1;
+                    let row = &data[row_start..row_end];
+                    let end_marker = self.end_marker_end.is_none() && row.starts_with(br"\.");
+                    if !end_marker
+                        && self
+                            .text
+                            .is_some_and(|text| text.escapes_newline(&row[..row.len() - 1]))
+                    {
+                        continue;
+                    }
                     self.last_row_end = Some(row_end);
-                    if self.end_marker_end.is_none() {
-                        let row = &data[row_start..row_end];
-                        if row.get(0..2) == Some(b"\\.") {
-                            self.end_marker_end = Some(row_end);
-                            break;
-                        }
+                    if end_marker {
+                        self.end_marker_end = Some(row_end);
+                        break;
                     }
                     row_start = row_end;
                 }
@@ -3803,6 +3814,36 @@ mod test {
             // Quoted "\." is data, not the marker.
             let data = join(&["before", "\"\\.\"", "after"]);
             assert_eq!(marker_end(&data), None, "quoted marker, eol={eol:?}");
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_copy_text_row_boundaries() {
+        for (null, delimiter, row) in [
+            ("NULL", b'\t', &b"NULLsuffix\\\ncontinued\\\\\n"[..]),
+            (r"X\", b'\t', b"a\tX\\\n"),
+            (r"X\", b'\t', b"a\\\tX\\\ncontinued\n"),
+            (r"X\", b'\t', b"a\\\nX\\\ncontinued\n"),
+            (r"X\", b'\t', b"a\\\nb\tX\\\n"),
+            (r"A\|B|A\", b'|', b"A\\|B|A\\|B|A\\\ntail\n"),
+        ] {
+            let params = CopyFormatParams::Text(CopyTextFormatParams {
+                null: null.into(),
+                delimiter,
+            });
+            let mut scanner = CopyRowScanner::new(&params);
+            for end in 1..=row.len() {
+                scanner.scan_new_bytes(&row[..end]);
+                assert_eq!(
+                    scanner.last_row_end(),
+                    (end == row.len()).then_some(end),
+                    "{row:?} at {end}"
+                );
+            }
+            scanner.on_split(row.len());
+            let marker = b"\\.suffix\\\n";
+            scanner.scan_new_bytes(marker);
+            assert_eq!(scanner.end_marker_end(), Some(marker.len()));
         }
     }
 

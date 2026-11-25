@@ -2055,6 +2055,9 @@ fn plan_copy_from(
                 Some(null) => Cow::from(null),
                 None => Cow::from("\\N"),
             };
+            if null.contains(['\r', '\n']) {
+                sql_bail!("COPY null representation cannot use newline or carriage return");
+            }
             CopyFormatParams::Text(CopyTextFormatParams { null, delimiter })
         }
         CopyFormat::Csv => {
