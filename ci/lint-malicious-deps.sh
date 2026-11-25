@@ -20,17 +20,17 @@ image=ghcr.io/google/osv-scanner:v2.7.1@sha256:a70ffffc2bfd33482953e5d6b64c6fcdb
 out=$(mktemp)
 trap 'rm -f "$out"' EXIT
 
-# Runs on the agent host before ci-builder exists, so it needs only git, tar,
-# curl, docker and jq. Lockfiles go in on stdin rather than a mount, so the
-# scanner can't touch the checkout. osv-scanner exits 1 for any vulnerability,
-# so only 2+ is an error.
+# Runs on the agent host before ci-builder exists. Lockfiles go in on stdin,
+# so the scanner can't touch the checkout. osv-scanner exits 1 for any
+# vulnerability. --no-resolve skips guessing transitive versions of manifests
+# (requirements.txt, pom.xml) from registries, the slowest part of the scan.
 status=0
 git ls-files -z -- '*Cargo.lock' '*package-lock.json' '*yarn.lock' \
     '*requirements*.txt' '*uv.lock' '*pom.xml' '*Gemfile.lock' \
 | tar --null -cf - -T - \
 | docker run --rm -i --user 65534 --cap-drop ALL \
     --security-opt no-new-privileges --pids-limit 256 --entrypoint sh "$image" \
-    -c 'mkdir /tmp/src && tar -xf - -C /tmp/src && exec /osv-scanner scan source -r --format json /tmp/src' \
+    -c 'mkdir /tmp/src && tar -xf - -C /tmp/src && exec /osv-scanner scan source -r --no-resolve --format json /tmp/src' \
     > "$out" || status=$?
 if [ "$status" -gt 1 ]; then
     # Fail open only when osv.dev itself is down. Any other scanner error,
