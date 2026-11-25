@@ -119,8 +119,8 @@ pub struct Session {
     qcell_owner: QCellOwner,
     session_oracles: BTreeMap<Timeline, InMemoryTimestampOracle>,
     /// Incremented when session state that is relevant to prepared statement planning may have
-    /// changed: `portals`, `prepared_statements`, and anything a statement execution can change,
-    /// such as session variables.
+    /// changed: `portals`, `prepared_statements`, anything a statement execution can change, such
+    /// as session variables, and the end of a transaction, which reverts `SET LOCAL`.
     /// (`Catalog::transient_revision` similarly tracks changes on the catalog side.)
     state_revision: u64,
 }
