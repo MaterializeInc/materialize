@@ -126,3 +126,15 @@ mcp-unified
 ----
 200 OK
 {"jsonrpc":"2.0","id":17,"result":{"content":[{"type":"text","text":"[\n  [true,true,true,true,true,true]\n]"}],"isError":false}}
+
+# GET on the POST-only endpoint returns 405, as on the agent and developer routes.
+mcp-unified get
+----
+405 Method Not Allowed
+
+# An Origin header not on the CORS allowlist (empty in this test harness) is
+# rejected, as on the agent and developer routes.
+mcp-unified origin
+{"jsonrpc":"2.0","id":18,"method":"tools/list"}
+----
+403 Forbidden

@@ -6133,14 +6133,15 @@ fn test_mcp_cors_allows_transport_headers() {
     let origin = "https://browser-client.example";
     let server = test_util::TestHarness::default()
         .with_mcp_routes(true, true)
+        .with_mcp_unified_route()
         .with_cors_allowed_origin(origin)
         .start_blocking();
     let headers = ["mcp-protocol-version", "mcp-method", "mcp-name"];
-    for route in ["agent", "developer"] {
+    for route in ["/api/mcp/agent", "/api/mcp/developer", "/api/mcp"] {
         let response = Client::new()
             .request(
                 reqwest::Method::OPTIONS,
-                format!("http://{}/api/mcp/{route}", server.http_local_addr()),
+                format!("http://{}{route}", server.http_local_addr()),
             )
             .header(ORIGIN, origin)
             .header("access-control-request-method", "POST")
@@ -7555,12 +7556,13 @@ fn test_mcp_unauth_emits_bearer_and_basic_challenges() {
     let server = test_util::TestHarness::default()
         .with_oidc_auth(None, None, None, None)
         .with_mcp_routes(true, true)
+        .with_mcp_unified_route()
         .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
         .with_system_parameter_default("enable_mcp_developer".to_string(), "true".to_string())
         .start_blocking();
 
-    for endpoint in ["agent", "developer"] {
-        let url = format!("http://{}/api/mcp/{endpoint}", server.http_local_addr());
+    for endpoint in ["/api/mcp/agent", "/api/mcp/developer", "/api/mcp"] {
+        let url = format!("http://{}{endpoint}", server.http_local_addr());
         let res = Client::new()
             .post(&url)
             .header("Content-Type", "application/json")
@@ -7583,7 +7585,7 @@ fn test_mcp_unauth_emits_bearer_and_basic_challenges() {
                 && c.contains("resource_metadata=")
                 && c.contains("/.well-known/oauth-protected-resource")
                 && c.contains("scope=\"mcp.read\"")),
-            "expected a Bearer challenge with resource_metadata AND scope on /api/mcp/{endpoint}, got: {challenges:?}",
+            "expected a Bearer challenge with resource_metadata AND scope on {endpoint}, got: {challenges:?}",
         );
         assert!(
             challenges.iter().any(|c| c.starts_with("Basic ")),
@@ -7603,6 +7605,7 @@ fn test_mcp_unauth_on_password_listener_does_not_advertise_oauth() {
     let server = test_util::TestHarness::default()
         .with_password_auth(Password("mz_system_password".to_string()))
         .with_mcp_routes(true, true)
+        .with_mcp_unified_route()
         .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
         .with_system_parameter_default("enable_mcp_developer".to_string(), "true".to_string())
         .with_system_parameter_default(
@@ -7611,12 +7614,9 @@ fn test_mcp_unauth_on_password_listener_does_not_advertise_oauth() {
         )
         .start_blocking();
 
-    for endpoint in ["agent", "developer"] {
+    for endpoint in ["/api/mcp/agent", "/api/mcp/developer", "/api/mcp"] {
         let res = Client::new()
-            .post(&format!(
-                "http://{}/api/mcp/{endpoint}",
-                server.http_local_addr()
-            ))
+            .post(&format!("http://{}{endpoint}", server.http_local_addr()))
             .header("Content-Type", "application/json")
             .body(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#)
             .send()
@@ -7630,11 +7630,11 @@ fn test_mcp_unauth_on_password_listener_does_not_advertise_oauth() {
             .collect();
         assert!(
             challenges.iter().any(|c| c.starts_with("Basic ")),
-            "Password listener should still emit Basic on /api/mcp/{endpoint}: {challenges:?}",
+            "Password listener should still emit Basic on {endpoint}: {challenges:?}",
         );
         assert!(
             !challenges.iter().any(|c| c.starts_with("Bearer ")),
-            "Password listener MUST NOT advertise OAuth on /api/mcp/{endpoint}: {challenges:?}",
+            "Password listener MUST NOT advertise OAuth on {endpoint}: {challenges:?}",
         );
     }
 
@@ -7988,10 +7988,13 @@ fn test_oauth_protected_resource_metadata_404_on_no_auth_listener() {
 fn test_mcp_metrics() {
     let server = test_util::TestHarness::default()
         .with_mcp_routes(true, false)
+        .with_mcp_unified_route()
         .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
+        .with_system_parameter_default("enable_mcp_unified".to_string(), "true".to_string())
         .start_blocking();
 
     let agents_url = format!("http://{}/api/mcp/agent", server.http_local_addr());
+    let unified_url = format!("http://{}/api/mcp", server.http_local_addr());
 
     // Exercise three distinct request shapes:
     //   1. `initialize`: succeeds.
@@ -7999,6 +8002,8 @@ fn test_mcp_metrics() {
     //   3. `tools/call` for `read_data_product` with a nonexistent name: the request itself
     //      completes with an MCP error (`DataProductNotFound`), which both `requests_total` and
     //      `tool_calls_total` should reflect via the status label.
+    //   4. `tools/call` on `/api/mcp` with the old name `get_data_products`: recorded under the
+    //      `unified` endpoint label and the route's own tool name, `list_data_products`.
 
     let (status, _) = mcp_post(
         &agents_url,
@@ -8031,6 +8036,17 @@ fn test_mcp_metrics() {
                 "name": "read_data_product",
                 "arguments": {"name": "nonexistent_product"}
             }
+        }),
+    );
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, _) = mcp_post(
+        &unified_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tools/call",
+            "params": {"name": "get_data_products"}
         }),
     );
     assert_eq!(status, StatusCode::OK);
@@ -8130,8 +8146,33 @@ fn test_mcp_metrics() {
         1.0,
     );
 
-    // tool_call_duration_seconds: the single tools/call above should
-    // produce exactly one histogram observation.
+    assert_eq!(
+        find_counter(
+            &gathered,
+            "mz_mcp_requests_total",
+            &[
+                ("endpoint_type", "unified"),
+                ("method", "tools/call"),
+                ("status", "ok"),
+            ],
+        ),
+        1.0,
+    );
+    assert_eq!(
+        find_counter(
+            &gathered,
+            "mz_mcp_tool_calls_total",
+            &[
+                ("endpoint_type", "unified"),
+                ("tool_name", "list_data_products"),
+                ("status", "ok"),
+            ],
+        ),
+        1.0,
+    );
+
+    // tool_call_duration_seconds: each tools/call above produces one
+    // histogram observation.
     let duration = gathered
         .iter()
         .find(|m| m.name() == "mz_mcp_tool_call_duration_seconds")
@@ -8142,8 +8183,8 @@ fn test_mcp_metrics() {
         .map(|m| m.get_histogram().get_sample_count())
         .sum();
     assert_eq!(
-        total_samples, 1,
-        "tool_call_duration_seconds should record exactly 1 sample",
+        total_samples, 2,
+        "tool_call_duration_seconds should record exactly 2 samples",
     );
 }
 
