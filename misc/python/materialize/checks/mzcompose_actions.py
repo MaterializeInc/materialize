@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 from materialize import MZ_ROOT
 from materialize.checks.actions import Action
 from materialize.checks.executors import Executor
-from materialize.docker import image_registry
+from materialize.docker import mz_image
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.helpers.iceberg import setup_polaris_for_iceberg
 from materialize.mzcompose.services.clusterd import Clusterd
@@ -84,11 +84,7 @@ class StartMz(MzcomposeAction):
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
 
-        image = (
-            f"{image_registry()}/materialized:{self.tag}"
-            if self.tag is not None
-            else None
-        )
+        image = mz_image("materialized", self.tag) if self.tag is not None else None
         print(f"Starting Mz using image {image}, mz_service {self.mz_service}")
 
         # SASL listeners arrived in v0.158.0, so only newer versions get the
@@ -380,7 +376,7 @@ class StartClusterdCompute(MzcomposeAction):
         if self.tag:
             clusterd = Clusterd(
                 name="clusterd_compute_1",
-                image=f"materialize/clusterd:{self.tag}",
+                image=mz_image("clusterd", self.tag),
             )
         print(f"Starting Compute using image {clusterd.config.get('image')}")
 

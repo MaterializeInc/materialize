@@ -47,7 +47,7 @@ import yaml
 from requests.auth import HTTPBasicAuth
 
 from materialize import MZ_ROOT, cargo, git, rustc_flags, spawn, ui, xcompile
-from materialize.docker import image_registry
+from materialize.docker import check_image_publishing, image_registry, image_suffix
 from materialize.rustc_flags import Sanitizer
 from materialize.xcompile import Arch, target
 
@@ -249,6 +249,7 @@ class RepositoryDetails:
         self.cargo_workspace = cargo.Workspace(root)
         self.image_registry = image_registry
         self.image_prefix = image_prefix
+        self.image_suffix = image_suffix()
 
     def build(
         self,
@@ -1077,7 +1078,7 @@ class Image:
 
     def docker_name(self, tag: str | None = None) -> str:
         """Return the name of the image on Docker Hub at the given tag."""
-        name = f"{self.rd.image_registry}/{self.rd.image_prefix}{self.name}"
+        name = f"{self.rd.image_registry}/{self.rd.image_prefix}{self.name}{self.rd.image_suffix}"
         if tag:
             name += f":{tag}"
         return name
@@ -1147,6 +1148,8 @@ class ResolvedImage:
         Requires that the caller has already acquired all dependencies and
         prepared all `PreImage` actions via `PreImage.prepare_batch`.
         """
+        if push:
+            check_image_publishing()
         # Use a file lock to prevent parallel mzcompose processes from
         # racing on git clean / copy / strip for the same image directory.
         lock_dir = self.image.rd.root / "target" / "mzbuild-locks"
@@ -1213,6 +1216,10 @@ class ResolvedImage:
                 spec = spec.removeprefix(GHCR_PREFIX)
             docker_tag = f"docker.io/{spec}"
             ghcr_tag = f"{GHCR_PREFIX}{spec}"
+            # Suffixed images are private and only go to Docker Hub.
+            tags = (
+                [docker_tag] if self.image.rd.image_suffix else [docker_tag, ghcr_tag]
+            )
             cmd: Sequence[str] = [
                 "docker",
                 "buildx",
@@ -1221,16 +1228,13 @@ class ResolvedImage:
                 "-f",
                 "-",
                 *(f"--build-arg={k}={v}" for k, v in build_args.items()),
-                "-t",
-                docker_tag,
-                "-t",
-                ghcr_tag,
+                *(arg for tag in tags for arg in ("-t", tag)),
                 f"--platform=linux/{self.image.rd.arch.go_str()}",
                 str(self.image.path),
                 "--load",
             ]
 
-        if token := os.getenv("GITHUB_GHCR_TOKEN"):
+        if not self.image.rd.image_suffix and (token := os.getenv("GITHUB_GHCR_TOKEN")):
             spawn.runv(
                 [
                     "docker",
@@ -1249,7 +1253,7 @@ class ResolvedImage:
             # Push to both registries in parallel. With the docker driver,
             # the image is already in the local daemon after --load, so
             # docker push is the same mechanism buildx --push uses internally.
-            pending = [docker_tag, ghcr_tag]
+            pending = tags
             for sleep_time in [5, 10, 20, 40, 60, None]:
                 procs = [
                     subprocess.Popen(
@@ -1311,7 +1315,9 @@ class ResolvedImage:
         if spec.startswith(GHCR_PREFIX):
             spec = spec.removeprefix(GHCR_PREFIX)
         ghcr_spec = f"{GHCR_PREFIX}{spec}"
-        if is_docker_image_pushed(spec) and is_ghcr_image_pushed(ghcr_spec):
+        if is_docker_image_pushed(spec) and (
+            self.image.rd.image_suffix or is_ghcr_image_pushed(ghcr_spec)
+        ):
             ui.say(f"{spec} already exists")
             return True
         return False
@@ -1885,8 +1891,10 @@ def publish_multiarch_images(
     tag: str, dependency_sets: Iterable[Iterable[ResolvedImage]]
 ) -> None:
     """Publishes a set of docker images under a given tag."""
+    check_image_publishing()
     always_push_tags = ("latest", "unstable")
-    if ghcr_token := os.getenv("GITHUB_GHCR_TOKEN"):
+    ghcr_token = None if image_suffix() else os.getenv("GITHUB_GHCR_TOKEN")
+    if ghcr_token:
         spawn.runv(
             [
                 "docker",

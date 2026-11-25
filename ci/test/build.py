@@ -18,6 +18,7 @@ from materialize.ci_util.upload_debug_symbols_to_s3 import (
     DEBUGINFO_BINS,
     upload_debuginfo_to_s3,
 )
+from materialize.docker import image_suffix
 from materialize.mzbuild import (
     CargoBuild,
     CargoRegistryFetchFailure,
@@ -90,6 +91,10 @@ def check_images_public(deps: mzbuild.DependencySet) -> None:
     """
     publishable = [dep for dep in deps if dep.publish]
     if not publishable:
+        return
+
+    # Suffixed images are private on purpose.
+    if image_suffix():
         return
 
     # Plain log line, not a `---` Buildkite section marker: this runs in a

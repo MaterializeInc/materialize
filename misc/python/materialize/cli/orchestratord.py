@@ -24,7 +24,7 @@ from uuid import uuid4
 import yaml
 
 from materialize import MZ_ROOT, ui
-from materialize.docker import image_registry
+from materialize.docker import image_registry, image_suffix
 
 DEV_IMAGE_TAG = "local-dev"
 DEFAULT_POSTGRES = "postgres://materialize_user:materialize_pass@postgres.materialize.svc.cluster.local:5432/materialize_db?sslmode=disable"
@@ -448,7 +448,7 @@ def acquire(image: str, dev: bool, cluster: str):
         [
             "docker",
             "tag",
-            f"{image_registry()}/{image}:mzbuild-{fingerprint}",
+            f"{image_registry()}/{image}{image_suffix()}:mzbuild-{fingerprint}",
             f"{image_registry()}/{image}:{DEV_IMAGE_TAG}",
         ]
     )
