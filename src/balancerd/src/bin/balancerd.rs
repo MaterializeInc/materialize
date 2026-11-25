@@ -131,6 +131,13 @@ pub struct ServiceArgs {
         requires = "frontegg_resolver_template"
     )]
     frontegg_admin_role: Option<String>,
+    /// The Frontegg permission a token must carry to authenticate.
+    #[clap(
+        long,
+        env = "FRONTEGG_REQUIRED_PERMISSION",
+        requires = "frontegg_resolver_template"
+    )]
+    frontegg_required_permission: Option<String>,
     /// An SDK key for LaunchDarkly.
     ///
     /// Setting this will enable synchronization of LaunchDarkly features.
@@ -253,6 +260,7 @@ pub async fn run(
                     tenant_id: None,
                     now: mz_ore::now::SYSTEM_TIME.clone(),
                     admin_role: args.frontegg_admin_role.expect("clap enforced"),
+                    required_permission: args.frontegg_required_permission,
                     refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
                     refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
                 },

@@ -51,6 +51,13 @@ pub struct FronteggCliArgs {
     /// The name of the admin role in Frontegg.
     #[clap(long, env = "FRONTEGG_ADMIN_ROLE", requires = "frontegg_tenant")]
     frontegg_admin_role: Option<String>,
+    /// The Frontegg permission a token must carry to authenticate.
+    #[clap(
+        long,
+        env = "FRONTEGG_REQUIRED_PERMISSION",
+        requires = "frontegg_tenant"
+    )]
+    frontegg_required_permission: Option<String>,
     /// Issuer URL of the Frontegg workspace, advertised in MCP OAuth discovery.
     #[clap(long, env = "FRONTEGG_OAUTH_ISSUER_URL")]
     frontegg_oauth_issuer_url: Option<String>,

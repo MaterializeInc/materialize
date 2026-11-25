@@ -532,6 +532,7 @@ async fn test_auth_expiry() {
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
+            required_permission: None,
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -819,6 +820,7 @@ async fn test_auth_base_require_tls_frontegg() {
             tenant_id: Some(tenant_id),
             now,
             admin_role: "mzadmin".to_string(),
+            required_permission: None,
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -2785,6 +2787,7 @@ async fn test_auth_admin_non_superuser() {
             tenant_id: Some(tenant_id),
             now,
             admin_role: admin_role.to_string(),
+            required_permission: None,
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -2838,6 +2841,155 @@ async fn test_auth_admin_non_superuser() {
         ],
     )
     .await;
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+async fn test_auth_required_permission() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+    let metrics_registry = MetricsRegistry::new();
+
+    let tenant_id = Uuid::new_v4();
+    let admin_role = "mzadmin";
+    let member_role = "member";
+    let billing_role = "billing";
+    let required_permission = "materialize.database.access";
+
+    // (user, role, client_id, secret)
+    let accounts = [
+        ("member@_.com", member_role),
+        ("billing@_.com", billing_role),
+        ("admin@_.com", admin_role),
+    ]
+    .map(|(user, role)| (user, role, Uuid::new_v4(), Uuid::new_v4()));
+    let users = accounts
+        .iter()
+        .map(|(user, role, client_id, secret)| {
+            (
+                user.to_string(),
+                UserConfig {
+                    id: Uuid::new_v4(),
+                    email: user.to_string(),
+                    password: Uuid::new_v4().to_string(),
+                    tenant_id,
+                    initial_api_tokens: vec![ApiToken {
+                        client_id: *client_id,
+                        secret: *secret,
+                        description: None,
+                        created_at: Utc::now(),
+                    }],
+                    roles: vec![role.to_string()],
+                    auth_provider: None,
+                    verified: None,
+                    metadata: None,
+                },
+            )
+        })
+        .collect();
+    let role_permissions = BTreeMap::from([
+        (
+            admin_role.to_string(),
+            vec![required_permission.to_string()],
+        ),
+        (
+            member_role.to_string(),
+            vec![required_permission.to_string()],
+        ),
+        (
+            billing_role.to_string(),
+            vec!["materialize.billing.write".to_string()],
+        ),
+    ]);
+    let encoding_key =
+        EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let decoding_key = DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap();
+    let now = SYSTEM_TIME.clone();
+
+    let frontegg_server = FronteggMockServer::start(
+        None,
+        "frontegg-mock".to_owned(),
+        encoding_key,
+        decoding_key,
+        users,
+        BTreeMap::new(),
+        Some(role_permissions),
+        now.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let frontegg_auth = FronteggAuthentication::new(
+        FronteggConfig {
+            admin_api_token_url: frontegg_server.auth_api_token_url(),
+            decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
+            tenant_id: Some(tenant_id),
+            now,
+            admin_role: admin_role.to_string(),
+            required_permission: Some(required_permission.to_string()),
+            refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
+            refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
+        },
+        mz_frontegg_auth::Client::default(),
+        &metrics_registry,
+    );
+
+    let server = test_util::TestHarness::default()
+        .with_tls(server_cert, server_key)
+        .with_frontegg_auth(&frontegg_auth)
+        .with_metrics_registry(metrics_registry)
+        .start()
+        .await;
+
+    for (user, role, client_id, secret) in accounts {
+        let password = format!("mzp_{client_id}{secret}");
+        let headers = make_header(Authorization::basic(user, &password));
+        let superuser = role == admin_role;
+        let rejected = role == billing_role;
+        run_tests(
+            role,
+            &server,
+            &[
+                TestCase::Pgwire {
+                    user_to_auth_as: user,
+                    user_reported_by_system: user,
+                    password: Some(Cow::Borrowed(&password)),
+                    ssl_mode: SslMode::Require,
+                    options: None,
+                    configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                    assert: if rejected {
+                        Assert::DbErr(Box::new(|err| {
+                            assert_eq!(err.message(), "invalid password");
+                            assert_eq!(*err.code(), SqlState::INVALID_PASSWORD);
+                        }))
+                    } else {
+                        Assert::SuccessSuperuserCheck(superuser)
+                    },
+                },
+                TestCase::Http {
+                    user_to_auth_as: user,
+                    user_reported_by_system: user,
+                    scheme: Scheme::HTTPS,
+                    headers: &headers,
+                    configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                    assert: if rejected {
+                        Assert::Err(Box::new(|code, message| {
+                            assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
+                            assert_eq!(message, "unauthorized");
+                        }))
+                    } else {
+                        Assert::SuccessSuperuserCheck(superuser)
+                    },
+                },
+            ],
+        )
+        .await;
+    }
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
@@ -2933,6 +3085,7 @@ async fn test_auth_admin_superuser() {
             tenant_id: Some(tenant_id),
             now,
             admin_role: admin_role.to_string(),
+            required_permission: None,
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -3082,6 +3235,7 @@ async fn test_auth_admin_superuser_revoked() {
             tenant_id: Some(tenant_id),
             now,
             admin_role: admin_role.to_string(),
+            required_permission: None,
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -3215,6 +3369,7 @@ async fn test_auth_deduplication() {
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
+            required_permission: None,
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -3388,6 +3543,7 @@ async fn test_refresh_task_metrics() {
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
+            required_permission: None,
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -3553,6 +3709,7 @@ async fn test_superuser_can_alter_cluster() {
             tenant_id: Some(tenant_id),
             now,
             admin_role: admin_role.to_string(),
+            required_permission: None,
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -3677,6 +3834,7 @@ async fn test_refresh_dropped_session() {
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
+            required_permission: None,
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             // Make the refresh window very large so it's easy to test.
             refresh_drop_factor: 1.0,
@@ -3856,6 +4014,7 @@ async fn test_refresh_dropped_session_lru() {
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
+            required_permission: None,
             // Make the refresh LRU cache very small, and the window size very large so it's easy
             // to test.
             refresh_drop_lru_size: NonZeroUsize::new(1).expect("known non-zero"),
@@ -4047,6 +4206,7 @@ async fn test_transient_auth_failures() {
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
+            required_permission: None,
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -4172,6 +4332,7 @@ async fn test_transient_auth_failure_on_refresh() {
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
+            required_permission: None,
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -5199,6 +5360,7 @@ async fn test_auth_autoprovision_frontegg_audit_log() {
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
+            required_permission: None,
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },

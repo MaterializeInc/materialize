@@ -60,6 +60,8 @@ pub struct AuthenticatorConfig {
     pub now: NowFn,
     /// Name of admin role.
     pub admin_role: String,
+    /// Permission that tokens must carry to authenticate, if any.
+    pub required_permission: Option<String>,
     /// How many [`AppPassword`]s we'll track the last dropped time for.
     ///
     /// TODO(parkmycar): Wire this up to LaunchDarkly.
@@ -115,6 +117,7 @@ impl Authenticator {
                 decoding_key: config.decoding_key,
                 tenant_id: config.tenant_id,
                 admin_role: config.admin_role,
+                required_permission: config.required_permission,
                 now: config.now,
                 active_sessions,
                 dropped_sessions,
@@ -158,6 +161,7 @@ impl Authenticator {
                     tenant_id: Some(tenant_id),
                     now: mz_ore::now::SYSTEM_TIME.clone(),
                     admin_role,
+                    required_permission: args.frontegg_required_permission,
                     refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
                     refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
                 }
@@ -319,6 +323,8 @@ impl Authenticator {
     ///
     ///   * The tenant ID in the token matches the `Authentication`'s tenant ID.
     ///
+    ///   * The token carries the `Authentication`'s required permission, if any.
+    ///
     /// If `expected_user` is provided, the token's user name is additionally
     /// validated to match `expected_user`.
     pub fn validate_access_token(
@@ -416,6 +422,7 @@ struct AuthenticatorInner {
     decoding_key: DecodingKey,
     tenant_id: Option<Uuid>,
     admin_role: String,
+    required_permission: Option<String>,
     now: NowFn,
     /// Session tracking.
     active_sessions: Mutex<BTreeMap<AppPassword, AuthSession>>,
@@ -613,6 +620,12 @@ impl AuthenticatorInner {
         if let Some(expected_tenant_id) = self.tenant_id {
             if msg.claims.tenant_id != expected_tenant_id {
                 return Err(Error::UnauthorizedTenant);
+            }
+        }
+
+        if let Some(permission) = &self.required_permission {
+            if !msg.claims.permissions.contains(permission) {
+                return Err(Error::MissingPermission);
             }
         }
 
