@@ -28,6 +28,8 @@ export interface ConnectContext {
   /** Whether MCP clients can sign in through the browser instead of using a
    * Basic-auth token. */
   oauthAvailable: boolean;
+  /** Whether the environment serves `/api/mcp`. */
+  unifiedAvailable: boolean;
   /** Cluster to preselect in the psql connection string. */
   clusterName?: string;
   /** Whether the panel offers creating app passwords (cloud sessions only). */
@@ -36,7 +38,7 @@ export interface ConnectContext {
   idToken?: string;
 }
 
-export type McpServerId = "developer" | "agent";
+export type McpServerId = "developer" | "agent" | "unified";
 
 export interface McpServer {
   id: McpServerId;
@@ -63,7 +65,22 @@ export const MCP_SERVERS: McpServer[] = [
     serverName: "materialize-agent",
     path: "/api/mcp/agent",
   },
+  {
+    id: "unified",
+    label: "Materialize",
+    blurb: "Data products and SQL in one server",
+    serverName: "materialize",
+    path: "/api/mcp",
+  },
 ];
+
+/** The servers the environment serves, in display order. */
+export const availableMcpServers = (
+  ctx: Pick<ConnectContext, "unifiedAvailable">,
+) =>
+  MCP_SERVERS.filter(
+    (server) => server.id !== "unified" || ctx.unifiedAvailable,
+  );
 
 export type McpClientId =
   | "claude-code"

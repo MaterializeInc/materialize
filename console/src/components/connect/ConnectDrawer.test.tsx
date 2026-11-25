@@ -78,6 +78,47 @@ describe("ConnectDrawer", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("hides the unified MCP server on environments that predate it", async () => {
+    await renderDrawer();
+
+    expect(await screen.findByText("Choose your MCP server")).toBeVisible();
+    expect(
+      screen.queryByText("Data products and SQL in one server"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("offers the unified MCP server on environments that serve it", async () => {
+    await renderComponent(
+      <ConnectDrawer isOpen onClose={vi.fn()} user={dummyValidUser} />,
+      {
+        initializeState: ({ set }) =>
+          setFakeEnvironment(set, defaultRegionId, {
+            ...healthyEnvironment,
+            status: {
+              health: "healthy",
+              errors: [],
+              version: parseDbVersion("v26.53.0 (abcdef123)"),
+            },
+          }),
+      },
+    );
+    const user = userEvent.setup();
+
+    // Developer stays the default.
+    expect(
+      await screen.findByText(/Select the materialize-developer server/),
+    ).toBeVisible();
+
+    await user.click(screen.getByText("Data products and SQL in one server"));
+
+    expect(
+      await screen.findByText(/Select the materialize server/),
+    ).toBeVisible();
+    expect(
+      screen.getByText(new RegExp(`https://${ENVIRONMENT_HOST}/api/mcp$`)),
+    ).toBeVisible();
+  });
+
   it("reports that a disabled region cannot serve connection details", async () => {
     await renderComponent(
       <ConnectDrawer isOpen onClose={vi.fn()} user={dummyValidUser} />,

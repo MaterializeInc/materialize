@@ -47,14 +47,15 @@ import { obfuscateSecret, toBase64 } from "~/utils/format";
 import { ConnectStep, LabeledCommandBox } from "./connectComponents";
 import {
   AGENT_SKILLS_COMMAND,
+  availableMcpServers,
   buildBase64TokenCommand,
   buildMcpInstallLink,
   buildMcpSnippet,
   ConnectContext,
   MCP_CLIENTS,
-  MCP_SERVERS,
   MCP_TOKEN_PLACEHOLDER,
   McpClientId,
+  McpServer,
   McpServerId,
   PASSWORD_PLACEHOLDER,
   resolveSignInHint,
@@ -113,11 +114,16 @@ const McpServerRadioCard = forwardRef<
 });
 
 export interface McpServerSelectProps {
+  servers: McpServer[];
   value: McpServerId;
   onChange: (id: McpServerId) => void;
 }
 
-const McpServerSelect = ({ value, onChange }: McpServerSelectProps) => {
+const McpServerSelect = ({
+  servers,
+  value,
+  onChange,
+}: McpServerSelectProps) => {
   const { getRadioProps, getRootProps } = useRadioGroup({
     name: "mcp-server",
     value,
@@ -126,7 +132,7 @@ const McpServerSelect = ({ value, onChange }: McpServerSelectProps) => {
 
   return (
     <Grid {...getRootProps()} templateColumns="1fr 1fr" gap="2.5">
-      {MCP_SERVERS.map((server) => (
+      {servers.map((server) => (
         <McpServerRadioCard
           key={server.id}
           label={server.label}
@@ -277,9 +283,9 @@ export const ConnectMcpPanel = ({ ctx }: ConnectMcpPanelProps) => {
     ? toBase64(`${ctx.user}:${newPassword.password}`)
     : undefined;
 
+  const servers = availableMcpServers(ctx);
   const server =
-    MCP_SERVERS.find((candidate) => candidate.id === serverId) ??
-    MCP_SERVERS[0];
+    servers.find((candidate) => candidate.id === serverId) ?? servers[0];
   const client =
     MCP_CLIENTS.find((candidate) => candidate.id === clientId) ??
     MCP_CLIENTS[0];
@@ -374,7 +380,13 @@ export const ConnectMcpPanel = ({ ctx }: ConnectMcpPanelProps) => {
   const steps: { title: string; content: React.ReactNode }[] = [
     {
       title: "Choose your MCP server",
-      content: <McpServerSelect value={serverId} onChange={setServerId} />,
+      content: (
+        <McpServerSelect
+          servers={servers}
+          value={server.id}
+          onChange={setServerId}
+        />
+      ),
     },
     { title: "Connect your client", content: clientStep },
   ];
