@@ -83,7 +83,7 @@ class Cursors(Check):
     collections in the queried schemas, so a table in `public` would make the
     FETCH wait on unrelated checks' collections (e.g. REFRESH AT ... MVs
     force the transaction timestamp up to their future refresh time).
-    TODO: Reenable when CLU-171 is fixed: move the table back to the default
+    TODO: Reenable when SQL-639 is fixed: move the table back to the default
     schema.
     Manipulate only runs single retryable statements because in the parallel
     scenarios it executes concurrently with restarts and kills, where a

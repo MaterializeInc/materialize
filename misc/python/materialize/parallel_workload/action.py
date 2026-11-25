@@ -2101,6 +2101,9 @@ class ApplyReplacementMaterializedViewAction(ResolveReplacementMaterializedViewA
         errors = [
             # A concurrent apply or drop won the race for this replacement
             "replacement materialized view does not exist",
+            # A concurrent CreateOrReplaceReplacementMaterializedViewAction
+            # turned the replacement into a plain materialized view
+            "cannot replace materialized view",
             # The target's shard sealed, which is legitimate for targets
             # whose query constant-folded to a plan without live inputs.
             # SealedCollectionCheckAction arbitrates whether a sealed shard
