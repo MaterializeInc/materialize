@@ -6979,6 +6979,66 @@ fn test_mcp_unified_honors_x_materialize_user_header() {
     );
 }
 
+/// `/api/mcp` keeps its `query` tool when the agent and developer routes have
+/// theirs turned off. `enable_mcp_unified` alone gates the route.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+fn test_mcp_unified_ignores_route_query_flags() {
+    let server = test_util::TestHarness::default()
+        .with_mcp_unified_route()
+        .with_system_parameter_default("enable_mcp_unified".to_string(), "true".to_string())
+        .with_system_parameter_default(
+            "enable_mcp_agent_query_tool".to_string(),
+            "false".to_string(),
+        )
+        .with_system_parameter_default(
+            "enable_mcp_developer_query_tool".to_string(),
+            "false".to_string(),
+        )
+        .with_system_parameter_default(
+            "enable_mcp_agent_read_data_product_tool".to_string(),
+            "false".to_string(),
+        )
+        .start_blocking();
+    let post = |json: serde_json::Value| {
+        let res = Client::new()
+            .post(format!(
+                "http://{}/api/mcp",
+                server.internal_http_local_addr()
+            ))
+            .header("x-materialize-user", "mz_system")
+            .json(&json)
+            .send()
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        res.json::<serde_json::Value>().unwrap()
+    };
+
+    let body = post(serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}));
+    let names: Vec<&str> = body["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        ["list_data_products", "get_data_product_details", "query"]
+    );
+
+    let body = post(serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "query",
+            "arguments": {"cluster": "mz_catalog_server", "sql_query": "SELECT 42"}
+        }
+    }));
+    let text = body["result"]["content"][0]["text"].as_str().unwrap_or("");
+    assert!(text.contains("42"), "query should run on /api/mcp: {body}");
+}
+
 /// Helper to POST a JSON-RPC request to an MCP endpoint and return the parsed response.
 fn mcp_post(url: &str, json: serde_json::Value) -> (reqwest::StatusCode, serde_json::Value) {
     let res = Client::new().post(url).json(&json).send().unwrap();
@@ -8484,6 +8544,16 @@ fn test_mcp_agent_query_reads_null_cluster_product() {
         let text = body["result"]["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("42"), "{arguments} returned {text}");
     }
+
+    // `read_data_product` without an override falls back the same way.
+    let (status, body) = call(4, "read_data_product", serde_json::json!({"name": product}));
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["error"].is_null() && body["result"]["isError"] != true,
+        "read_data_product should read on the default cluster: {body}"
+    );
+    let text = body["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("42"), "read_data_product returned {text}");
 
     let (status, body) = call(
         3,

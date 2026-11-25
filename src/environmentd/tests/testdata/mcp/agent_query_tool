@@ -156,3 +156,11 @@ mcp-agent
 ----
 200 OK
 {"jsonrpc":"2.0","id":37,"result":{"content":[{"type":"text","text":"[\n  [\"quickstart\"]\n]"}],"isError":false}}
+
+# The agent route drops `cluster_replica`, so a replica that does not exist is
+# not an error here. The developer route rejects the same call.
+mcp-agent
+{"jsonrpc":"2.0","id":38,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","cluster_replica":"r99","sql_query":"SHOW cluster"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":38,"result":{"content":[{"type":"text","text":"[\n  [\"quickstart\"]\n]"}],"isError":false}}
