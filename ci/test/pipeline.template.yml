@@ -251,9 +251,9 @@ steps:
 
       - id: lint-malicious-deps
         label: Malicious dependencies (OSV)
-        command: bin/ci-builder run stable ci/test/lint-malicious-deps.py
+        command: bin/ci-builder run stable ci/test/lint-malicious-deps.sh
         inputs:
-          - ci/test/lint-malicious-deps.py
+          - ci/test/lint-malicious-deps.sh
           # git pathspecs: `*` crosses directories, `**/` would miss root files.
           - "*Cargo.lock"
           - "*package-lock.json"
