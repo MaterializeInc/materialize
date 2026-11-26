@@ -1695,19 +1695,24 @@ impl StorageCollections for StorageCollectionsImpl {
         ids_to_drop: BTreeSet<GlobalId>,
         ids_to_register: BTreeMap<GlobalId, ShardId>,
     ) -> Result<(), StorageError> {
-        // Durable metadata can outlive its collection. Reconcile it with live
-        // collection state so orphaned mappings do not block finalization.
-        let mut active_collection_ids: BTreeSet<_> = {
-            let collections = self.collections.lock().expect("poisoned");
-            collections
-                .iter()
-                .filter_map(|(id, collection)| {
-                    (!ids_to_drop.contains(id) && !collection.is_dropped()).then_some(*id)
-                })
-                .collect()
+        let active_collection_ids = if ids_to_drop.is_empty() {
+            BTreeSet::new()
+        } else {
+            // Durable metadata can outlive its collection. Reconcile it with live
+            // collection state so orphaned mappings do not block finalization.
+            let mut active_collection_ids: BTreeSet<_> = {
+                let collections = self.collections.lock().expect("poisoned");
+                collections
+                    .iter()
+                    .filter_map(|(id, collection)| {
+                        (!ids_to_drop.contains(id) && !collection.is_dropped()).then_some(*id)
+                    })
+                    .collect()
+            };
+            active_collection_ids.extend(ids_to_add.iter().copied());
+            active_collection_ids.extend(ids_to_register.keys().copied());
+            active_collection_ids
         };
-        active_collection_ids.extend(ids_to_add.iter().copied());
-        active_collection_ids.extend(ids_to_register.keys().copied());
 
         txn.insert_collection_metadata(
             ids_to_add
@@ -1732,19 +1737,21 @@ impl StorageCollections for StorageCollectionsImpl {
                 }
             }
         }
-        let remaining_metadata = txn.get_collection_metadata();
-        let (referenced_shards, dropped_shards) = partition_finalizable_shards(
-            remaining_metadata,
-            &active_collection_ids,
-            dropped_shards,
-        );
-        if !referenced_shards.is_empty() {
-            mz_ore::soft_panic_or_log!(
-                "dropped collections would finalize shards that active collections still use: \
-                 {referenced_shards:?}"
+        if !dropped_shards.is_empty() {
+            let remaining_metadata = txn.get_collection_metadata();
+            let (referenced_shards, dropped_shards) = partition_finalizable_shards(
+                remaining_metadata,
+                &active_collection_ids,
+                dropped_shards,
             );
+            if !referenced_shards.is_empty() {
+                mz_ore::soft_panic_or_log!(
+                    "dropped collections would finalize shards that active collections still use: \
+                     {referenced_shards:?}"
+                );
+            }
+            txn.insert_unfinalized_shards(dropped_shards)?;
         }
-        txn.insert_unfinalized_shards(dropped_shards)?;
 
         // Reconcile any shards we've successfully finalized with the shard
         // finalization collection.
@@ -3404,6 +3411,15 @@ mod tests {
         ]);
         let active_collection_ids = BTreeSet::from([GlobalId::User(1), GlobalId::User(2)]);
         let unfinalized_shards = BTreeSet::from([active_shard, dropped_shard]);
+
+        assert_eq!(
+            partition_finalizable_shards(
+                collection_metadata.clone(),
+                &active_collection_ids,
+                BTreeSet::new(),
+            ),
+            (BTreeSet::new(), BTreeSet::new()),
+        );
 
         let (referenced_shards, finalizable_shards) = partition_finalizable_shards(
             collection_metadata,
