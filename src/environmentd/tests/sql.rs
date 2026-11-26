@@ -77,7 +77,8 @@ impl CatalogVisibilityGate {
             move || {
                 let (released, wake) = &*gate;
                 let released = released.lock().unwrap();
-                if let Some(tx) = parked_tx.lock().unwrap().take() {
+                let tx = parked_tx.lock().unwrap().take();
+                if let Some(tx) = tx {
                     let _ = tx.send(());
                 }
                 let (mut released, timeout) = wake

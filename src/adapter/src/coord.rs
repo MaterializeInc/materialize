@@ -5565,11 +5565,12 @@ mod execute_context_tests {
 
     #[mz_ore::test(tokio::test)]
     async fn test_ddl_completion_precedes_response_waits() {
-        for result in [
-            Ok(ExecuteResponse::CreatedView),
-            Err(AdapterError::Canceled),
-        ] {
-            let succeeded = result.is_ok();
+        for succeeded in [true, false] {
+            let result = if succeeded {
+                Ok(ExecuteResponse::CreatedView)
+            } else {
+                Err(AdapterError::Canceled)
+            };
             let (client_tx, mut client_rx) = oneshot::channel();
             let (internal_cmd_tx, mut internal_cmd_rx) = mpsc::unbounded_channel();
             let (done_tx, done_rx) = oneshot::channel();
@@ -5578,7 +5579,9 @@ mod execute_context_tests {
                 internal_cmd_tx,
                 Session::dummy(),
                 ExecuteContextGuard::default(),
-                vec![Box::pin(async move { done_rx.await.unwrap() })],
+                vec![Box::pin(async move {
+                    done_rx.await.expect("completion sender stays alive")
+                })],
                 true,
             );
             ctx.retire(result);
@@ -5594,11 +5597,11 @@ mod execute_context_tests {
                 client_rx.try_recv(),
                 Err(oneshot::error::TryRecvError::Empty)
             ));
-            done_tx.send(()).unwrap();
+            done_tx.send(()).expect("barrier must retain its receiver");
             let response = tokio::time::timeout(Duration::from_secs(5), client_rx)
                 .await
-                .unwrap()
-                .unwrap();
+                .expect("response must follow completion")
+                .expect("client must be answered");
             if succeeded {
                 assert!(matches!(response.result, Ok(ExecuteResponse::CreatedView)));
             } else {
@@ -5621,7 +5624,10 @@ mod execute_context_tests {
         ctx.retire(Ok(ExecuteResponse::CreatedView));
         drop(internal_cmd_rx);
         assert!(matches!(
-            client_rx.await.unwrap().result,
+            client_rx
+                .await
+                .expect("client must be answered on shutdown")
+                .result,
             Err(AdapterError::Internal(_))
         ));
     }
