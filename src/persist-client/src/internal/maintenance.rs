@@ -24,7 +24,7 @@ use mz_persist_types::{Codec, Codec64};
 use timely::progress::Timestamp;
 
 use crate::internal::compact::CompactReq;
-use crate::internal::gc::GcReq;
+use crate::internal::gc::{GcCaller, GcReq};
 use crate::{Compactor, GarbageCollector, Machine};
 
 /// Every handle to this shard may be occasionally asked to perform
@@ -108,7 +108,7 @@ impl RoutineMaintenance {
     {
         let mut futures = vec![];
         if let Some(gc_req) = self.garbage_collection {
-            if let Some(recv) = gc.gc_and_truncate_background(gc_req) {
+            if let Some(recv) = gc.gc_and_truncate_background(gc_req, GcCaller::Maintenance) {
                 // it's safe to ignore errors on the receiver. in the
                 // case of shutdown, the sender may have been dropped
                 futures.push(recv.map(Result::unwrap_or_default).boxed());
