@@ -27,6 +27,7 @@ import {
 } from "~/store/environments";
 import { isCurrentOrganizationBlockedAtom } from "~/store/organization";
 import { MaterializeTheme } from "~/theme";
+import { isApiError } from "~/util";
 
 import ContactSalesCta from "./ContactSalesCta";
 import CreateEnvironmentWarning from "./CreateEnvironmentWarning";
@@ -124,6 +125,26 @@ const EnableRegionContent = ({ user }: { user: User }) => {
 
     switch (currentEnvironment.state) {
       case "unknown":
+        if (
+          currentEnvironment.errors.some(
+            (e) => isApiError(e.details) && e.details.status === 403,
+          )
+        ) {
+          return (
+            <VStack spacing={4} align="flex-start" maxWidth="500px">
+              <Text as="h1" textStyle="heading-lg">
+                You don&apos;t have access to this region
+              </Text>
+              <Text
+                textStyle="text-base"
+                fontSize="16px"
+                color={colors.foreground.secondary}
+              >
+                Ask an organization admin to grant you access.
+              </Text>
+            </VStack>
+          );
+        }
         return (
           <ErrorBox message="We are having trouble connecting to your Materialize region" />
         );
