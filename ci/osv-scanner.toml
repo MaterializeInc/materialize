@@ -1,0 +1,7 @@
+# Advisories that ci/lint-malicious-deps.sh ignores. Each entry needs an expiry
+# and a reason, for example a malicious-package advisory filed in error:
+#
+# [[IgnoredVulns]]
+# id = "MAL-0000-0000"
+# ignoreUntil = 2026-01-31
+# reason = "Advisory disputed upstream, see <link>."

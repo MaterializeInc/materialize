@@ -1,0 +1,5 @@
+# requirements.txt is compiled from this file. Regenerate it with the command in
+# its header.
+
+antithesis==0.4.0
+psycopg[binary]==3.3.9

@@ -1,0 +1,4 @@
+# requirements.txt is compiled from this file. Regenerate it with the command in
+# its header.
+
+azure-cli==2.92.0
