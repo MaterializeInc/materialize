@@ -914,7 +914,7 @@ impl Session {
         let state_revision = self.advance_state_revision_for_insert(state_revision);
 
         // See: https://github.com/postgres/postgres/blob/84f5c2908dad81e8622b0406beea580e40bb03ac/src/backend/utils/mmgr/portalmem.c#L234
-        for i in 0usize.. {
+        for i in self.portals.len().. {
             let name = format!("<unnamed portal {}>", i);
             match self.portals.entry(name.clone()) {
                 Entry::Occupied(_) => continue,
