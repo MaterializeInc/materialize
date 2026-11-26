@@ -163,8 +163,12 @@ impl UsageMetrics {
                 ("events_max", "memory.events", "max"),
                 ("events_oom_kill", "memory.events", "oom_kill"),
             ];
+            let mut files = BTreeMap::new();
             for &(metric, file, key) in keyed {
-                put(source::CGROUP, metric, cgroup.read_keyed_u64(file, key));
+                let values = files
+                    .entry(file)
+                    .or_insert_with(|| cgroup.read_flat_keyed(file));
+                put(source::CGROUP, metric, values.get(key).copied());
             }
         }
 

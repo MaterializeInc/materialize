@@ -19,6 +19,7 @@
 //! including into feature-reduced builds such as the wasm32 one, where `mz_ore`'s optional
 //! dependencies are absent. Reaching for `tracing` here breaks that build. Callers that want the
 //! resolved cgroup reported should log [`CgroupV2::path`] themselves.
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -230,21 +231,40 @@ impl CgroupV2 {
         contents.trim().parse().ok()
     }
 
-    /// Read a `key value` interface file, returning the value for `key`.
-    pub fn read_keyed_u64(&self, file: &str, key: &str) -> Option<u64> {
-        let contents = std::fs::read_to_string(self.dir.join(file)).ok()?;
-        contents.lines().find_map(|line| {
-            let (name, value) = line.split_once(' ')?;
-            (name == key).then(|| value.trim().parse().ok())?
-        })
+    /// Read a flat-keyed interface file (`KEY VAL` per line), returning the value of every key.
+    ///
+    /// An absent file reads as empty. Keys whose value is not an integer are left out.
+    pub fn read_flat_keyed(&self, file: &str) -> BTreeMap<String, u64> {
+        let contents = std::fs::read_to_string(self.dir.join(file)).unwrap_or_default();
+        parse_flat_keyed(&contents)
     }
+}
+
+/// Parse the contents of a flat-keyed interface file.
+fn parse_flat_keyed(contents: &str) -> BTreeMap<String, u64> {
+    contents
+        .lines()
+        .filter_map(|line| {
+            let (key, value) = line.split_once(' ')?;
+            Some((key.to_owned(), value.trim().parse().ok()?))
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::path::PathBuf;
 
-    use super::{CgroupEntry, Mountinfo};
+    use super::{CgroupEntry, Mountinfo, parse_flat_keyed};
+
+    #[crate::test]
+    fn test_parse_flat_keyed() {
+        assert_eq!(
+            parse_flat_keyed("anon 4096\nfile 0\nbogus\nlow max\n"),
+            BTreeMap::from([("anon".to_owned(), 4096), ("file".to_owned(), 0)]),
+        );
+    }
 
     #[crate::test]
     fn test_cgroup_from_line() {
