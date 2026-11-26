@@ -992,7 +992,10 @@ where
     /// first, and then inspect state to find any batches to return or process.
     async fn lease_seqno(&mut self) -> Lease {
         let current_seqno = self.machine.seqno();
-        let lease = self.hold_state.modify(|s| {
+        // The waiters on `hold_state` are the heartbeat task, on `request_sync`, and
+        // `downgrade_since`, on `applied_since`. A new lease satisfies neither, and notifying
+        // wakes the heartbeat task on every listen step.
+        let lease = self.hold_state.modify_without_notify(|s| {
             s.observe_seqno(current_seqno);
             s.lease_seqno()
         });
@@ -1045,7 +1048,7 @@ where
     #[allow(clippy::unused_async)]
     pub async fn maybe_downgrade_since(&mut self, new_since: &Antichain<T>) {
         self.since = new_since.clone();
-        self.hold_state.modify(|s| {
+        self.hold_state.modify_without_notify(|s| {
             s.downgrade_since(new_since);
         });
     }

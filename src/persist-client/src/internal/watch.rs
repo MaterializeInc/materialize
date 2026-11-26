@@ -305,6 +305,15 @@ impl<T> AwaitableState<T> {
         self.maybe_modify(|guard| write_fn(guard.get_mut()))
     }
 
+    /// Modify the state without waking waiters.
+    ///
+    /// Only for changes that cannot satisfy the condition of any waiter. A waiter whose
+    /// condition does depend on such a change sleeps through it.
+    pub fn modify_without_notify<A>(&self, write_fn: impl FnOnce(&mut T) -> A) -> A {
+        let mut guard = self.state.write().expect("not poisoned");
+        write_fn(&mut *guard)
+    }
+
     pub async fn wait_for<A>(&self, mut wait_fn: impl FnMut(&T) -> Option<A>) -> A {
         loop {
             let notified = {
@@ -601,6 +610,24 @@ mod tests {
         // For good measure, also resolve the snapshot, though we haven't broken
         // the polling on this.
         let _ = snapshot.await;
+    }
+
+    #[mz_ore::test]
+    fn modify_without_notify_does_not_wake_waiters() {
+        let state = AwaitableState::new(0);
+        let wakes = Arc::new(CountingWaker(AtomicUsize::new(0)));
+        let waker = Waker::from(Arc::clone(&wakes));
+        let mut cx = Context::from_waker(&waker);
+
+        let mut wait = std::pin::pin!(state.wait_while(|v| *v < 2));
+        assert!(wait.as_mut().poll(&mut cx).is_pending());
+
+        state.modify_without_notify(|v| *v += 1);
+        assert_eq!(wakes.0.load(Ordering::SeqCst), 0, "woken without notify");
+
+        state.modify(|v| *v += 1);
+        assert_eq!(wakes.0.load(Ordering::SeqCst), 1, "not woken by modify");
+        assert!(wait.as_mut().poll(&mut cx).is_ready());
     }
 
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
