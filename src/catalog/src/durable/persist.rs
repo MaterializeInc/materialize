@@ -1723,7 +1723,14 @@ impl PersistHandle<StateUpdateKind, CatalogStateInner> {
     /// Creates a transaction without validating pending catalog updates.
     async fn transaction_unchecked(&mut self) -> Result<Transaction<'_>, CatalogError> {
         self.metrics.transactions_started.inc();
-        self.sync_to_current_upper().await?;
+        {
+            let _timer = self
+                .metrics
+                .transaction_step_seconds
+                .with_label_values(&["transaction_sync", "durable"])
+                .start_timer();
+            self.sync_to_current_upper().await?;
+        }
         let snapshot = {
             let _timer = self
                 .metrics
