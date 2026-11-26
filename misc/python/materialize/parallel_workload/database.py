@@ -319,7 +319,7 @@ class View(DBObject):
         # seals once its last refresh has passed.
         refresh_options = [
             ("ON COMMIT", False),
-            # TODO: Restore minute-scale intervals when CPU-196 is fixed
+            # TODO: Restore minute-scale intervals when CPU-354 is fixed
             (f"EVERY '{rng.randint(1, 15)} seconds'", False),
             (f"EVERY '{rng.randint(1, 15)} seconds' ALIGNED TO (mz_now())", False),
             # Always in the future of all refreshes of previously generated MVs

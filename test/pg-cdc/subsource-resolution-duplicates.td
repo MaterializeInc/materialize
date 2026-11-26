@@ -73,7 +73,7 @@ y                  ""
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP SCHEMA other CASCADE;
 
-# TODO: SS-548
+# TODO: SQL-854
 # > SET statement_timeout = '5s'
 
 # ! SELECT * FROM t

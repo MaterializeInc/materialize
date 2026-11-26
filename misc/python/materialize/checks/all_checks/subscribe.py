@@ -16,7 +16,7 @@ from materialize.checks.checks import Check
 # `public` would tie cursor transactions to every other check's collections.
 # Any object with a lagging or future frontier there (REFRESH AT ... MVs,
 # rehydrating or replica-less clusters) then blocks the FETCH.
-# TODO: Reenable when SQL-639 is fixed: move the tables back to the default
+# TODO: Reenable when CPU-354 is fixed: move the tables back to the default
 # schema so the cursor transactions run in the same timedomain as the other
 # checks.
 #
