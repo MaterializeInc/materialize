@@ -22,8 +22,12 @@ use mz_repr::explain::{
     CompactScalars, ExprHumanizer, HumanizedAnalyses, IndexUsageType, Indices,
     PlanRenderingContext, RenderingContext, ScalarOps,
 };
-use mz_repr::{Datum, Diff, GlobalId, Row, StableRow, UNKNOWN_COLUMN_NAME};
+use mz_repr::{
+    ColumnName, Datum, Diff, GlobalId, RelationDesc, Row, SqlScalarType, StableRow,
+    UNKNOWN_COLUMN_NAME,
+};
 use mz_sql_parser::ast::Ident;
+use mz_sql_parser::ast::display::AstDisplay;
 
 use crate::explain::{ExplainMultiPlan, ExplainSinglePlan, SourceOperators};
 use crate::{
@@ -168,6 +172,12 @@ where
             }
         }
 
+        for (id, desc) in &self.export_schemas {
+            writeln!(f)?;
+            writeln!(f, "Schema of {id}:")?;
+            fmt_schema(f, desc, self.context.humanizer)?;
+        }
+
         if !self.context.used_indexes.is_empty() {
             writeln!(f)?;
             self.context.used_indexes.fmt_text(f, &mut ctx)?;
@@ -192,6 +202,54 @@ where
         }
 
         Ok(())
+    }
+}
+
+/// Renders the columns of `desc` as the column definitions of a `CREATE
+/// MATERIALIZED VIEW` statement, one per line.
+///
+/// Keys are omitted, because column definitions cannot declare them.
+fn fmt_schema(
+    f: &mut fmt::Formatter<'_>,
+    desc: &RelationDesc,
+    humanizer: &dyn ExprHumanizer,
+) -> fmt::Result {
+    let ident = |name: &ColumnName| Ident::new_unchecked(name.as_str()).to_ast_string_simple();
+    let columns: Vec<_> = desc
+        .iter()
+        .map(|(name, typ)| {
+            format!(
+                "{} {}{}",
+                ident(name),
+                fmt_column_type(&typ.scalar_type, humanizer),
+                if typ.nullable { "" } else { " NOT NULL" },
+            )
+        })
+        .collect();
+    writeln!(f, "  {}", columns.join(",\n  "))
+}
+
+/// Renders `typ` as a SQL type that plans back to `typ`.
+///
+/// Humanized names omit the `numeric` scale and the `timestamp` precision, so
+/// those are rendered from their `pgrepr` type. Modifiers inside types that
+/// cannot spell them, like arrays, ranges and anonymous records, are lost.
+fn fmt_column_type(typ: &SqlScalarType, humanizer: &dyn ExprHumanizer) -> String {
+    match typ {
+        SqlScalarType::List {
+            element_type,
+            custom_id: None,
+        } => format!("{} list", fmt_column_type(element_type, humanizer)),
+        SqlScalarType::Map {
+            value_type,
+            custom_id: None,
+        } => format!("map[text=>{}]", fmt_column_type(value_type, humanizer)),
+        SqlScalarType::Numeric { max_scale: Some(_) }
+        | SqlScalarType::Timestamp { precision: Some(_) }
+        | SqlScalarType::TimestampTz { precision: Some(_) } => {
+            mz_pgrepr::Type::from(typ).to_string()
+        }
+        _ => humanizer.humanize_sql_scalar_type(typ, false),
     }
 }
 
