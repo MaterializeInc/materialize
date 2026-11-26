@@ -107,25 +107,40 @@ pub(crate) const PUBSUB_CONNECT_MAX_BACKOFF: Config<Duration> = Config::new(
 );
 
 /// Size of channel used to buffer send messages to PubSub service.
+///
+/// When the connection task falls more than this many messages behind, the oldest ones are dropped
+/// and the task sends every subscription again. A process pushes one diff per shard it appends to,
+/// and the appends of one tick finish within milliseconds of each other, so the channel has to
+/// hold such a burst.
+///
+/// NOTE: The channel is created in `GrpcPubSubClient::connect`. `clusterd` calls that at startup,
+/// before it has synced any configuration, so there only the default takes effect.
 pub(crate) const PUBSUB_CLIENT_SENDER_CHANNEL_SIZE: Config<usize> = Config::new(
     "persist_pubsub_client_sender_channel_size",
-    25,
+    1024,
     "Size of channel used to buffer send messages to PubSub service.",
     ParameterScope::Environment,
 );
 
 /// Size of channel used to buffer received messages from PubSub service.
+///
+/// The server also sends to its own process through a channel of this size, and drops a diff when
+/// that channel is full. It has to hold the burst described at
+/// [`PUBSUB_CLIENT_SENDER_CHANNEL_SIZE`].
 pub(crate) const PUBSUB_CLIENT_RECEIVER_CHANNEL_SIZE: Config<usize> = Config::new(
     "persist_pubsub_client_receiver_channel_size",
-    25,
+    1024,
     "Size of channel used to buffer received messages from PubSub service.",
     ParameterScope::Environment,
 );
 
 /// Size of channel used per connection to buffer broadcasted messages from PubSub server.
+///
+/// The server drops a diff for a connection whose channel is full. It has to hold the burst
+/// described at [`PUBSUB_CLIENT_SENDER_CHANNEL_SIZE`].
 pub(crate) const PUBSUB_SERVER_CONNECTION_CHANNEL_SIZE: Config<usize> = Config::new(
     "persist_pubsub_server_connection_channel_size",
-    25,
+    1024,
     "Size of channel used per connection to buffer broadcasted messages from PubSub server.",
     ParameterScope::Environment,
 );
@@ -1828,6 +1843,55 @@ mod grpc {
             )
         });
         assert_none!(client_2.receiver.next().now_or_never());
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `socket` on OS `linux`
+    async fn grpc_burst_reaches_subscriber() {
+        // As many pushes as a replica that appends to this many shards issues in one tick.
+        const BURST: u64 = 256;
+
+        let metrics = Arc::new(Metrics::new(
+            &test_persist_config(),
+            &MetricsRegistry::new(),
+        ));
+        let (addr, tcp_listener_stream) = new_tcp_listener().await;
+        let server_state = spawn_server(tcp_listener_stream).await;
+        let connect = |caller_id: &str| {
+            GrpcPubSubClient::connect(
+                PersistPubSubClientConfig {
+                    url: format!("http://{}", addr),
+                    caller_id: caller_id.to_string(),
+                    persist_cfg: test_persist_config(),
+                },
+                Arc::clone(&metrics),
+            )
+        };
+        let pusher = connect("pusher");
+        let mut subscriber = connect("subscriber");
+        let _token = Arc::clone(&subscriber.sender).subscribe(&SHARD_ID_0);
+        poll_until_true(CONNECT_TIMEOUT, || {
+            server_state.active_connections().len() == 2
+                && server_state.shard_subscription_counts() == HashMap::from([(*SHARD_ID_0, 1)])
+        })
+        .await;
+
+        let diff = |seqno| VersionedData {
+            seqno: SeqNo(seqno),
+            data: VERSIONED_DATA_0.data,
+        };
+        // The test runtime has one thread and this loop does not yield, so no task forwards a push
+        // before all of them are queued.
+        for seqno in 0..BURST {
+            pusher.sender.push_diff(&SHARD_ID_0, &diff(seqno));
+        }
+        for seqno in 0..BURST {
+            let push = tokio::time::timeout(CONNECT_TIMEOUT, subscriber.receiver.next())
+                .await
+                .expect("every push arrives")
+                .expect("has diff");
+            assert_push(push, &SHARD_ID_0, &diff(seqno));
+        }
     }
 
     async fn new_tcp_listener() -> (SocketAddr, TcpListenerStream) {

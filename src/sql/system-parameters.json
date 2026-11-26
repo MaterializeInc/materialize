@@ -3345,7 +3345,7 @@
     {
       "name": "persist_pubsub_client_receiver_channel_size",
       "typeName": "unsigned integer",
-      "default": "25",
+      "default": "1024",
       "description": "Size of channel used to buffer received messages from PubSub service.",
       "scope": "environment",
       "userVisible": false,
@@ -3354,7 +3354,7 @@
     {
       "name": "persist_pubsub_client_sender_channel_size",
       "typeName": "unsigned integer",
-      "default": "25",
+      "default": "1024",
       "description": "Size of channel used to buffer send messages to PubSub service.",
       "scope": "environment",
       "userVisible": false,
@@ -3417,7 +3417,7 @@
     {
       "name": "persist_pubsub_server_connection_channel_size",
       "typeName": "unsigned integer",
-      "default": "25",
+      "default": "1024",
       "description": "Size of channel used per connection to buffer broadcasted messages from PubSub server.",
       "scope": "environment",
       "userVisible": false,
