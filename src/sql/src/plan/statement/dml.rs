@@ -2087,6 +2087,14 @@ fn plan_copy_from(
         bail_unsupported!("COPY FROM ... WITH (FILES ...) only supported from a URL")
     }
 
+    // The STDIN decoder reads a CR or LF at the start of a record as a blank
+    // line, so neither can open a quoted field there.
+    if let (CopyFromSource::Stdin, CopyFormatParams::Csv(csv)) = (&source, &params)
+        && matches!(csv.quote, b'\r' | b'\n')
+    {
+        sql_bail!("COPY CSV quote cannot be a line feed or carriage return");
+    }
+
     let table_name_string = table_name.full_name_str();
 
     let (id, source_desc, columns, maybe_mfp) = query::plan_copy_from(scx, table_name, columns)?;

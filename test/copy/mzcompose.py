@@ -701,13 +701,12 @@ def workflow_copy_from_csv_crlf(c: Composition) -> None:
     """Regression test: CSV COPY FROM STDIN must handle CRLF and CR line
     endings, not just LF.
 
-    csv-core places the record boundary between \\r and \\n, so for CRLF input
-    every non-first record's bytes begin with an orphaned \\n. Both the
-    decoder's per-field quote probe and the pgwire scanner's end-of-copy marker
-    check inspect raw bytes and were fooled by this: a quoted NULL marker
-    corrupted to SQL NULL, and a quoted "\\." (plus every row after it) was
-    silently dropped. RFC 4180 mandates CRLF and Windows/Excel exports use it,
-    so the most standard CSV form was untested and broken.
+    csv-core ends a record at the \\r, and the decoder and the pgwire scanner
+    both take the \\n after it as part of the same line ending. A \\n left to
+    start the next record would hide that record's leading quote, so that a
+    quoted NULL marker loads as SQL NULL and a quoted "\\." ends the COPY, and
+    would keep a bare \\. from matching the end-of-copy marker. RFC 4180
+    mandates CRLF and Windows/Excel exports use it.
     """
     c.up("materialized")
 
@@ -715,7 +714,7 @@ def workflow_copy_from_csv_crlf(c: Composition) -> None:
     with conn.cursor() as cur:
         for label, eol in [("crlf", "\r\n"), ("cr", "\r")]:
             # Quoted vs unquoted NULL marker, including a quoted empty leading
-            # field on an orphan-led (non-first) record. The dynamic SQL is
+            # field after a line ending. The dynamic SQL is
             # encoded to bytes so it satisfies psycopg's LiteralString-typed
             # query parameter.
             cur.execute(f"CREATE TABLE csv_{label}_null (a TEXT, b TEXT)".encode())
@@ -753,13 +752,12 @@ def workflow_copy_from_csv_crlf_large_end_marker(c: Composition) -> None:
     every row after it, even when the COPY exceeds the 32MB batch size and is
     split across parallel workers.
 
-    The pgwire scanner locates the marker and truncates the stream there. For
-    CRLF the record boundary sits between \\r and \\n, so the raw marker span
-    is "\\n\\.\\r"; a trailing-only strip missed it, leaving the stream
-    untruncated. Below 32MB the single-chunk decoder still catches the marker,
-    but past 32MB the buffer is split at row boundaries and round-robined to
-    workers, so post-marker rows in chunks other than the marker's are imported
-    anyway. Pre- and post-marker data here both exceed 32MB to force splits on
+    The pgwire scanner locates the marker and truncates the stream there. A
+    scanner that misses the CRLF form leaves the stream untruncated. Below 32MB
+    the single-chunk decoder still catches the marker, but past 32MB the buffer
+    is split at row boundaries and round-robined to workers, so post-marker
+    rows in chunks other than the marker's are imported anyway. Pre- and
+    post-marker data here both exceed 32MB to force splits on
     each side of the marker; post-marker ids are >= rows_each_side so any leak
     is detectable via max(id).
     """
