@@ -2731,10 +2731,13 @@ async fn test_single_statement_commit_after_role_drop() {
     for portal in ["begin", "ddl"] {
         assert!(session.session().get_portal_unverified(portal).is_none());
     }
-    tokio::time::timeout(Duration::from_secs(30), admin.batch_execute("SELECT 1"))
-        .await
-        .expect("coordinator did not survive the failed single-statement COMMIT")
-        .unwrap();
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        batch_execute(&admin, sql!("SELECT 1")),
+    )
+    .await
+    .expect("coordinator did not survive the failed single-statement COMMIT")
+    .unwrap();
 }
 
 #[mz_ore::test]
