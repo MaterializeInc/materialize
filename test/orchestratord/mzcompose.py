@@ -1081,9 +1081,13 @@ class EnvironmentdImageRef(Modification):
                 assert (
                     image == expected or f"ghcr.io/materializeinc/{image}" == expected
                 ), f"Expected environmentd image {expected}, but found {image}"
-                # The operator image pinned in the chart predates read-only roots.
+                # The operator image pinned in the chart predates read-only roots
+                # and the DNS configuration.
                 if ORCHESTRATORD_OVERRIDE:
                     validate_read_only_root(item)
+                    validate_dns_config(
+                        item, MzVersion.parse_mz(self.value) >= DNS_CONFIG_VERSION
+                    )
 
             balancerd = get_balancerd_data()
             for item in balancerd["items"]:
@@ -1613,6 +1617,7 @@ EXPECTED_CLUSTERD_SYSCTLS = {
 
 
 READ_ONLY_ROOT_VERSION = MzVersion.parse_mz("v26.53.0-dev.0")
+DNS_CONFIG_VERSION = MzVersion.parse_mz("v26.53.0-dev.0")
 
 
 def validate_read_only_root(pod: dict[str, Any]) -> None:
@@ -1624,10 +1629,19 @@ def validate_read_only_root(pod: dict[str, Any]) -> None:
     assert "emptyDir" in volumes[tmp["name"]]
 
 
+def validate_dns_config(pod: dict[str, Any], expected: bool) -> None:
+    options = pod["spec"].get("dnsConfig", {}).get("options")
+    expected_options = [{"name": "ndots", "value": "2"}] if expected else None
+    assert (
+        options == expected_options
+    ), f"Expected DNS options {expected_options}, but got {options}"
+
+
 def validate_clusterd_pod(pod: dict[str, Any], version: MzVersion) -> None:
     """Validate always-on properties of a clusterd pod."""
     if version >= READ_ONLY_ROOT_VERSION:
         validate_read_only_root(pod)
+    validate_dns_config(pod, version >= DNS_CONFIG_VERSION)
     if version >= MzVersion.parse_mz("v26.24.0-dev.0"):
         sysctls = {
             s["name"]: s["value"]

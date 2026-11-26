@@ -29,6 +29,7 @@ use k8s_openapi::{
 };
 use kube::{Api, Client, ResourceExt, api::ObjectMeta, runtime::controller::Action};
 use maplit::btreemap;
+use mz_orchestrator_kubernetes::util::pod_dns_config;
 use mz_server_core::listeners::{
     AllowedRoles, AuthenticatorKind, BaseListenerConfig, RouteGroup, SqlListenerConfig,
     VersionedListenersConfig, v0_147_0, v26_32_0,
@@ -92,6 +93,16 @@ static V26_42_0: LazyLock<Version> = LazyLock::new(|| Version {
 static V26_50_0: LazyLock<Version> = LazyLock::new(|| Version {
     major: 26,
     minor: 50,
+    patch: 0,
+    pre: Prerelease::new("dev.0").expect("dev.0 is valid prerelease"),
+    build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
+});
+
+/// Version from which the `environmentd` pod gets [`pod_dns_config`]. Pods of older versions keep
+/// their spec, and with it the resource hash of their generation.
+static V26_53_0: LazyLock<Version> = LazyLock::new(|| Version {
+    major: 26,
+    minor: 53,
     patch: 0,
     pre: Prerelease::new("dev.0").expect("dev.0 is valid prerelease"),
     build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
@@ -1377,6 +1388,7 @@ fn create_environmentd_statefulset_object(
             // (and therefore the generation's resource hash) is unchanged from
             // before user namespace support.
             host_users: config.enable_user_namespaces.then_some(false),
+            dns_config: mz.meets_minimum_version(&V26_53_0).then(pod_dns_config),
             tolerations,
             // This (apparently) has the side effect of automatically starting a new pod
             // when the previous pod is currently terminating. This side steps the statefulset fencing

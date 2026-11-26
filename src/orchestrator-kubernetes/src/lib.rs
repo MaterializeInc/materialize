@@ -1281,6 +1281,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 //
                 // [0]: https://kubernetes.io/docs/tasks/run-application/force-delete-stateful-set-pod/#statefulset-considerations
                 termination_grace_period_seconds: Some(0),
+                dns_config: Some(util::pod_dns_config()),
                 ..Default::default()
             }),
         };

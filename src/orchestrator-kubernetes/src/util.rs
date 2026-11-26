@@ -10,6 +10,7 @@
 use std::time::Duration;
 
 use anyhow::bail;
+use k8s_openapi::api::core::v1::{PodDNSConfig, PodDNSConfigOption};
 use kube::config::KubeConfigOptions;
 use kube::{Client, Config};
 
@@ -55,4 +56,24 @@ pub async fn create_client(context: String) -> Result<(Client, String), anyhow::
     let namespace = kubeconfig.default_namespace.clone();
     let client = Client::try_from(kubeconfig)?;
     Ok((client, namespace))
+}
+
+/// Returns the DNS configuration for `environmentd` and `clusterd` pods.
+pub fn pod_dns_config() -> PodDNSConfig {
+    PodDNSConfig {
+        // Kubernetes sets `ndots:5`, with which the resolver tries a name with fewer than five
+        // dots under every search domain before it tries the name itself. The blob store and the
+        // metadata store are configured by fully qualified names with fewer dots than that, such
+        // as `service.namespace.svc.cluster.local`, so each lookup starts with one failed query
+        // pair per search domain. With `ndots:2` such names are queried as given.
+        //
+        // NOTE: A name with two to four dots that only resolves under a search domain, such as
+        // `pod.service.namespace`, is now queried as given first and under the search domains
+        // after that. `service` and `service.namespace` are unaffected.
+        options: Some(vec![PodDNSConfigOption {
+            name: Some("ndots".into()),
+            value: Some("2".into()),
+        }]),
+        ..Default::default()
+    }
 }
