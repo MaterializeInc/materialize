@@ -281,8 +281,19 @@ fn diff_connection_options(
 ) -> (Vec<ConnectionOption<Raw>>, Vec<ConnectionOptionName>) {
     let project_map: BTreeMap<ConnectionOptionName, &ConnectionOption<Raw>> =
         project_opts.iter().map(|o| (o.name, o)).collect();
-    let live_map: BTreeMap<ConnectionOptionName, &ConnectionOption<Raw>> =
-        live_opts.iter().map(|o| (o.name, o)).collect();
+    // SHOW CREATE CONNECTION lists the public keys Materialize generated for an
+    // SSH tunnel, which a project cannot declare. Dropping them makes
+    // Materialize show new public keys that match none of its private keys.
+    let live_map: BTreeMap<ConnectionOptionName, &ConnectionOption<Raw>> = live_opts
+        .iter()
+        .filter(|o| {
+            !matches!(
+                o.name,
+                ConnectionOptionName::PublicKey1 | ConnectionOptionName::PublicKey2
+            )
+        })
+        .map(|o| (o.name, o))
+        .collect();
 
     let mut to_set = Vec::new();
     let mut to_drop = Vec::new();

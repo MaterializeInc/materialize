@@ -2084,6 +2084,10 @@ def workflow_connection_updates(c: Composition, parser: WorkflowArgumentParser) 
     assert result.returncode == 0, f"initial baseline apply failed: {result.stderr}"
     assert "PORT = 5432" in show_create()
 
+    with c.test_case("connection-ssh-tunnel-up-to-date"):
+        # The public keys Materialize generates for ssh_conn are not drift.
+        assert_idempotent_after_update("connection-updates/baseline")
+
     with c.test_case("connection-add-option"):
         # Baseline lacks SSL MODE; add-option adds it. Exercises the SET
         # branch of the SET/DROP diff for an option absent from the catalog.
