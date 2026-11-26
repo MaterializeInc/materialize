@@ -32,7 +32,7 @@ MIN_VERSION = f"{MIN_HEXVERSION >> 24}.{(MIN_HEXVERSION >> 16) & 0xFF}"
 # `doc/developer/guide.md`. Pinned dependencies lag new releases, so a newer
 # interpreter (e.g. after a Homebrew upgrade) fails deep in dependency resolution
 # instead of here. Raise it once the lock resolves and CI passes on the new version.
-MAX_HEXVERSION = 0x030F0000
+MAX_HEXVERSION = 0x03100000
 MAX_VERSION = f"{MAX_HEXVERSION >> 24}.{(MAX_HEXVERSION >> 16) & 0xFF}"
 
 
