@@ -13,7 +13,6 @@
 //! on port 6876.
 
 use std::ffi::CStr;
-use std::fs::File;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -782,8 +781,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     let frontegg_oauth_issuer_url = args.frontegg.oauth_issuer_url().map(str::to_string);
     let frontegg = FronteggAuthenticator::from_args(args.frontegg, &metrics_registry)?;
     let listeners_config: ListenersConfig = {
-        let f = File::open(args.listeners_config_path)?;
-        serde_json::from_reader(f)?
+        let bytes = std::fs::read(args.listeners_config_path)?;
+        serde_json::from_slice(&bytes)?
     };
 
     for (_, listener) in &listeners_config.sql {
