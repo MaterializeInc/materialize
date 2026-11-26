@@ -161,15 +161,28 @@ def ws_connect(ws: websocket.WebSocket, host, port, user: str) -> tuple[int, int
 
 
 def untrack_objects_in_schemas(exe: Executor, schemas: set[Schema]) -> None:
-    """Remove every tracked object living in one of the given schemas.
+    """Untrack everything a CASCADE drop of the given schemas removed.
 
-    Called after a CASCADE drop of a schema or database. Source executor
-    connections are closed. Cross-schema dependents are cascade-dropped
-    server-side but not pruned here, they later surface as "does not exist",
-    which is why the CASCADE actions only run in DDL complexity."""
+    That is every object living in one of them, plus the views and sinks in
+    other schemas that (transitively) read from one. Source executor
+    connections are closed."""
     with exe.db.lock:
+        dropped: set[DBObject] = {
+            obj for obj in exe.db.db_objects() if obj.schema in schemas
+        }
+        # Views read views, so the dependents are a fixpoint. A view left
+        # tracked here stays pickable for the rest of the run, and an action
+        # landing on it every time (CREATE REPLACEMENT for the only eligible
+        # materialized view) trips the broken-action check in print_stats.
+        while dependents := {
+            v
+            for v in exe.db.views
+            if v not in dropped
+            and (v.base_object in dropped or v.base_object2 in dropped)
+        }:
+            dropped |= dependents
         exe.db.tables[:] = [t for t in exe.db.tables if t.schema not in schemas]
-        exe.db.views[:] = [v for v in exe.db.views if v.schema not in schemas]
+        exe.db.views[:] = [v for v in exe.db.views if v not in dropped]
         # NOTE: Removed in place, like the lists above. DropIndexAction
         # discards from this set holding only the index's own lock, so
         # rebinding the attribute would resurrect an index that was dropped
@@ -213,10 +226,14 @@ def untrack_objects_in_schemas(exe: Executor, schemas: set[Schema]) -> None:
             s for s in exe.db.webhook_sources if s.schema not in schemas
         ]
         exe.db.kafka_sinks[:] = [
-            s for s in exe.db.kafka_sinks if s.schema not in schemas
+            s
+            for s in exe.db.kafka_sinks
+            if s.schema not in schemas and s.base_object not in dropped
         ]
         exe.db.iceberg_sinks[:] = [
-            s for s in exe.db.iceberg_sinks if s.schema not in schemas
+            s
+            for s in exe.db.iceberg_sinks
+            if s.schema not in schemas and s.base_object not in dropped
         ]
         exe.db.types[:] = [t for t in exe.db.types if t.schema not in schemas]
 
@@ -6058,9 +6075,9 @@ class AlterClusterSetAction(Action):
 class DropSchemaCascadeAction(Action):
     """DROP SCHEMA .. CASCADE, an atomic multi-object catalog mutation.
 
-    Only enabled in DDL complexity: cross-schema dependents are cascade-dropped
-    server-side but stay tracked until they surface as "does not exist", which
-    DDL complexity ignores."""
+    Only enabled in DDL complexity: actions that picked an object before the
+    drop fail with "unknown catalog item" or "unknown schema", which only DDL
+    complexity ignores."""
 
     def applicable(self, exe: Executor) -> bool:
         return exe.db.complexity in (Complexity.DDL, Complexity.DDLOnly)
@@ -6662,7 +6679,8 @@ ddl_action_list = ActionList(
         (CreateReplacementMaterializedViewAction, 10),
         (ApplyReplacementMaterializedViewAction, 5),
         (DropReplacementMaterializedViewAction, 5),
-        (CreateOrReplaceReplacementMaterializedViewAction, 5),
+        # TODO: Reenable when SQL-952 is fixed
+        # (CreateOrReplaceReplacementMaterializedViewAction, 5),
         (SealedCollectionCheckAction, 2),
         (TransactionIsolationAction, 1),
         (BoundedStalenessReadAction, 2),

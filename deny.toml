@@ -26,6 +26,12 @@ skip = [
     # (through 3.3.2), and mysql_async (through 0.37.1) still require ^0.18.2.
     # Remove this exception once those crates release with lru 0.19.
     { name = "lru", version = "=0.18.5" },
+    # kube-runtime 5.1+ uses parking_lot 0.13. tokio, tokio-postgres,
+    # prometheus, moka, and others still require 0.12. Remove these
+    # exceptions once they move to 0.13.
+    { name = "parking_lot", version = "=0.12.5" },
+    { name = "parking_lot_core", version = "=0.9.12" },
+    { name = "lock_api", version = "=0.4.14" },
 
     # arrayvec had a significant API change in 0.7
     { name = "arrayvec", version = "0.5.2" },
