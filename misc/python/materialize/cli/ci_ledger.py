@@ -141,6 +141,11 @@ def update_changes(args: argparse.Namespace) -> dict[str, Any]:
     if changes.get("failure_type") == "":
         # The API takes null, not "", to clear the type.
         changes["failure_type"] = None
+    if args.ack:
+        # Sending a status restarts new_since_status. The dashboard derives
+        # the status itself, so `reviewed` leaves a fixed or claimed entry as
+        # it is.
+        changes["status"] = "reviewed"
     return changes
 
 
@@ -161,8 +166,9 @@ def main(argv: list[str] | None = None) -> int:
     list_parser.add_argument(
         "--status",
         choices=("unreviewed", "claimed", "reviewed", "fixed"),
-        help="exact status: an entry that failed again after its status was set "
-        "keeps it and counts those failures in new_since_status",
+        help="exact status: an entry that fails again keeps its status. "
+        "new_since_status counts its failures since someone last set or "
+        "acknowledged the status, and is 0 for unreviewed entries",
     )
     list_parser.add_argument("--search", help="text in titles, errors, tests, causes")
     list_parser.add_argument("--job", help="only what this Buildkite job failed with")
@@ -208,6 +214,12 @@ def main(argv: list[str] | None = None) -> int:
         "--fix",
         help="the PR that fixes it, e.g. its GitHub URL",
     )
+    update_parser.add_argument(
+        "--ack",
+        action="store_true",
+        help="the review holds for the failures since the status was set: "
+        "restarts new_since_status at 0",
+    )
     link = update_parser.add_mutually_exclusive_group()
     link.add_argument(
         "--unlink",
@@ -252,7 +264,9 @@ def main(argv: list[str] | None = None) -> int:
         else:
             changes = update_changes(args)
             if not changes:
-                parser.error("nothing to update: give --type, --cause, --bug or --fix")
+                parser.error(
+                    "nothing to update: give --type, --cause, --bug, --fix or --ack"
+                )
             ids = list(
                 dict.fromkeys(i for ref in args.refs for i in ledger.resolve(ref))
             )
