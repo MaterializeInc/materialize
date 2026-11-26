@@ -208,6 +208,7 @@ impl Coordinator {
         match timestamped {
             Some(target_timestamp) => {
                 let request = TimestampedWriteRequest {
+                    enqueued_at: std::time::Instant::now(),
                     appends: vec![(target_global_id, vec![table_data])],
                     target_timestamp,
                     result,

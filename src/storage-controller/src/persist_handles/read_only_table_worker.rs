@@ -47,7 +47,7 @@ use crate::persist_handles::{PersistTableWriteCmd, append_work};
 /// deleted when we switch to using native persist schema migrations to perform
 /// mgirations of built-in tables.
 pub(crate) async fn read_only_mode_table_worker(
-    mut rx: tokio::sync::mpsc::UnboundedReceiver<(Span, PersistTableWriteCmd)>,
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<(std::time::Instant, Span, PersistTableWriteCmd)>,
     txns_handle: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
     persist_client: mz_persist_client::PersistClient,
 ) {
@@ -115,7 +115,7 @@ pub(crate) async fn read_only_mode_table_worker(
 /// Handles the given commands.
 async fn handle_commands(
     write_handles: &mut BTreeMap<GlobalId, WriteHandle<SourceData, (), Timestamp, StorageDiff>>,
-    mut commands: VecDeque<(Span, PersistTableWriteCmd)>,
+    mut commands: VecDeque<(std::time::Instant, Span, PersistTableWriteCmd)>,
     persist_client: &mz_persist_client::PersistClient,
 ) -> ControlFlow<String> {
     let mut shutdown = false;
@@ -124,7 +124,7 @@ async fn handle_commands(
     let mut all_updates = BTreeMap::default();
     let mut all_responses = Vec::default();
 
-    while let Some((span, command)) = commands.pop_front() {
+    while let Some((_enqueued_at, span, command)) = commands.pop_front() {
         match command {
             PersistTableWriteCmd::Register(_register_ts, tables, tx) => {
                 let ids_handles =

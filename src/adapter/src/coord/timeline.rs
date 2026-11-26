@@ -279,11 +279,17 @@ impl Coordinator {
     /// Downgrading past the oracle's read frontier could let compaction pass timestamps the
     /// oracle can still serve reads at.
     pub(crate) fn downgrade_local_read_holds(&mut self, read_ts: Timestamp) {
+        let start = std::time::Instant::now();
         let TimelineState { read_holds, .. } = self
             .global_timelines
             .get_mut(&Timeline::EpochMilliseconds)
             .expect("no realtime timeline");
         read_holds.downgrade(read_ts);
+        let seconds = start.elapsed().as_secs_f64();
+        self.metrics.read_hold_downgrade_seconds.observe(seconds);
+        if seconds >= 0.1 {
+            tracing::info!(seconds, "slow coordinator read-hold downgrade");
+        }
     }
 
     /// Advances all timelines other than [`EpochMilliseconds`](Timeline::EpochMilliseconds) to

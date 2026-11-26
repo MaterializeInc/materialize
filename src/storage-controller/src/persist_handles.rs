@@ -14,10 +14,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::fmt::Write;
 use std::sync::Arc;
+use std::time::Instant;
 
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use itertools::Itertools;
+use mz_ore::metric;
+use mz_ore::metrics::{MetricsRegistry, raw::HistogramVec};
+use mz_ore::stats::histogram_seconds_buckets;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
@@ -184,7 +188,8 @@ impl PersistTableWriteWorker {
         persist_client: PersistClient,
     ) -> Self {
         let (tx, rx) =
-            tokio::sync::mpsc::unbounded_channel::<(tracing::Span, PersistTableWriteCmd)>();
+            tokio::sync::mpsc::unbounded_channel::<(Instant, tracing::Span, PersistTableWriteCmd)>(
+            );
         mz_ore::task::spawn(
             || "PersistTableWriteWorker",
             read_only_table_worker::read_only_mode_table_worker(rx, txns_handle, persist_client),
@@ -197,15 +202,24 @@ impl PersistTableWriteWorker {
     pub(crate) fn new_txns(
         txns: TxnsHandle<SourceData, (), Timestamp, StorageDiff, TxnsCodecRow>,
         persist_client: PersistClient,
+        metrics_registry: &MetricsRegistry,
     ) -> Self {
         let (tx, rx) =
-            tokio::sync::mpsc::unbounded_channel::<(tracing::Span, PersistTableWriteCmd)>();
+            tokio::sync::mpsc::unbounded_channel::<(Instant, tracing::Span, PersistTableWriteCmd)>(
+            );
+        let phase_seconds = metrics_registry.register(metric!(
+            name: "mz_table_persist_worker_phase_seconds",
+            help: "Read-write table worker elapsed time by operation and phase. Queue is per command. Execution includes its nested persist phases and may include retries internal to persist. Append includes background builtin writes, not one observation per SQL statement.",
+            var_labels: ["operation", "phase"],
+            buckets: histogram_seconds_buckets(0.000_128, 32.0),
+        ));
         mz_ore::task::spawn(|| "PersistTableWriteWorker", async move {
             let mut worker = TxnsTableWorker {
                 txns,
                 persist_client,
                 write_handles: BTreeMap::new(),
                 tidy: Tidy::default(),
+                phase_seconds,
             };
             worker.run(rx).await
         });
@@ -292,14 +306,33 @@ struct TxnsTableWorker {
     persist_client: PersistClient,
     write_handles: BTreeMap<GlobalId, ShardId>,
     tidy: Tidy,
+    phase_seconds: HistogramVec,
 }
 
 impl TxnsTableWorker {
+    fn observe_phase(&self, operation: &'static str, phase: &'static str, start: Instant) {
+        let seconds = start.elapsed().as_secs_f64();
+        self.phase_seconds
+            .with_label_values(&[operation, phase])
+            .observe(seconds);
+        if seconds >= 0.1 {
+            tracing::info!(operation, phase, seconds, "slow table persist-worker phase");
+        }
+    }
+
     async fn run(
         &mut self,
-        mut rx: tokio::sync::mpsc::UnboundedReceiver<(Span, PersistTableWriteCmd)>,
+        mut rx: tokio::sync::mpsc::UnboundedReceiver<(Instant, Span, PersistTableWriteCmd)>,
     ) {
-        while let Some((span, command)) = rx.recv().await {
+        while let Some((enqueued_at, span, command)) = rx.recv().await {
+            let operation = match &command {
+                PersistTableWriteCmd::Register(..) => "register",
+                PersistTableWriteCmd::DropHandles { .. } => "forget",
+                PersistTableWriteCmd::Append { .. } => "append",
+                PersistTableWriteCmd::Shutdown => "shutdown",
+            };
+            self.observe_phase(operation, "queue", enqueued_at);
+            let execution_start = Instant::now();
             match command {
                 PersistTableWriteCmd::Register(register_ts, tables, tx) => {
                     let res = self.register(register_ts, tables).instrument(span).await;
@@ -326,6 +359,7 @@ impl TxnsTableWorker {
                     return;
                 }
             }
+            self.observe_phase(operation, "execution", execution_start);
         }
 
         tracing::info!("PersistTableWriteWorker shutting down via input exhaustion");
@@ -336,7 +370,9 @@ impl TxnsTableWorker {
         register_ts: Timestamp,
         tables: Vec<TableRegistration>,
     ) -> Result<(), StorageError> {
+        let open_start = Instant::now();
         let mut ids_handles = open_table_write_handles(&self.persist_client, tables).await;
+        self.observe_phase("register", "open_handles", open_start);
         // As tables evolve (e.g. columns are added) we treat the older versions as
         // "views" on the later versions. While it's not required, it's easier to reason
         // about table registration if we do it in GlobalId order.
@@ -357,7 +393,9 @@ impl TxnsTableWorker {
         // Registering also advances the logical upper of all shards in the txns set.
         let new_ids = ids_handles.iter().map(|(id, _)| *id).collect_vec();
         let handles = ids_handles.into_iter().map(|(_, handle)| handle);
+        let register_start = Instant::now();
         let res = self.txns.register(register_ts, handles).await;
+        self.observe_phase("register", "txn_wal_register", register_start);
         match res {
             Ok(tidy) => {
                 self.tidy.merge(tidy);
@@ -405,7 +443,10 @@ impl TxnsTableWorker {
             .map(|(_, shard)| *shard)
             .collect::<BTreeSet<_>>();
         if !data_ids.is_empty() {
-            match self.txns.forget(forget_ts, data_ids.clone()).await {
+            let forget_start = Instant::now();
+            let res = self.txns.forget(forget_ts, data_ids.clone()).await;
+            self.observe_phase("forget", "txn_wal_forget", forget_start);
+            match res {
                 Ok(tidy) => {
                     self.tidy.merge(tidy);
                     Ok(())
@@ -501,19 +542,25 @@ impl TxnsTableWorker {
         }
         // Sneak in any txns shard tidying from previous commits.
         txn.tidy(std::mem::take(&mut self.tidy));
+        let commit_start = Instant::now();
         let txn_res = txn.commit_at(&mut self.txns, write_ts).await;
+        self.observe_phase("append", "txn_wal_commit", commit_start);
         let response = match txn_res {
             Ok(apply) => {
                 // TODO: Do the applying in a background task. This will be a
                 // significant INSERT latency performance win.
                 debug!("applying {:?}", apply);
+                let apply_start = Instant::now();
                 let tidy = apply.apply(&mut self.txns).await;
+                self.observe_phase("append", "txn_wal_apply", apply_start);
                 self.tidy.merge(tidy);
 
                 // We don't serve any reads out of this TxnsHandle, so go ahead
                 // and compact as aggressively as we can (i.e. to the time we
                 // just wrote).
+                let compact_start = Instant::now();
                 let () = self.txns.compact_to(write_ts).await;
+                self.observe_phase("append", "txn_wal_compact", compact_start);
 
                 Ok(())
             }
@@ -551,7 +598,7 @@ impl TxnsTableWorker {
 #[derive(Debug)]
 struct PersistTableWriteWorkerInner {
     /// Sending side of a channel that we can use to send commands.
-    tx: UnboundedSender<(tracing::Span, PersistTableWriteCmd)>,
+    tx: UnboundedSender<(Instant, tracing::Span, PersistTableWriteCmd)>,
 }
 
 impl Drop for PersistTableWriteWorkerInner {
@@ -562,7 +609,7 @@ impl Drop for PersistTableWriteWorkerInner {
 }
 
 impl PersistTableWriteWorkerInner {
-    fn new(tx: UnboundedSender<(tracing::Span, PersistTableWriteCmd)>) -> Self {
+    fn new(tx: UnboundedSender<(Instant, tracing::Span, PersistTableWriteCmd)>) -> Self {
         PersistTableWriteWorkerInner { tx }
     }
 
@@ -574,7 +621,7 @@ impl PersistTableWriteWorkerInner {
     }
 
     fn send_with_span(&self, span: Span, cmd: PersistTableWriteCmd) {
-        match self.tx.send((span, cmd)) {
+        match self.tx.send((Instant::now(), span, cmd)) {
             Ok(()) => (), // All good!
             Err(e) => {
                 tracing::trace!("could not forward command: {:?}", e);

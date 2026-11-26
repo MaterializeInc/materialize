@@ -949,6 +949,7 @@ impl Coordinator {
         // storage and compute resources.
         //
         // Note: We only apply these changes below.
+        let timeline_start = Instant::now();
         let mut timeline_id_bundles = BTreeMap::new();
 
         for (timeline, TimelineState { read_holds, .. }) in &self.global_timelines {
@@ -984,6 +985,14 @@ impl Coordinator {
 
             let empty = read_holds.id_bundle().difference(&id_bundle).is_empty();
             timeline_associations.insert(timeline, (empty, id_bundle));
+        }
+        let timeline_seconds = timeline_start.elapsed().as_secs_f64();
+        self.metrics
+            .catalog_transact_phase_seconds
+            .with_label_values(&["timeline_bookkeeping"])
+            .observe(timeline_seconds);
+        if timeline_seconds >= 0.1 {
+            tracing::info!(timeline_seconds, "slow catalog timeline bookkeeping");
         }
 
         // No error returns are allowed after this point. Enforce this at compile time
@@ -1170,12 +1179,21 @@ impl Coordinator {
             .unwrap_or_terminate("unable to advance catalog upper");
 
         {
+            let start = Instant::now();
             let storage_metadata = self.catalog.state().storage_metadata();
             self.controller
                 .storage
                 .create_collections(storage_metadata, Some(register_ts), collections)
                 .await
                 .unwrap_or_terminate("cannot fail to create collections");
+            let seconds = start.elapsed().as_secs_f64();
+            self.metrics
+                .catalog_transact_phase_seconds
+                .with_label_values(&["controller_create_table_collections"])
+                .observe(seconds);
+            if seconds >= 0.1 {
+                tracing::info!(seconds, "slow controller table-collection creation");
+            }
         }
 
         // Registration can choose a later timestamp than the collections' initial since. Reads

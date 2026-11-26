@@ -2895,7 +2895,11 @@ where
             )
             .await;
             txns.upgrade_version().await;
-            persist_handles::PersistTableWriteWorker::new_txns(txns, txns_client.clone())
+            persist_handles::PersistTableWriteWorker::new_txns(
+                txns,
+                txns_client.clone(),
+                metrics_registry,
+            )
         };
         let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id).await;
 

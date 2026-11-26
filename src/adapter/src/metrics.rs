@@ -82,6 +82,9 @@ pub struct Metrics {
     pub catalog_transact_phase_seconds: HistogramVec,
     pub apply_catalog_implications_seconds: Histogram,
     pub group_commit_catalog_upper_seconds: Histogram,
+    pub table_write_phase_seconds: HistogramVec,
+    pub table_write_queue_seconds: HistogramVec,
+    pub read_hold_downgrade_seconds: Histogram,
     pub occ_retry_count: HistogramVec,
     pub by_cluster: ClusterLabeledMetrics,
 }
@@ -333,6 +336,23 @@ impl Metrics {
                 name: "mz_group_commit_catalog_upper_seconds",
                 help: "The time it takes to advance the catalog shard upper for a txns-shard write (group commits and table register/forget).",
                 buckets: histogram_seconds_buckets(0.001, 32.0),
+            )),
+            table_write_queue_seconds: registry.register(metric!(
+                name: "mz_table_write_queue_seconds",
+                help: "Time from enqueue to dispatch for each runtime table-write command. Group commits are observed when admitted to a batch, before throttling and execution. Deferred register/forget and timestamped writes include preceding batch execution.",
+                var_labels: ["operation"],
+                buckets: histogram_seconds_buckets(0.000_128, 32.0),
+            )),
+            table_write_phase_seconds: registry.register(metric!(
+                name: "mz_table_write_phase_seconds",
+                help: "Runtime table-write elapsed time by operation and phase. Batch admission includes oracle peeks and throttle waits. Phases are observed when executed, including retries. Worker time includes its queue and persist work. Timestamped writes do not allocate an oracle write timestamp.",
+                var_labels: ["operation", "phase"],
+                buckets: histogram_seconds_buckets(0.000_128, 32.0),
+            )),
+            read_hold_downgrade_seconds: registry.register(metric!(
+                name: "mz_read_hold_downgrade_seconds",
+                help: "Coordinator time downgrading realtime timeline read holds after oracle progress. Includes background and DDL-triggered progress, not one observation per SQL statement.",
+                buckets: histogram_seconds_buckets(0.000_128, 32.0),
             )),
             occ_retry_count: registry.register(metric!(
                 name: "mz_occ_read_then_write_retry_count",

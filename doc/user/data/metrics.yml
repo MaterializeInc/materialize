@@ -3593,6 +3593,29 @@ metrics:
   visibility: public
   tags:
   - environment
+- name: mz_read_hold_downgrade_seconds_bucket
+  help: >-
+    Coordinator time downgrading realtime timeline read holds after oracle
+    progress. Includes background and DDL-triggered progress, not one observation per SQL
+    statement.
+  labels:
+  - le
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_read_hold_downgrade_seconds_count
+  help: >-
+    Coordinator time downgrading realtime timeline read holds after oracle
+    progress. Includes background and DDL-triggered progress, not one observation per SQL
+    statement.
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_read_hold_downgrade_seconds_sum
+  help: >-
+    Coordinator time downgrading realtime timeline read holds after oracle
+    progress. Includes background and DDL-triggered progress, not one observation per SQL
+    statement.
+  source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_replica_info
   help: Maps cluster replica IDs to the replica's name and size. Constant 1.
   labels:
@@ -4718,6 +4741,102 @@ metrics:
     The number of collection snapshots that were skipped by the subscribe snapshot
     optimization.
   source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_table_persist_worker_phase_seconds_bucket
+  help: >-
+    Read-write table worker elapsed time by operation and phase. Queue is per
+    command. Execution includes its nested persist phases and may include retries internal
+    to persist. Append includes background builtin writes, not one observation per
+    SQL statement.
+  labels:
+  - le
+  - operation
+  - phase
+  source: src/storage-controller/src/persist_handles.rs
+  visibility: internal
+- name: mz_table_persist_worker_phase_seconds_count
+  help: >-
+    Read-write table worker elapsed time by operation and phase. Queue is per
+    command. Execution includes its nested persist phases and may include retries internal
+    to persist. Append includes background builtin writes, not one observation per
+    SQL statement.
+  labels:
+  - operation
+  - phase
+  source: src/storage-controller/src/persist_handles.rs
+  visibility: internal
+- name: mz_table_persist_worker_phase_seconds_sum
+  help: >-
+    Read-write table worker elapsed time by operation and phase. Queue is per
+    command. Execution includes its nested persist phases and may include retries internal
+    to persist. Append includes background builtin writes, not one observation per
+    SQL statement.
+  labels:
+  - operation
+  - phase
+  source: src/storage-controller/src/persist_handles.rs
+  visibility: internal
+- name: mz_table_write_phase_seconds_bucket
+  help: >-
+    Runtime table-write elapsed time by operation and phase. Batch admission
+    includes oracle peeks and throttle waits. Phases are observed when executed, including
+    retries. Worker time includes its queue and persist work. Timestamped writes do
+    not allocate an oracle write timestamp.
+  labels:
+  - le
+  - operation
+  - phase
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_table_write_phase_seconds_count
+  help: >-
+    Runtime table-write elapsed time by operation and phase. Batch admission
+    includes oracle peeks and throttle waits. Phases are observed when executed, including
+    retries. Worker time includes its queue and persist work. Timestamped writes do
+    not allocate an oracle write timestamp.
+  labels:
+  - operation
+  - phase
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_table_write_phase_seconds_sum
+  help: >-
+    Runtime table-write elapsed time by operation and phase. Batch admission
+    includes oracle peeks and throttle waits. Phases are observed when executed, including
+    retries. Worker time includes its queue and persist work. Timestamped writes do
+    not allocate an oracle write timestamp.
+  labels:
+  - operation
+  - phase
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_table_write_queue_seconds_bucket
+  help: >-
+    Time from enqueue to dispatch for each runtime table-write command. Group
+    commits are observed when admitted to a batch, before throttling and execution.
+    Deferred register/forget and timestamped writes include preceding batch execution.
+  labels:
+  - le
+  - operation
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_table_write_queue_seconds_count
+  help: >-
+    Time from enqueue to dispatch for each runtime table-write command. Group
+    commits are observed when admitted to a batch, before throttling and execution.
+    Deferred register/forget and timestamped writes include preceding batch execution.
+  labels:
+  - operation
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_table_write_queue_seconds_sum
+  help: >-
+    Time from enqueue to dispatch for each runtime table-write command. Group
+    commits are observed when admitted to a batch, before throttling and execution.
+    Deferred register/forget and timestamped writes include preceding batch execution.
+  labels:
+  - operation
+  source: src/adapter/src/metrics.rs
   visibility: internal
 - name: mz_time_to_first_row_seconds_bucket
   help: Latency of an execute for a successful query from pgwire's perspective

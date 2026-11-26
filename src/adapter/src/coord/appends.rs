@@ -197,10 +197,12 @@ pub(crate) enum TableWriteCmd {
     GroupCommit(GroupCommitRequest),
     TimestampedWrite(TimestampedWriteRequest),
     Register {
+        enqueued_at: Instant,
         tables: Vec<TableRegistration>,
         result: oneshot::Sender<Timestamp>,
     },
     Forget {
+        enqueued_at: Instant,
         ids: Vec<GlobalId>,
         result: oneshot::Sender<Timestamp>,
     },
@@ -215,6 +217,7 @@ pub(crate) enum TableWriteCmd {
 /// handle is already gone trips an assert in the storage controller and takes
 /// the process down.
 pub(crate) struct TimestampedWriteRequest {
+    pub(crate) enqueued_at: Instant,
     pub(crate) appends: Vec<(GlobalId, Vec<TableData>)>,
     pub(crate) target_timestamp: Timestamp,
     pub(crate) result: InternalWriteResponder,
@@ -223,6 +226,7 @@ pub(crate) struct TimestampedWriteRequest {
 
 /// A group commit staged on the coordinator loop for the [`GroupCommitter`].
 pub(crate) struct GroupCommitRequest {
+    enqueued_at: Instant,
     /// Appends resolved to their latest [`GlobalId`]. Empty for a keepalive.
     appends: Vec<(GlobalId, Vec<TableData>)>,
     responses: Vec<CompletedClientTransmitter>,
@@ -246,6 +250,7 @@ impl GroupCommitRequest {
             permits,
             contains_internal_system_write,
             span: _,
+            enqueued_at: _,
         } = other;
         self.appends.extend(appends);
         self.responses.extend(responses);
@@ -284,6 +289,29 @@ enum TxnsWriteAttempt {
 }
 
 impl GroupCommitter {
+    // Deferred non-mergeable commands are observed only when dispatched, so their
+    // queue duration includes the preceding commit even if already dequeued.
+    fn observe_queue(&self, operation: &'static str, enqueued_at: Instant) {
+        let seconds = enqueued_at.elapsed().as_secs_f64();
+        self.metrics
+            .table_write_queue_seconds
+            .with_label_values(&[operation])
+            .observe(seconds);
+        if seconds >= 0.1 {
+            info!(operation, queue_seconds = seconds, "slow table-write queue");
+        }
+    }
+
+    fn observe_phase(&self, operation: &'static str, phase: &'static str, seconds: f64) {
+        self.metrics
+            .table_write_phase_seconds
+            .with_label_values(&[operation, phase])
+            .observe(seconds);
+        if seconds >= 0.1 {
+            info!(operation, phase, seconds, "slow table-write phase");
+        }
+    }
+
     async fn run(mut self) {
         while let Some(cmd) = self.rx.recv().await {
             // `commit` may pull a non-mergeable command off the queue while it waits in the
@@ -292,6 +320,7 @@ impl GroupCommitter {
             while let Some(cmd) = next.take() {
                 match cmd {
                     TableWriteCmd::GroupCommit(request) => {
+                        self.observe_queue("group_commit", request.enqueued_at);
                         let span = request.span.clone();
                         match self.commit(request).instrument(span).await {
                             ControlFlow::Continue(deferred) => next = deferred,
@@ -299,6 +328,7 @@ impl GroupCommitter {
                         }
                     }
                     TableWriteCmd::TimestampedWrite(request) => {
+                        self.observe_queue("timestamped_write", request.enqueued_at);
                         let span = request.span.clone();
                         if self
                             .commit_timestamped(request)
@@ -309,9 +339,14 @@ impl GroupCommitter {
                             return;
                         }
                     }
-                    TableWriteCmd::Register { tables, result } => {
+                    TableWriteCmd::Register {
+                        enqueued_at,
+                        tables,
+                        result,
+                    } => {
+                        self.observe_queue("register", enqueued_at);
                         let Some(write_ts) = self
-                            .write_to_txns(None, |ts, _advance_to| {
+                            .write_to_txns("register", None, |ts, _advance_to| {
                                 self.table_write_handle.register(ts, tables.clone())
                             })
                             .await
@@ -320,9 +355,14 @@ impl GroupCommitter {
                         };
                         let _ = result.send(write_ts.timestamp);
                     }
-                    TableWriteCmd::Forget { ids, result } => {
+                    TableWriteCmd::Forget {
+                        enqueued_at,
+                        ids,
+                        result,
+                    } => {
+                        self.observe_queue("forget", enqueued_at);
                         let Some(write_ts) = self
-                            .write_to_txns(None, |ts, _advance_to| {
+                            .write_to_txns("forget", None, |ts, _advance_to| {
                                 self.table_write_handle.forget(ts, ids.clone())
                             })
                             .await
@@ -362,9 +402,16 @@ impl GroupCommitter {
             target_timestamp,
             result,
             span: _,
+            enqueued_at: _,
         } = request;
 
+        let peek_start = Instant::now();
         let oracle_write_ts = self.oracle.peek_write_ts().await;
+        self.observe_phase(
+            "timestamped_write",
+            "peek_write_ts",
+            peek_start.elapsed().as_secs_f64(),
+        );
         if target_timestamp <= oracle_write_ts {
             result.send(WriteResult::TimestampPassed {
                 target_timestamp,
@@ -391,6 +438,7 @@ impl GroupCommitter {
         };
         match self
             .attempt_write_to_txns(
+                "timestamped_write",
                 &write_ts,
                 Some(&self.metrics.append_table_duration_seconds),
                 |ts, advance_to| self.table_write_handle.append(ts, advance_to, appends),
@@ -432,6 +480,7 @@ impl GroupCommitter {
     /// Returns `None` when the table write worker shuts down.
     async fn write_to_txns(
         &self,
+        operation: &'static str,
         op_duration_metric: Option<&prometheus::Histogram>,
         mut op: impl FnMut(Timestamp, Timestamp) -> oneshot::Receiver<Result<(), StorageError>>,
     ) -> Option<WriteTimestamp> {
@@ -445,14 +494,19 @@ impl GroupCommitter {
                 );
             }
             attempt += 1;
+            let oracle_start = Instant::now();
             let write_ts = self.oracle.write_ts().await;
+            self.observe_phase(operation, "write_ts", oracle_start.elapsed().as_secs_f64());
 
             // A post-fence retry has an advance frontier above this handle's stale upper, so the
             // advance inside reaches Persist and observes the fence.
             match self
-                .attempt_write_to_txns(&write_ts, op_duration_metric, |ts, advance_to| {
-                    op(ts, advance_to)
-                })
+                .attempt_write_to_txns(
+                    operation,
+                    &write_ts,
+                    op_duration_metric,
+                    |ts, advance_to| op(ts, advance_to),
+                )
                 .await
             {
                 TxnsWriteAttempt::Applied => return Some(write_ts),
@@ -480,6 +534,7 @@ impl GroupCommitter {
     /// before this returns.
     async fn attempt_write_to_txns(
         &self,
+        operation: &'static str,
         write_ts: &WriteTimestamp,
         op_duration_metric: Option<&prometheus::Histogram>,
         op: impl FnOnce(Timestamp, Timestamp) -> oneshot::Receiver<Result<(), StorageError>>,
@@ -489,14 +544,18 @@ impl GroupCommitter {
             .advance_upper(write_ts.advance_to)
             .await
             .unwrap_or_terminate("unable to advance catalog upper");
+        let catalog_upper_seconds = catalog_upper_start.elapsed().as_secs_f64();
         self.metrics
             .group_commit_catalog_upper_seconds
-            .observe(catalog_upper_start.elapsed().as_secs_f64());
+            .observe(catalog_upper_seconds);
+        self.observe_phase(operation, "catalog_upper", catalog_upper_seconds);
 
         let op_start = Instant::now();
         let op_res = op(write_ts.timestamp, write_ts.advance_to).await;
+        let op_seconds = op_start.elapsed().as_secs_f64();
+        self.observe_phase(operation, "worker", op_seconds);
         if let Some(metric) = op_duration_metric {
-            metric.observe(op_start.elapsed().as_secs_f64());
+            metric.observe(op_seconds);
         }
 
         match op_res {
@@ -521,7 +580,13 @@ impl GroupCommitter {
         // bounded `sleep` rather than a `pause`.
         fail::fail_point!("group_commit_before_apply_write");
 
+        let apply_start = Instant::now();
         self.oracle.apply_write(write_ts.timestamp).await;
+        self.observe_phase(
+            operation,
+            "apply_write",
+            apply_start.elapsed().as_secs_f64(),
+        );
 
         TxnsWriteAttempt::Applied
     }
@@ -534,6 +599,7 @@ impl GroupCommitter {
         &mut self,
         mut request: GroupCommitRequest,
     ) -> ControlFlow<(), Option<TableWriteCmd>> {
+        let admission_start = Instant::now();
         let mut deferred_cmd = None;
         // Once the channel is closed, `recv` resolves immediately with `None`. Disable that
         // select branch then, so the throttle sleep still runs instead of busy-looping.
@@ -545,7 +611,10 @@ impl GroupCommitter {
         loop {
             while deferred_cmd.is_none() {
                 match self.rx.try_recv() {
-                    Ok(TableWriteCmd::GroupCommit(other)) => request.merge(other),
+                    Ok(TableWriteCmd::GroupCommit(other)) => {
+                        self.observe_queue("group_commit", other.enqueued_at);
+                        request.merge(other);
+                    }
                     Ok(other) => deferred_cmd = Some(other),
                     Err(_) => break,
                 }
@@ -556,7 +625,13 @@ impl GroupCommitter {
             if request.contains_internal_system_write || deferred_cmd.is_some() {
                 break;
             }
+            let peek_start = Instant::now();
             let ts = self.oracle.peek_write_ts().await;
+            self.observe_phase(
+                "group_commit",
+                "peek_write_ts",
+                peek_start.elapsed().as_secs_f64(),
+            );
             let now: Timestamp = (self.now)().into();
             if ts <= now {
                 break;
@@ -566,11 +641,15 @@ impl GroupCommitter {
             let remaining_ms = std::cmp::min(ts.saturating_sub(now), Timestamp::from(1_000u64));
             let sleep = tokio::time::sleep(Duration::from_millis(remaining_ms.into()));
             tokio::pin!(sleep);
+            let wait_start = Instant::now();
             loop {
                 tokio::select! {
                     _ = &mut sleep => break,
                     cmd = self.rx.recv(), if deferred_cmd.is_none() && !rx_closed => match cmd {
-                        Some(TableWriteCmd::GroupCommit(other)) => request.merge(other),
+                        Some(TableWriteCmd::GroupCommit(other)) => {
+                            self.observe_queue("group_commit", other.enqueued_at);
+                            request.merge(other);
+                        },
                         Some(other) => deferred_cmd = Some(other),
                         None => rx_closed = true,
                     },
@@ -579,7 +658,18 @@ impl GroupCommitter {
                     break;
                 }
             }
+            self.observe_phase(
+                "group_commit",
+                "throttle_wait",
+                wait_start.elapsed().as_secs_f64(),
+            );
         }
+
+        self.observe_phase(
+            "group_commit",
+            "batch_admission",
+            admission_start.elapsed().as_secs_f64(),
+        );
 
         let GroupCommitRequest {
             appends,
@@ -590,11 +680,12 @@ impl GroupCommitter {
             permits,
             contains_internal_system_write: _,
             span: _,
+            enqueued_at: _,
         } = request;
 
         let append_metric = self.metrics.append_table_duration_seconds.clone();
         let Some(write_ts) = self
-            .write_to_txns(Some(&append_metric), |ts, advance_to| {
+            .write_to_txns("group_commit", Some(&append_metric), |ts, advance_to| {
                 self.table_write_handle
                     .append(ts, advance_to, appends.clone())
             })
@@ -813,6 +904,7 @@ impl Coordinator {
 
         // Always enqueue keepalives so registered tables remain readable at the oracle read ts.
         let request = GroupCommitRequest {
+            enqueued_at: Instant::now(),
             appends,
             responses,
             statement_logging_ids,
@@ -870,7 +962,11 @@ impl Coordinator {
         let (tx, rx) = oneshot::channel();
         if self
             .group_committer_tx
-            .send(TableWriteCmd::Register { tables, result: tx })
+            .send(TableWriteCmd::Register {
+                enqueued_at: Instant::now(),
+                tables,
+                result: tx,
+            })
             .is_err()
         {
             halt!("group committer terminated before a table registration could be submitted");
@@ -886,7 +982,11 @@ impl Coordinator {
         let (tx, rx) = oneshot::channel();
         if self
             .group_committer_tx
-            .send(TableWriteCmd::Forget { ids, result: tx })
+            .send(TableWriteCmd::Forget {
+                enqueued_at: Instant::now(),
+                ids,
+                result: tx,
+            })
             .is_err()
         {
             halt!("group committer terminated before a table forget could be submitted");
@@ -1455,7 +1555,7 @@ mod tests {
             };
 
             let write_ts = committer
-                .write_to_txns(None, |ts, advance_to| {
+                .write_to_txns("group_commit", None, |ts, advance_to| {
                     assert_eq!(advance_to, ts.step_forward());
                     handle.append(ts, advance_to, Vec::new())
                 })
@@ -1468,6 +1568,22 @@ mod tests {
                 .expect("lock poisoned")
                 .clone();
             assert_eq!(attempts.len(), 2, "one conflict, one success");
+            for (phase, count) in [
+                ("write_ts", 2),
+                ("catalog_upper", 2),
+                ("worker", 2),
+                ("apply_write", 1),
+            ] {
+                assert_eq!(
+                    committer
+                        .metrics
+                        .table_write_phase_seconds
+                        .with_label_values(&["group_commit", phase])
+                        .get_sample_count(),
+                    count,
+                    "phase {phase} must distinguish retries from applied writes",
+                );
+            }
             assert!(
                 attempts[0] > initial_upper,
                 "attempts start past the initial catalog upper: {attempts:?} vs {initial_upper}"
@@ -1518,7 +1634,7 @@ mod tests {
             };
 
             let write_ts = committer
-                .write_to_txns(None, |ts, advance_to| {
+                .write_to_txns("group_commit", None, |ts, advance_to| {
                     handle.append(ts, advance_to, Vec::new())
                 })
                 .await
