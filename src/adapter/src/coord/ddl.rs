@@ -1177,14 +1177,9 @@ impl Coordinator {
             }
         }
 
-        // NOTE: This phase contains every durable `sync` and `commit` a catalog
-        // transaction performs, which is what makes `transact` minus those two
-        // histograms an estimate of the in-memory work. Two caveats. More than
-        // one sync happens per transaction, so the subtraction is only valid on
-        // rates of `_sum`, never on per-observation means. And durable
-        // `allocate_id` (user ID pool refills, storage usage batch IDs) observes
-        // into the same histograms from outside any catalog transaction, so the
-        // estimate is biased low while allocation is active.
+        // Durable commit timing includes syncs, and both histograms also observe
+        // work outside this phase. They are not disjoint components that can be
+        // subtracted to isolate this transaction's in-memory work.
         let TransactionResult {
             builtin_table_updates,
             catalog_updates,
