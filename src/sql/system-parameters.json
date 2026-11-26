@@ -3264,7 +3264,7 @@
     {
       "name": "persist_next_listen_batch_retryer_fixed_sleep",
       "typeName": "duration",
-      "default": "1200 ms",
+      "default": "2 s",
       "description": "The fixed sleep when polling for new batches from a Listen or Subscribe. Skipped if zero.",
       "scope": "environment",
       "userVisible": false,

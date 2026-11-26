@@ -1225,9 +1225,13 @@ impl<T: Debug> CompareAndAppendRes<T> {
     }
 }
 
+// A waiter in `Machine::wait_for_upper_past` scans consensus when this sleep passes before the
+// shard upper advances. `RetryStream::sleep` jitters it down to 0.9x, and table and source shards
+// advance once per `default_timestamp_interval` (1s), so 2s gives an append 800ms of slack before
+// waiters start to scan.
 pub(crate) const NEXT_LISTEN_BATCH_RETRYER_FIXED_SLEEP: Config<Duration> = Config::new(
     "persist_next_listen_batch_retryer_fixed_sleep",
-    Duration::from_millis(1200), // pubsub is on by default!
+    Duration::from_secs(2),
     "\
     The fixed sleep when polling for new batches from a Listen or Subscribe. Skipped if zero.",
     ParameterScope::Environment,

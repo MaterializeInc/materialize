@@ -285,7 +285,7 @@ def get_variable_system_parameters(
         ),
         VariableSystemParameter(
             "persist_next_listen_batch_retryer_fixed_sleep",
-            "1200ms",
+            "2s",
             ["100ms", "1s", "10s"],
         ),
         # -----
