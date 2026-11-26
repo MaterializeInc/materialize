@@ -501,12 +501,7 @@ impl GroupCommitter {
             // A post-fence retry has an advance frontier above this handle's stale upper, so the
             // advance inside reaches Persist and observes the fence.
             match self
-                .attempt_write_to_txns(
-                    operation,
-                    &write_ts,
-                    op_duration_metric,
-                    |ts, advance_to| op(ts, advance_to),
-                )
+                .attempt_write_to_txns(operation, &write_ts, op_duration_metric, &mut op)
                 .await
             {
                 TxnsWriteAttempt::Applied => return Some(write_ts),
