@@ -1287,6 +1287,13 @@ pub struct ManagedLocation {
     pub internal: bool,
     pub billed_as: Option<String>,
     pub pending: bool,
+    /// The anti-affinity slot the replica occupies, named after the replica
+    /// that first held it. `None` means the replica is its own slot.
+    ///
+    /// NOTE: Skipped when `None` so that rows written before the field existed
+    /// re-encode byte-identically, which retracting them requires.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot: Option<ReplicaId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

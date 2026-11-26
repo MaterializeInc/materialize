@@ -680,6 +680,7 @@ mod tests {
                     billed_as: None,
                     availability_zones: Vec::new(),
                     pending: false,
+                    slot: None,
                 }),
                 compute: ComputeReplicaConfig {
                     logging: Default::default(),

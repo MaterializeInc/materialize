@@ -775,6 +775,8 @@ pub enum ReplicaLocation {
         internal: bool,
         billed_as: Option<String>,
         pending: bool,
+        /// See [`mz_controller::clusters::ManagedReplicaLocation::slot`].
+        slot: Option<ReplicaId>,
     },
 }
 
@@ -808,6 +810,7 @@ impl From<mz_controller::clusters::ReplicaLocation> for ReplicaLocation {
                     billed_as,
                     internal,
                     pending,
+                    slot,
                 },
             ) => ReplicaLocation::Managed {
                 size,
@@ -815,6 +818,7 @@ impl From<mz_controller::clusters::ReplicaLocation> for ReplicaLocation {
                 internal,
                 billed_as,
                 pending,
+                slot,
             },
         }
     }

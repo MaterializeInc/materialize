@@ -826,6 +826,7 @@ fn default_replica_config(args: &BootstrapArgs) -> Result<ReplicaConfig, Catalog
             internal: false,
             billed_as: None,
             pending: false,
+            slot: None,
         },
         logging: ReplicaLogging {
             log_logging: false,
