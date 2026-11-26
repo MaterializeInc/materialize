@@ -726,6 +726,7 @@ impl crate::coord::Coordinator {
             self.peek_registry
                 .connection(crate::session::DUMMY_CONNECTION_ID),
             catalog,
+            self.pending_catalog_visibility(),
             Arc::clone(&self.controller.storage_collections),
             Arc::clone(&self.transient_id_gen),
             self.optimizer_metrics.clone(),

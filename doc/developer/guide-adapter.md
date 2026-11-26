@@ -314,6 +314,28 @@ keep the change invisible to session-visible catalog reads (name resolution,
 planning). Otherwise sessions serve stale catalogs where today they would see
 the change.
 
+### Catalog publication and builtin visibility
+
+Catalog snapshots carry the completion barrier for their builtin writes.
+Session tasks await that barrier before planning reads, including on cache hits
+and the first statement after startup. This lets a strict-serializable read
+resolve a new object without selecting an oracle timestamp older than its
+builtin catalog rows. Transaction-pinned timestamps and weaker isolation levels
+retain their existing semantics.
+
+Return the snapshot and barrier immediately, then wait for that captured
+snapshot without refetching. Peek registration refreshes the catalog to check
+existing dependencies, not to replan. It must not await visibility during that
+refresh: under continuous DDL, delaying each refresh response can make it stale
+on arrival and prevent registration indefinitely. Cache the refreshed snapshot
+and its barrier together so the next statement still waits before planning.
+
+DDL that defers builtin visibility releases its serialization lock on the
+coordinator before waiting off-loop. Only terminal retirement can do this.
+An intermediate stage can still have name-dependent work or controller updates
+to finish. No-op and catalog-dependent error responses must wait for the writes
+represented by the catalog revision they observe.
+
 ### Group commits and generation handover
 
 At runtime, one group committer per `environmentd` serializes txns-shard operations:

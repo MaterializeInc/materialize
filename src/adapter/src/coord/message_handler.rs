@@ -101,6 +101,14 @@ impl Coordinator {
                 otel_ctx.attach_as_parent();
                 self.sequence_ddl_commit(pending).boxed_local().await;
             }
+            Message::FinishDdlStatement {
+                ctx,
+                result,
+                otel_ctx,
+            } => {
+                otel_ctx.attach_as_parent();
+                self.finish_ddl_statement(ctx, result);
+            }
             Message::PurifiedStatementReady(ready) => {
                 self.message_purified_statement_ready(ready)
                     .boxed_local()

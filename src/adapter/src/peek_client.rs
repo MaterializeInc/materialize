@@ -49,7 +49,7 @@ use uuid::Uuid;
 
 use crate::catalog::{Catalog, CatalogState};
 use crate::command::{CatalogSnapshot, Command, ExecuteResponse};
-use crate::coord::appends::GroupCommitNotifier;
+use crate::coord::appends::{CatalogVisibilityBarrier, GroupCommitNotifier};
 use crate::coord::peek::{FastPathPlan, PeekResponseUnary};
 use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::coord::{Coordinator, ExecuteContextExtra, ExecuteContextGuard, Message};
@@ -81,6 +81,8 @@ pub struct PeekClient {
     /// Holds a `Weak` so that an idle session does not keep a superseded
     /// catalog version alive.
     catalog_cache: Weak<Catalog>,
+    /// Publication barrier paired with `catalog_cache`, cleared after a successful wait.
+    catalog_visibility: Option<CatalogVisibilityBarrier>,
     /// Channels to talk to each compute Instance task directly. Lazily populated.
     /// Note that these are never cleaned up. In theory, this could lead to a very slow memory leak
     /// if a long-running user session keeps peeking on clusters that are being created and dropped
@@ -229,7 +231,13 @@ impl PeekClient {
                         .call_coordinator(|tx| Command::CatalogSnapshot { tx })
                         .await;
                     catalog = match refreshed {
-                        Ok(CatalogSnapshot { catalog }) => catalog,
+                        Ok(CatalogSnapshot {
+                            catalog,
+                            visibility,
+                        }) => {
+                            self.catalog_visibility = visibility;
+                            catalog
+                        }
                         Err(error) => {
                             peek.lifecycle
                                 .complete(PeekNotification::Error(error.to_string()));
@@ -237,6 +245,8 @@ impl PeekClient {
                         }
                     };
                     self.catalog_cache = Arc::downgrade(&catalog);
+                    // Only validate the existing plan's dependencies here. Waiting for
+                    // publication would let continuous DDL starve registration.
                     let error = if catalog.try_get_cluster(cluster_id).is_none() {
                         Some(AdapterError::ConcurrentDependencyDrop {
                             dependency_kind: "cluster",
@@ -271,6 +281,7 @@ impl PeekClient {
         coordinator_client: CoordinatorClient,
         connection_peeks: Arc<ConnectionPeeks>,
         catalog: &Arc<Catalog>,
+        catalog_visibility: Option<CatalogVisibilityBarrier>,
         storage_collections: StorageCollectionsHandle,
         transient_id_gen: Arc<TransientIdGen>,
         optimizer_metrics: OptimizerMetrics,
@@ -284,6 +295,7 @@ impl PeekClient {
             connection_peeks,
             coordinator_client,
             catalog_cache: Arc::downgrade(catalog),
+            catalog_visibility,
             compute_instances: Default::default(), // lazily populated
             storage_collections,
             transient_id_gen,
@@ -362,6 +374,7 @@ impl PeekClient {
                 .catalog_snapshot_cache
                 .with_label_values(&[context, "hit"])
                 .inc();
+            self.await_catalog_visibility().await;
             return catalog;
         }
 
@@ -371,7 +384,10 @@ impl PeekClient {
         // Session clients keep the coordinator loop alive. A dropped response
         // here therefore indicates an internal lifecycle bug, unlike a
         // background compute lookup racing coordinator shutdown.
-        let CatalogSnapshot { catalog } = self
+        let CatalogSnapshot {
+            catalog,
+            visibility,
+        } = self
             .call_coordinator(|tx| Command::CatalogSnapshot { tx })
             .await
             .expect("coordinator unexpectedly dropped catalog snapshot response");
@@ -385,7 +401,19 @@ impl PeekClient {
             .with_label_values(&[context, "miss"])
             .inc();
         self.catalog_cache = Arc::downgrade(&catalog);
+        self.catalog_visibility = visibility;
+        self.await_catalog_visibility().await;
         catalog
+    }
+
+    /// Waits for publication of the cached snapshot without refreshing it.
+    pub(crate) async fn await_catalog_visibility(&mut self) {
+        if let Some(visibility) = self.catalog_visibility.clone() {
+            // Keep the barrier cached until completion so cancellation cannot
+            // expose an unpublished snapshot on the next cache hit.
+            visibility.wait().await;
+            self.catalog_visibility = None;
+        }
     }
 
     /// Calls the coordinator and returns an error if it drops the response.

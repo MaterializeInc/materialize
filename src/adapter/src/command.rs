@@ -47,7 +47,7 @@ use uuid::Uuid;
 use crate::active_compute_sink::ActiveSubscribeOwner;
 use crate::catalog::Catalog;
 use crate::config::{ScopedParameters, ScopedParametersScope, SystemParameterFrontend};
-use crate::coord::appends::{BuiltinTableAppendNotify, WriteResult};
+use crate::coord::appends::{BuiltinTableAppendNotify, CatalogVisibilityBarrier, WriteResult};
 use crate::coord::consistency::CoordinatorInconsistencies;
 use crate::coord::peek::{PeekDataflowPlan, PeekResponseUnary};
 use crate::coord::timestamp_selection::TimestampDetermination;
@@ -82,6 +82,7 @@ pub struct CopyFromStdinWriter {
 #[derive(Debug)]
 pub struct CatalogSnapshot {
     pub catalog: Arc<Catalog>,
+    pub visibility: Option<CatalogVisibilityBarrier>,
 }
 
 #[derive(Debug)]
@@ -560,6 +561,7 @@ pub struct StartupResponse {
     /// Map of (name, VarInput::Flat) tuples of session default variables that should be set.
     pub session_defaults: BTreeMap<String, OwnedVarInput>,
     pub catalog: Arc<Catalog>,
+    pub catalog_visibility: Option<CatalogVisibilityBarrier>,
     pub storage_collections:
         Arc<dyn mz_storage_client::storage_collections::StorageCollections + Send + Sync>,
     pub transient_id_gen: Arc<TransientIdGen>,

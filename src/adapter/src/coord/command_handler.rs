@@ -350,6 +350,7 @@ impl Coordinator {
                 Command::CatalogSnapshot { tx } => {
                     let _ = tx.send(CatalogSnapshot {
                         catalog: self.owned_catalog(),
+                        visibility: self.pending_catalog_visibility(),
                     });
                 }
 
@@ -912,6 +913,7 @@ impl Coordinator {
                     write_notify: notify,
                     session_defaults,
                     catalog,
+                    catalog_visibility: self.pending_catalog_visibility(),
                     storage_collections: Arc::clone(&self.controller.storage_collections),
                     transient_id_gen: Arc::clone(&self.transient_id_gen),
                     optimizer_metrics: self.optimizer_metrics.clone(),
@@ -1171,7 +1173,13 @@ impl Coordinator {
             // Another option would be to log a begin and end event, but just fill in NULLs
             // for everything we get from the portal (prepared statement id, params).
             let extra = outer_context.unwrap_or_else(Default::default);
-            let ctx = ExecuteContext::from_parts(tx, self.internal_cmd_tx.clone(), session, extra);
+            let mut ctx =
+                ExecuteContext::from_parts(tx, self.internal_cmd_tx.clone(), session, extra);
+            if let Some(visibility) = self.pending_catalog_visibility() {
+                ctx.delay_response_until(crate::coord::appends::BuiltinTableAppendCompletion::new(
+                    Box::pin(visibility.wait()),
+                ));
+            }
             return ctx.retire(Err(err));
         }
 
@@ -1231,6 +1239,11 @@ impl Coordinator {
         params: Params,
         mut ctx: ExecuteContext,
     ) {
+        if let Some(visibility) = self.pending_catalog_visibility() {
+            ctx.delay_response_until(crate::coord::appends::BuiltinTableAppendCompletion::new(
+                Box::pin(visibility.wait()),
+            ));
+        }
         // This comment describes the various ways DDL can execute (the ordered operations: name
         // resolve, purify, plan, sequence), all of which are managed by this function. DDL has
         // three notable properties that all partially interact.
@@ -1270,9 +1283,10 @@ impl Coordinator {
         //    Coordinator. When a DDL is run in `handle_execute_inner` (after applying whatever
         //    transaction ops are needed to the session as described above), it attempts to own the
         //    lock (a tokio Mutex). If acquired, it stashes the lock in the connection`s `ConnMeta`
-        //    struct in `active_conns` and proceeds. The lock is dropped at transaction end in
-        //    `clear_transaction` and a message sent to the Coordinator to execute the next queued
-        //    DDL. If the lock could not be acquired, the DDL is put into the VecDeque where it
+        //    struct in `active_conns` and proceeds. Statements that defer builtin visibility
+        //    release it at terminal completion. Otherwise transaction cleanup releases it.
+        //    Releasing it wakes the Coordinator to execute the next queued DDL.
+        //    If the lock could not be acquired, the DDL is put into the VecDeque where it
         //    awaits dequeuing caused by the lock being released.
 
         if StatementKind::from(&*stmt).is_explain() {
@@ -1476,10 +1490,8 @@ impl Coordinator {
 
         // DDLs must be planned and sequenced serially. We do not rely on PlanValidity checking
         // various IDs because we have incorrectly done that in the past. Attempt to acquire the
-        // ddl lock. The lock is stashed in the ConnMeta which is dropped at transaction end. If
-        // acquired, proceed with sequencing. If not, enqueue and return. This logic assumes that
-        // Coordinator::clear_transaction is correctly called when session transactions are ended
-        // because that function will release the held lock from active_conns.
+        // ddl lock. The lock is stashed in ConnMeta until terminal completion or transaction
+        // cleanup. If acquired, proceed with sequencing. If not, enqueue and return.
         if Self::must_serialize_ddl(&stmt, &ctx) {
             if let Ok(guard) = self.serialized_ddl.try_lock_owned() {
                 let prev = self
@@ -1492,6 +1504,27 @@ impl Coordinator {
                     prev.is_none(),
                     "connections should have at most one lock guard"
                 );
+                ctx.finish_ddl_on_coordinator = matches!(
+                    &*stmt,
+                    Statement::CreateTable(_)
+                        | Statement::CreateView(_)
+                        | Statement::CreateIndex(_)
+                ) || matches!(
+                    &*stmt,
+                    Statement::DropObjects(drop) if matches!(
+                        drop.object_type,
+                        mz_sql::ast::ObjectType::Table
+                            | mz_sql::ast::ObjectType::View
+                            | mz_sql::ast::ObjectType::Index
+                    )
+                );
+                if let Some(visibility) = self.pending_catalog_visibility() {
+                    ctx.delay_response_until(
+                        crate::coord::appends::BuiltinTableAppendCompletion::new(Box::pin(
+                            visibility.wait(),
+                        )),
+                    );
+                }
             } else {
                 if self
                     .active_conns
@@ -1921,6 +1954,9 @@ impl Coordinator {
                     .unwrap_or(&Timeline::EpochMilliseconds);
 
                 // Let's start with the timestamp oracle read timestamp.
+                if let Some(visibility) = self.pending_catalog_visibility() {
+                    visibility.wait().await;
+                }
                 let mut timestamp = self.get_timestamp_oracle(timeline).read_ts().await;
 
                 // If `least_valid_read` is later than the oracle, then advance to that time.

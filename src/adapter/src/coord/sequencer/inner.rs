@@ -3509,7 +3509,10 @@ impl Coordinator {
             // Save the metainfo.
             self.catalog_mut().set_dataflow_metainfo(export_id, df_meta);
 
-            Some(self.builtin_table_update().execute(builtin_table_updates))
+            Some(
+                self.builtin_table_update()
+                    .execute_catalog(builtin_table_updates),
+            )
         } else {
             // Save the metainfo.
             self.catalog_mut().set_dataflow_metainfo(export_id, df_meta);

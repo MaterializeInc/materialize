@@ -292,9 +292,17 @@ impl Coordinator {
                 if send.is_err() {
                     break;
                 }
-                let Ok(CatalogSnapshot { catalog }) = rx.await else {
+                let Ok(CatalogSnapshot {
+                    catalog,
+                    visibility,
+                }) = rx.await
+                else {
                     break;
                 };
+
+                if let Some(visibility) = visibility {
+                    visibility.wait().await;
+                }
 
                 // Sample the reference counts of the current catalog
                 // allocation. The strong count includes this task's own

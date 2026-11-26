@@ -386,10 +386,16 @@ impl StabilityGate {
 
     async fn load_replica_creation_times(&mut self) {
         let query = async {
-            let CatalogSnapshot { catalog } = self
+            let CatalogSnapshot {
+                catalog,
+                visibility,
+            } = self
                 .client
                 .call_coordinator(|tx| Command::CatalogSnapshot { tx })
                 .await?;
+            if let Some(visibility) = visibility {
+                visibility.wait().await;
+            }
             let cluster = catalog.resolve_builtin_cluster(&MZ_CATALOG_SERVER_CLUSTER);
             let replica = cluster.replicas().next().ok_or_else(|| {
                 crate::AdapterError::Internal("catalog server has no replicas".into())

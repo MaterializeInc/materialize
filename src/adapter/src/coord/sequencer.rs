@@ -628,7 +628,8 @@ impl Coordinator {
         params: Params,
     ) {
         // Put the session into single statement implicit so anything can execute.
-        let (tx, internal_cmd_tx, mut session, extra, response_barriers) = ctx.into_parts();
+        let (tx, internal_cmd_tx, mut session, extra, response_barriers, finish_ddl) =
+            ctx.into_parts();
         assert!(matches!(session.transaction(), TransactionStatus::Default));
         session.start_transaction_single_stmt(self.now_datetime());
         let conn_id = session.conn_id().unhandled();
@@ -642,6 +643,7 @@ impl Coordinator {
             session,
             extra,
             response_barriers,
+            finish_ddl,
         );
         self.handle_execute_inner(stmt, params, sub_ctx).await;
 

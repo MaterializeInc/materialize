@@ -56,7 +56,7 @@ impl Staged for CreateViewStage {
     ) -> Result<StageResult<Box<Self>>, AdapterError> {
         match self {
             CreateViewStage::Optimize(stage) => coord.create_view_optimize(stage).await,
-            CreateViewStage::Finish(stage) => coord.create_view_finish(ctx.session(), stage).await,
+            CreateViewStage::Finish(stage) => coord.create_view_finish(ctx, stage).await,
             CreateViewStage::Explain(stage) => {
                 coord.create_view_explain(ctx.session(), stage).await
             }
@@ -379,7 +379,7 @@ impl Coordinator {
     #[instrument]
     async fn create_view_finish(
         &mut self,
-        session: &Session,
+        ctx: &mut ExecuteContext,
         CreateViewFinish {
             item_id,
             global_id,
@@ -437,18 +437,21 @@ impl Coordinator {
                     desc: RelationDesc::new(typ, column_names.clone()),
                     locally_optimized_expr: optimized_expr.into(),
                     conn_id: if temporary {
-                        Some(session.conn_id().clone())
+                        Some(ctx.session().conn_id().clone())
                     } else {
                         None
                     },
                     resolved_ids: resolved_ids.clone(),
                     dependencies: dependencies.clone(),
                 }),
-                owner_id: *session.current_role_id(),
+                owner_id: *ctx.session().current_role_id(),
             },
         ];
 
-        match self.catalog_transact(Some(session), ops).await {
+        match self
+            .catalog_transact_with_context(None, Some(ctx), ops)
+            .await
+        {
             Ok(()) => {
                 if !replaced_global_ids.is_empty() {
                     let _fut = self.catalog().update_expression_cache(
@@ -462,10 +465,11 @@ impl Coordinator {
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
                 kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
-                session.add_notice(AdapterNotice::ObjectAlreadyExists {
-                    name: name.item,
-                    ty: "view",
-                });
+                ctx.session()
+                    .add_notice(AdapterNotice::ObjectAlreadyExists {
+                        name: name.item,
+                        ty: "view",
+                    });
                 Ok(StageResult::Response(ExecuteResponse::CreatedView))
             }
             Err(err) => Err(err),

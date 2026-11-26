@@ -423,6 +423,11 @@ pub enum Message {
         stmt: Arc<Statement<Raw>>,
         params: mz_sql::plan::Params,
     },
+    FinishDdlStatement {
+        ctx: ExecuteContext,
+        result: Result<ExecuteResponse, AdapterError>,
+        otel_ctx: OpenTelemetryContext,
+    },
     CreateIndexStageReady {
         ctx: ExecuteContext,
         span: Span,
@@ -555,6 +560,7 @@ impl Message {
             Message::HydrationHistoryRun => "hydration_history_run",
             Message::CaughtUpCheck(_) => "caught_up_check",
             Message::RetireExecute { .. } => "retire_execute",
+            Message::FinishDdlStatement { .. } => "finish_ddl_statement",
             Message::ExecuteSingleStatementTransaction { .. } => {
                 "execute_single_statement_transaction"
             }
@@ -1121,7 +1127,7 @@ pub struct ConnMeta {
     /// any, is cleared.
     drop_sinks: BTreeSet<GlobalId>,
 
-    /// Lock for the Coordinator's deferred statements that is dropped on transaction clear.
+    /// DDL serialization guard, released at terminal completion or transaction cleanup.
     #[serde(skip)]
     deferred_lock: Option<OwnedMutexGuard<()>>,
 
@@ -1465,6 +1471,7 @@ pub struct ExecuteContextInner {
     extra: ExecuteContextGuard,
     #[derivative(Debug = "ignore")]
     response_barriers: Vec<BuiltinTableAppendNotify>,
+    finish_ddl_on_coordinator: bool,
 }
 
 impl ExecuteContext {
@@ -1490,7 +1497,14 @@ impl ExecuteContext {
         session: Session,
         extra: ExecuteContextGuard,
     ) -> Self {
-        Self::from_parts_with_response_barriers(tx, internal_cmd_tx, session, extra, Vec::new())
+        Self::from_parts_with_response_barriers(
+            tx,
+            internal_cmd_tx,
+            session,
+            extra,
+            Vec::new(),
+            false,
+        )
     }
 
     pub fn from_parts_with_response_barriers(
@@ -1499,6 +1513,7 @@ impl ExecuteContext {
         session: Session,
         extra: ExecuteContextGuard,
         response_barriers: Vec<BuiltinTableAppendNotify>,
+        finish_ddl_on_coordinator: bool,
     ) -> Self {
         Self {
             inner: Some(
@@ -1507,6 +1522,7 @@ impl ExecuteContext {
                     session,
                     extra,
                     response_barriers,
+                    finish_ddl_on_coordinator,
                     internal_cmd_tx,
                 }
                 .into(),
@@ -1521,8 +1537,8 @@ impl ExecuteContext {
     /// the coordinator and the pgwire layer. As part of any such
     /// protocol, we must ensure that the `ExecuteContextGuard`
     /// (possibly wrapped in a new `ExecuteContext`) is passed back to the coordinator for
-    /// eventual retirement. The returned response barriers must stay attached
-    /// to the user-visible response path.
+    /// eventual retirement. The returned response barriers and DDL completion
+    /// obligation must stay attached to the user-visible response path.
     ///
     /// The returned parts lose the `Drop` backstop that answers the client on shutdown, so they
     /// must not be held across an await point. A bare `ClientTransmitter` panics when dropped
@@ -1535,6 +1551,7 @@ impl ExecuteContext {
         Session,
         ExecuteContextGuard,
         Vec<BuiltinTableAppendNotify>,
+        bool,
     ) {
         let ExecuteContextInner {
             tx,
@@ -1542,16 +1559,35 @@ impl ExecuteContext {
             session,
             extra,
             response_barriers,
+            finish_ddl_on_coordinator,
         } = *self.inner.take().expect("only consumed by value");
-        (tx, internal_cmd_tx, session, extra, response_barriers)
+        (
+            tx,
+            internal_cmd_tx,
+            session,
+            extra,
+            response_barriers,
+            finish_ddl_on_coordinator,
+        )
     }
 
     /// Retire the execution, by sending a message to the coordinator.
     #[instrument(level = "debug")]
     pub fn retire(mut self, result: Result<ExecuteResponse, AdapterError>) {
+        if std::mem::take(&mut self.finish_ddl_on_coordinator) {
+            // Retirement is the terminal boundary, including errors and off-thread stage
+            // completion. Release the coordinator-owned lock before waiting for visibility.
+            let tx = self.internal_cmd_tx.clone();
+            let _ = tx.send(Message::FinishDdlStatement {
+                ctx: self,
+                result,
+                otel_ctx: OpenTelemetryContext::obtain(),
+            });
+            return;
+        }
         let response_barriers = std::mem::take(&mut self.response_barriers);
         if response_barriers.is_empty() {
-            let (tx, internal_cmd_tx, session, extra, _) = self.into_parts();
+            let (tx, internal_cmd_tx, session, extra, _, _) = self.into_parts();
             retire_execution_context(tx, internal_cmd_tx, session, extra, result);
             return;
         }
@@ -1789,6 +1825,8 @@ pub struct Coordinator {
     /// read their catalog as long as needed. In the future we would like this
     /// to be a pTVC, but for now this is sufficient.
     catalog: Arc<Catalog>,
+
+    catalog_visibility: Option<appends::CatalogVisibilityBarrier>,
 
     /// A client for persist. Initially, this is only used for reading stashed
     /// peek responses out of batches.
@@ -5060,6 +5098,7 @@ pub fn serve(
                 let mut coord = Coordinator {
                     controller,
                     catalog,
+                    catalog_visibility: None,
                     internal_cmd_tx,
                     group_commit_tx,
                     reconcile_now: Arc::new(Notify::new()),
@@ -5525,6 +5564,69 @@ mod execute_context_tests {
     use crate::util::ClientTransmitter;
 
     #[mz_ore::test(tokio::test)]
+    async fn test_ddl_completion_precedes_response_waits() {
+        for result in [
+            Ok(ExecuteResponse::CreatedView),
+            Err(AdapterError::Canceled),
+        ] {
+            let succeeded = result.is_ok();
+            let (client_tx, mut client_rx) = oneshot::channel();
+            let (internal_cmd_tx, mut internal_cmd_rx) = mpsc::unbounded_channel();
+            let (done_tx, done_rx) = oneshot::channel();
+            let ctx = ExecuteContext::from_parts_with_response_barriers(
+                ClientTransmitter::new(client_tx, internal_cmd_tx.clone()),
+                internal_cmd_tx,
+                Session::dummy(),
+                ExecuteContextGuard::default(),
+                vec![Box::pin(async move { done_rx.await.unwrap() })],
+                true,
+            );
+            ctx.retire(result);
+            let Message::FinishDdlStatement { ctx, result, .. } = internal_cmd_rx
+                .try_recv()
+                .expect("completion must not await visibility")
+            else {
+                panic!("expected DDL completion");
+            };
+            ctx.retire(result);
+            tokio::task::yield_now().await;
+            assert!(matches!(
+                client_rx.try_recv(),
+                Err(oneshot::error::TryRecvError::Empty)
+            ));
+            done_tx.send(()).unwrap();
+            let response = tokio::time::timeout(Duration::from_secs(5), client_rx)
+                .await
+                .unwrap()
+                .unwrap();
+            if succeeded {
+                assert!(matches!(response.result, Ok(ExecuteResponse::CreatedView)));
+            } else {
+                assert!(matches!(response.result, Err(AdapterError::Canceled)));
+            }
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_shutdown_before_ddl_completion_answers_client() {
+        let (client_tx, client_rx) = oneshot::channel();
+        let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
+        let mut ctx = ExecuteContext::from_parts(
+            ClientTransmitter::new(client_tx, internal_cmd_tx.clone()),
+            internal_cmd_tx,
+            Session::dummy(),
+            ExecuteContextGuard::default(),
+        );
+        ctx.finish_ddl_on_coordinator = true;
+        ctx.retire(Ok(ExecuteResponse::CreatedView));
+        drop(internal_cmd_rx);
+        assert!(matches!(
+            client_rx.await.unwrap().result,
+            Err(AdapterError::Internal(_))
+        ));
+    }
+
+    #[mz_ore::test(tokio::test)]
     async fn test_retire_completed_barrier_answers_without_scheduling() {
         let (client_tx, mut client_rx) = oneshot::channel();
         let (internal_cmd_tx, _internal_cmd_rx) = mpsc::unbounded_channel();
@@ -5836,6 +5938,7 @@ mod execute_context_tests {
                 ExecuteContextGuard::default(),
                 // Stands in for a group commit that shutdown will never apply.
                 vec![Box::pin(std::future::pending())],
+                false,
             );
             ctx.retire(Ok(ExecuteResponse::StartedTransaction));
         });
