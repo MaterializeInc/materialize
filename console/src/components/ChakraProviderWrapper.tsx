@@ -17,6 +17,7 @@ import {
 } from "@chakra-ui/react";
 import React from "react";
 
+import { useTruncationTitles } from "~/hooks/useTruncationTitles";
 import { darkTheme, lightTheme } from "~/theme";
 
 export const ChakraProviderWrapper = ({
@@ -26,6 +27,7 @@ export const ChakraProviderWrapper = ({
 }) => {
   const mode = useColorMode();
   const theme = mode.colorMode === "dark" ? darkTheme : lightTheme;
+  useTruncationTitles();
 
   return (
     <ThemeProvider theme={theme}>
