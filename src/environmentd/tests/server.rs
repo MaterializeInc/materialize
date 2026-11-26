@@ -2652,6 +2652,91 @@ async fn test_session_owned_completion_after_role_drop() {
     );
 }
 
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+async fn test_single_statement_commit_after_role_drop() {
+    use mz_adapter::session::{EndTransactionAction, TransactionOps, TransactionStatus};
+    use mz_postgres_util::{batch_execute, sql};
+
+    const FAILPOINT: &str = "single_statement_transaction_ready";
+    struct RemoveFailpoint;
+    impl Drop for RemoveFailpoint {
+        fn drop(&mut self) {
+            fail::remove(FAILPOINT);
+        }
+    }
+
+    let server = test_util::TestHarness::default().start().await;
+    let admin = server.connect().await.unwrap();
+    batch_execute(&admin, sql!("CREATE ROLE single_statement_writer"))
+        .await
+        .unwrap();
+    let adapter = server.inner.adapter_client();
+    let session = adapter.new_session(
+        SessionConfig {
+            conn_id: adapter.new_conn_id().unwrap(),
+            uuid: Uuid::new_v4(),
+            user: "single_statement_writer".into(),
+            client_ip: Some(std::net::Ipv4Addr::LOCALHOST.into()),
+            external_metadata_rx: None,
+            helm_chart_version: None,
+            authenticator_kind: AuthenticatorKind::None,
+            groups: None,
+        },
+        Authenticated,
+    );
+    let mut session = adapter.startup(session).await.unwrap();
+    for (portal, sql) in [
+        ("begin", "BEGIN"),
+        ("ddl", "CREATE TABLE single_statement_table (a int)"),
+    ] {
+        session.start_transaction(Some(1)).unwrap();
+        let stmt = mz_sql::parse::parse(sql).unwrap().pop().unwrap().ast;
+        session
+            .declare(portal.into(), stmt, sql.into())
+            .await
+            .unwrap();
+        session
+            .execute(portal.into(), futures::future::pending(), None)
+            .await
+            .unwrap();
+    }
+    assert!(matches!(
+        &session.session().transaction().inner().unwrap().ops,
+        TransactionOps::SingleStatement { .. }
+    ));
+
+    fail::cfg(FAILPOINT, "return").unwrap();
+    let remove_failpoint = RemoveFailpoint;
+    let error = tokio::time::timeout(Duration::from_secs(30), async {
+        let mut commit = Box::pin(session.end_transaction(EndTransactionAction::Commit));
+        // SessionClient::send_with_cancel enqueues synchronously before awaiting its
+        // response. Both clients use the same FIFO coordinator command channel, so
+        // this poll puts COMMIT authorization and the off-loop pause before DROP ROLE.
+        // The saved DDL has not acquired the DDL lock, so DROP ROLE can complete.
+        assert!(futures::poll!(&mut commit).is_pending());
+        batch_execute(&admin, sql!("DROP ROLE single_statement_writer"))
+            .await
+            .unwrap();
+        assert!(futures::poll!(&mut commit).is_pending());
+        drop(remove_failpoint);
+        commit.await.unwrap_err()
+    })
+    .await
+    .expect("single-statement COMMIT did not finish after the role was dropped");
+    assert_contains!(error.to_string(), "concurrently dropped");
+    assert!(matches!(
+        session.session().transaction(),
+        TransactionStatus::Default
+    ));
+    for portal in ["begin", "ddl"] {
+        assert!(session.session().get_portal_unverified(portal).is_none());
+    }
+    tokio::time::timeout(Duration::from_secs(30), admin.batch_execute("SELECT 1"))
+        .await
+        .expect("coordinator did not survive the failed single-statement COMMIT")
+        .unwrap();
+}
+
 #[mz_ore::test]
 fn test_internal_console_proxy() {
     let server = test_util::TestHarness::default().start_blocking();

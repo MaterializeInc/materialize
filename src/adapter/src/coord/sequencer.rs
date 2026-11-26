@@ -670,14 +670,13 @@ impl Coordinator {
                         tx: sub_tx,
                     },
                 ));
-                let Ok(commit_response) = sub_rx.await else {
+                let Ok(mut commit_response) = sub_rx.await else {
                     // Coordinator went away.
                     return;
                 };
-                assert!(matches!(
-                    commit_response.session.transaction(),
-                    TransactionStatus::Default
-                ));
+                // COMMIT can fail authorization before clearing session state. This internal
+                // client must perform the same cleanup as SessionClient::end_transaction.
+                let _ = commit_response.session.clear_transaction();
                 // The fake, generated response was already sent to the user and we don't need to
                 // ever send an `Ok(result)` to the user, because they are expecting a response from
                 // a `COMMIT`. So, always send the `COMMIT`'s result if the original statement
