@@ -38,7 +38,7 @@ use mz_ore::task::{AbortOnDropHandle, JoinHandle};
 use semver::Version;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, oneshot, watch};
 use tracing::{Instrument, info, info_span, trace, warn};
 
@@ -386,11 +386,15 @@ impl<Out: Message, In: Message> Connection<Out, In> {
 
     /// Run a connection's recv task.
     async fn run_recv_task<R: AsyncRead + Unpin>(
-        mut reader: R,
+        reader: R,
         msg_tx: mpsc::UnboundedSender<In>,
         error_tx: ErrorTx,
         mut metrics: impl Metrics<Out, In>,
     ) {
+        // `read_message` reads the length prefix and the payload separately, and each read of
+        // the unbuffered socket is a syscall. Buffering serves both, and every message that
+        // arrived with them, from one read.
+        let mut reader = BufReader::new(reader);
         loop {
             match read_message(&mut reader).await {
                 Ok(msg) => {

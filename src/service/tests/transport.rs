@@ -120,6 +120,8 @@ fn test_bidirectional_communication() {
         out_tx.send("a".to_string())?;
         out_tx.send("b".to_string())?;
         out_tx.send("c".to_string())?;
+        // Larger than the connection's read buffer.
+        out_tx.send("x".repeat(10_000))?;
 
         assert_eq!(in_rx.recv().await, Some(1));
         assert_eq!(in_rx.recv().await, Some(2));
@@ -139,6 +141,7 @@ fn test_bidirectional_communication() {
         assert_eq!(client.recv().await?, Some("a".to_string()));
         assert_eq!(client.recv().await?, Some("b".to_string()));
         assert_eq!(client.recv().await?, Some("c".to_string()));
+        assert_eq!(client.recv().await?, Some("x".repeat(10_000)));
 
         // Wait for the server to finish.
         assert_eq!(client.recv().await?, Some("done".to_string()));
