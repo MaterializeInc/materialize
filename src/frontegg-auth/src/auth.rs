@@ -46,6 +46,9 @@ pub const DEFAULT_REFRESH_DROP_FACTOR: f64 = 0.05;
 /// billing-only roles, are rejected.
 pub const REQUIRED_PERMISSION: &str = "materialize.database.access";
 
+/// The Frontegg permission that makes a user a Materialize superuser.
+pub const SUPERUSER_PERMISSION: &str = "materialize.database.superuser";
+
 /// The maximum length of a user name.
 pub const MAX_USER_NAME_LENGTH: usize = 255;
 
@@ -62,8 +65,6 @@ pub struct AuthenticatorConfig {
     pub tenant_id: Option<Uuid>,
     /// Function to provide system time to validate exp (expires at) field of JWTs.
     pub now: NowFn,
-    /// Name of admin role.
-    pub admin_role: String,
     /// How many [`AppPassword`]s we'll track the last dropped time for.
     ///
     /// TODO(parkmycar): Wire this up to LaunchDarkly.
@@ -118,7 +119,6 @@ impl Authenticator {
                 validation,
                 decoding_key: config.decoding_key,
                 tenant_id: config.tenant_id,
-                admin_role: config.admin_role,
                 now: config.now,
                 active_sessions,
                 dropped_sessions,
@@ -133,15 +133,11 @@ impl Authenticator {
         args: FronteggCliArgs,
         registry: &MetricsRegistry,
     ) -> Result<Option<Self>, Error> {
-        let config = match (
-            args.frontegg_tenant,
-            args.frontegg_api_token_url,
-            args.frontegg_admin_role,
-        ) {
-            (None, None, None) => {
+        let config = match (args.frontegg_tenant, args.frontegg_api_token_url) {
+            (None, None) => {
                 return Ok(None);
             }
-            (Some(tenant_id), Some(admin_api_token_url), Some(admin_role)) => {
+            (Some(tenant_id), Some(admin_api_token_url)) => {
                 let decoding_key = match (args.frontegg_jwk, args.frontegg_jwk_file) {
                     (None, Some(path)) => {
                         let jwk = std::fs::read(&path)
@@ -161,7 +157,6 @@ impl Authenticator {
                     decoding_key,
                     tenant_id: Some(tenant_id),
                     now: mz_ore::now::SYSTEM_TIME.clone(),
-                    admin_role,
                     refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
                     refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
                 }
@@ -421,7 +416,6 @@ struct AuthenticatorInner {
     #[derivative(Debug = "ignore")]
     decoding_key: DecodingKey,
     tenant_id: Option<Uuid>,
-    admin_role: String,
     now: NowFn,
     /// Session tracking.
     active_sessions: Mutex<BTreeMap<AppPassword, AuthSession>>,
@@ -647,9 +641,11 @@ impl AuthenticatorInner {
             user: user.to_string(),
             user_id: msg.claims.user_id()?,
             tenant_id: msg.claims.tenant_id,
-            // The user is an administrator if they have the admin role that the
-            // `Authenticator` has been configured with.
-            is_admin: msg.claims.roles.contains(&self.admin_role),
+            is_admin: msg
+                .claims
+                .permissions
+                .iter()
+                .any(|p| p == SUPERUSER_PERMISSION),
             groups,
             _private: (),
         })

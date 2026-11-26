@@ -18,6 +18,7 @@ use std::path::PathBuf;
 pub use auth::{
     AuthSessionHandle, Authenticator, AuthenticatorConfig, ClaimMetadata, ClaimTokenType, Claims,
     DEFAULT_REFRESH_DROP_FACTOR, DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE, REQUIRED_PERMISSION,
+    SUPERUSER_PERMISSION,
 };
 pub use client::Client;
 pub use client::tokens::{ApiTokenArgs, ApiTokenResponse};
@@ -33,8 +34,8 @@ pub struct FronteggCliArgs {
     #[clap(
         long,
         env = "FRONTEGG_TENANT",
-        requires_all = &["frontegg_api_token_url", "frontegg_admin_role"],
-        value_name = "UUID",
+        requires = "frontegg_api_token_url",
+        value_name = "UUID"
     )]
     frontegg_tenant: Option<Uuid>,
     /// JWK used to validate JWTs during Frontegg authentication as a PEM public
@@ -48,9 +49,10 @@ pub struct FronteggCliArgs {
     /// The full URL (including path) to the Frontegg api-token endpoint.
     #[clap(long, env = "FRONTEGG_API_TOKEN_URL", requires = "frontegg_tenant")]
     frontegg_api_token_url: Option<String>,
-    /// The name of the admin role in Frontegg.
-    #[clap(long, env = "FRONTEGG_ADMIN_ROLE", requires = "frontegg_tenant")]
-    frontegg_admin_role: Option<String>,
+    /// Ignored. Superuser status comes from [`SUPERUSER_PERMISSION`].
+    // TODO: remove once cloud stops passing it. Until then, removing it fails startup.
+    #[clap(long = "frontegg-admin-role", env = "FRONTEGG_ADMIN_ROLE", hide = true)]
+    _frontegg_admin_role: Option<String>,
     /// Issuer URL of the Frontegg workspace, advertised in MCP OAuth discovery.
     #[clap(long, env = "FRONTEGG_OAUTH_ISSUER_URL")]
     frontegg_oauth_issuer_url: Option<String>,

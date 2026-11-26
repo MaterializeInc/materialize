@@ -43,7 +43,7 @@ use mz_environmentd::{WebSocketAuth, WebSocketResponse};
 use mz_frontegg_auth::{
     Authenticator as FronteggAuthentication, AuthenticatorConfig as FronteggConfig, ClaimMetadata,
     ClaimTokenType, Claims, DEFAULT_REFRESH_DROP_FACTOR, DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
-    REQUIRED_PERMISSION,
+    REQUIRED_PERMISSION, SUPERUSER_PERMISSION,
 };
 use mz_frontegg_mock::{
     FronteggMockServer, models::ApiToken, models::TenantApiTokenConfig, models::UserConfig,
@@ -532,7 +532,6 @@ async fn test_auth_expiry() {
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
-            admin_role: "mzadmin".to_string(),
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -819,7 +818,6 @@ async fn test_auth_base_require_tls_frontegg() {
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now,
-            admin_role: "mzadmin".to_string(),
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -2785,7 +2783,6 @@ async fn test_auth_admin_non_superuser() {
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now,
-            admin_role: admin_role.to_string(),
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -2891,7 +2888,10 @@ async fn test_auth_required_permission() {
     let role_permissions = BTreeMap::from([
         (
             admin_role.to_string(),
-            vec![REQUIRED_PERMISSION.to_string()],
+            vec![
+                REQUIRED_PERMISSION.to_string(),
+                SUPERUSER_PERMISSION.to_string(),
+            ],
         ),
         (
             member_role.to_string(),
@@ -2929,7 +2929,6 @@ async fn test_auth_required_permission() {
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now,
-            admin_role: admin_role.to_string(),
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -3082,7 +3081,6 @@ async fn test_auth_admin_superuser() {
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now,
-            admin_role: admin_role.to_string(),
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -3231,7 +3229,6 @@ async fn test_auth_admin_superuser_revoked() {
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now,
-            admin_role: admin_role.to_string(),
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -3419,7 +3416,6 @@ async fn test_auth_deduplication() {
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
-            admin_role: "mzadmin".to_string(),
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -3592,7 +3588,6 @@ async fn test_refresh_task_metrics() {
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
-            admin_role: "mzadmin".to_string(),
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -3757,7 +3752,6 @@ async fn test_superuser_can_alter_cluster() {
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now,
-            admin_role: admin_role.to_string(),
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -3881,7 +3875,6 @@ async fn test_refresh_dropped_session() {
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
-            admin_role: "mzadmin".to_string(),
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             // Make the refresh window very large so it's easy to test.
             refresh_drop_factor: 1.0,
@@ -4060,7 +4053,6 @@ async fn test_refresh_dropped_session_lru() {
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
-            admin_role: "mzadmin".to_string(),
             // Make the refresh LRU cache very small, and the window size very large so it's easy
             // to test.
             refresh_drop_lru_size: NonZeroUsize::new(1).expect("known non-zero"),
@@ -4251,7 +4243,6 @@ async fn test_transient_auth_failures() {
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
-            admin_role: "mzadmin".to_string(),
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -4376,7 +4367,6 @@ async fn test_transient_auth_failure_on_refresh() {
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
-            admin_role: "mzadmin".to_string(),
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -5403,7 +5393,6 @@ async fn test_auth_autoprovision_frontegg_audit_log() {
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
-            admin_role: "mzadmin".to_string(),
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },

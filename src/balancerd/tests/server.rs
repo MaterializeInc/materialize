@@ -119,7 +119,6 @@ async fn test_balancer() {
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
-            admin_role: "mzadmin".to_string(),
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
