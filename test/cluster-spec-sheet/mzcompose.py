@@ -2655,6 +2655,9 @@ class DdlCatalogScalingScenario(EnvdObjectsScalabilityScenario):
         duration: float,
         repeats: int,
         expected_configuration: str | None = None,
+        idle_duration: float | None = None,
+        tail_size: int | None = None,
+        tail_duration: float = 0,
     ):
         super().__init__()
         if (
@@ -2663,12 +2666,18 @@ class DdlCatalogScalingScenario(EnvdObjectsScalabilityScenario):
             or any(c < 1 for c in concurrencies)
             or duration <= 0
             or repeats < 1
+            or (idle_duration is not None and idle_duration <= 0)
+            or tail_duration < 0
+            or (tail_duration > 0 and (tail_size is None or tail_size < 1))
         ):
             raise ValueError("invalid DDL benchmark configuration")
         self.padding = padding
         self.concurrencies = concurrencies
         self.duration = duration
         self.repeats = repeats
+        self.idle_duration = duration if idle_duration is None else idle_duration
+        self.tail_size = tail_size
+        self.tail_duration = tail_duration
         self.expected_configuration = expected_configuration
         self.configuration: str | None = None
 
@@ -2794,6 +2803,8 @@ class DdlCatalogScalingScenario(EnvdObjectsScalabilityScenario):
                     output.flush()
                     if event["event"] == "phase_start":
                         print(f"DDL phase: {event}", flush=True)
+                    elif event["event"] == "idle_start":
+                        print(f"DDL idle: {event}", flush=True)
 
                 counts = runner.run_query(
                     "SELECT type, count(*) FROM mz_objects WHERE id LIKE 'u%%' GROUP BY type ORDER BY type",
@@ -2811,7 +2822,14 @@ class DdlCatalogScalingScenario(EnvdObjectsScalabilityScenario):
                 emit({"event": "catalog_counts", "user_objects_by_type": counts})
                 idle_start = time.time()
                 idle_clock = time.perf_counter()
-                time.sleep(self.duration)
+                emit(
+                    {
+                        "event": "idle_start",
+                        "start_unix": idle_start,
+                        "duration_seconds": self.idle_duration,
+                    }
+                )
+                time.sleep(self.idle_duration)
                 emit(
                     {
                         "event": "idle",
@@ -2863,6 +2881,17 @@ class DdlCatalogScalingScenario(EnvdObjectsScalabilityScenario):
                                             1000 * sum(latencies) / len(latencies)
                                         ),
                                     )
+                            if (
+                                self.tail_duration > 0
+                                and runner.scale == self.tail_size
+                            ):
+                                phase_context = {
+                                    "warmup": False,
+                                    "repetition": self.repeats,
+                                    "concurrency": concurrency,
+                                    "tail": True,
+                                }
+                                driver.run(kind, "cycle", duration=self.tail_duration)
                     finally:
                         driver.close()
                 self.record_configuration(runner, runner.scale, "after-measurement")
@@ -4289,6 +4318,9 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
     )
     parser.add_argument("--ddl-duration", type=float, default=60)
     parser.add_argument("--ddl-repeats", type=int, default=3)
+    parser.add_argument("--ddl-idle-duration", type=float)
+    parser.add_argument("--ddl-tail-size", type=int)
+    parser.add_argument("--ddl-tail-duration", type=float, default=0)
     parser.add_argument(
         "--ddl-configuration-sha256",
         help="Reject a DDL run whose captured configuration differs from this fingerprint.",
@@ -4333,6 +4365,11 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
     )
 
     args = parser.parse_args()
+    if (
+        args.ddl_tail_duration > 0
+        and args.ddl_tail_size not in args.envd_objects_scalability_sizes
+    ):
+        parser.error("--ddl-tail-size must be one of --envd-objects-scalability-sizes")
     QpsSweep(
         args.qps_concurrencies,
         args.qps_protocols,
@@ -4777,6 +4814,9 @@ SCENARIOS: list[ScenarioSpec] = [
                 a.ddl_duration,
                 a.ddl_repeats,
                 a.ddl_configuration_sha256,
+                a.ddl_idle_duration,
+                a.ddl_tail_size,
+                a.ddl_tail_duration,
             ),
             sizes=a.envd_objects_scalability_sizes,
         ),
