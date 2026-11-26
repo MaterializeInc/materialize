@@ -282,7 +282,7 @@ describe("store/environments", () => {
       );
     });
 
-    it("skips the region API for users without environment read", async () => {
+    it("skips the region API for users without database access", async () => {
       const regionRequest = vi.fn();
       server.use(
         http.get("*/api/region/*", () => {
@@ -295,7 +295,7 @@ describe("store/environments", () => {
         () =>
           usePollEnvironmentHealth({
             intervalMs: 5000,
-            canReadEnvironments: false,
+            canAccessDatabase: false,
           }),
         { wrapper: Wrapper },
       );

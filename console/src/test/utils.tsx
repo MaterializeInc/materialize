@@ -38,8 +38,8 @@ import {
   currentRegionIdAtom,
   DisabledEnvironment,
   EnabledEnvironment,
-  Environment,
   environmentsWithHealth,
+  LoadedEnvironment,
 } from "~/store/environments";
 import { lightTheme } from "~/theme";
 import { assert } from "~/util";
@@ -115,9 +115,9 @@ export const RenderWithPathname = ({
 export const setFakeEnvironment = async (
   set: Setter,
   regionId: string,
-  environment: Environment,
+  environment: LoadedEnvironment,
 ) => {
-  const environments = new Map<string, Environment>([
+  const environments = new Map<string, LoadedEnvironment>([
     [regionId, environment],
   ] as const);
   set(currentRegionIdAtom, regionId);

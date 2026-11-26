@@ -67,6 +67,10 @@ export function hasEnvironmentWritePermission(user: User | null): boolean {
   return hasPermission(user, "materialize.environment.write");
 }
 
+export function hasDatabaseAccessPermission(user: User | null): boolean {
+  return hasPermission(user, "materialize.database.access");
+}
+
 export function hasTenantApiTokenPermissions(user: User | null): boolean {
   return [
     "fe.secure.read.tenantApiTokens",

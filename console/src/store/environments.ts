@@ -157,11 +157,11 @@ export const maybeEnvironmentForRegion = atomFamily(
 export const fetchEnvironmentsWithHealth = async ({
   cloudRegions,
   appConfig,
-  canReadEnvironments = true,
+  canAccessDatabase = true,
 }: {
   cloudRegions: Map<string, CloudRegion>;
   appConfig: AppConfig;
-  canReadEnvironments?: boolean;
+  canAccessDatabase?: boolean;
 }) => {
   const result = new Map<string, Environment>();
 
@@ -200,9 +200,9 @@ export const fetchEnvironmentsWithHealth = async ({
 
   for (const region of cloudRegions.values()) {
     const regionId = getRegionId(region);
-    // The region API rejects users without environment.read, such as
-    // Billing Admins.
-    if (!canReadEnvironments) {
+    // Users without database access, such as Billing Admins, can't use a
+    // region, and the region API rejects them.
+    if (!canAccessDatabase) {
       result.set(regionId, { state: "disabled", errors: [] });
       continue;
     }
@@ -382,9 +382,9 @@ const allEnvironmentsHealthy = (environments?: EnvironmentsWithHealth) => {
  */
 export const usePollEnvironmentHealth = (options: {
   intervalMs: number;
-  canReadEnvironments?: boolean;
+  canAccessDatabase?: boolean;
 }) => {
-  const canReadEnvironments = options.canReadEnvironments ?? true;
+  const canAccessDatabase = options.canAccessDatabase ?? true;
   const mergeEnvironments = useSetAtom(mergeEnvironmentsWithHealth);
   const cloudRegions = useAtomValue(cloudRegionsSelector);
   const appConfig = useAtomValue(appConfigAtom);
@@ -401,7 +401,7 @@ export const usePollEnvironmentHealth = (options: {
     // already proven reachable, so frequent health checks just burn connection
     // slots. Poll fast until then so bootstrap transitions surface promptly.
     refetchInterval: (query) =>
-      !canReadEnvironments
+      !canAccessDatabase
         ? false
         : allEnvironmentsHealthy(query.state.data)
           ? options.intervalMs
@@ -417,7 +417,7 @@ export const usePollEnvironmentHealth = (options: {
           const result = await fetchEnvironmentsWithHealth({
             cloudRegions,
             appConfig,
-            canReadEnvironments,
+            canAccessDatabase,
           });
           mergeEnvironments(result);
           return result;

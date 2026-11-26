@@ -58,6 +58,7 @@ export const dummyValidUser: User = {
     { key: "fe.secure.delete.tenantApiTokens" },
     { key: "materialize.invoice.read" },
     { key: "materialize.billing.write" },
+    { key: "materialize.database.access" },
   ] as ITeamUserPermission[],
   profilePictureUrl: "https://cdn.com/image",
   roles: [

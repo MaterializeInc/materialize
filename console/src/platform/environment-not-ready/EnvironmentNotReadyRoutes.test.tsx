@@ -11,8 +11,8 @@ import { screen, waitFor } from "@testing-library/react";
 import React from "react";
 
 import server from "~/api/mocks/server";
-import { OpenApiFetchError } from "~/api/OpenApiFetchError";
 import { dummyValidUser } from "~/external-library-wrappers/__mocks__/frontegg";
+import { User } from "~/external-library-wrappers/frontegg";
 import {
   disabledEnvironment,
   healthyEnvironment,
@@ -28,10 +28,11 @@ const renderRoutes = (
   initialRouterEntries: string[],
   initializeState: InitializeStateFn = ({ set }) =>
     setFakeEnvironment(set, "aws/us-east-1", disabledEnvironment),
+  user: User = dummyValidUser,
 ) => {
   return renderComponent(
     <RenderWithPathname>
-      <EnvironmentNotReadyRoutes user={dummyValidUser} />
+      <EnvironmentNotReadyRoutes user={user} />
     </RenderWithPathname>,
     { initializeState, initialRouterEntries },
   );
@@ -52,20 +53,13 @@ describe("EnvironmentNotReadyRoutes", () => {
     ).toBeVisible();
   });
 
-  it("tells a user the region API rejects that they lack access", async () => {
-    await renderRoutes(["/enable-region"], ({ set }) =>
-      setFakeEnvironment(set, "aws/us-east-1", {
-        state: "unknown",
-        errors: [
-          {
-            message: "Get region failed",
-            details: new OpenApiFetchError(403, "Forbidden"),
-          },
-        ],
-      }),
-    );
+  it("tells a user without database access that they lack it", async () => {
+    await renderRoutes(["/enable-region"], undefined, {
+      ...dummyValidUser,
+      permissions: [],
+    });
     expect(
-      await screen.findByText("You don't have access to this region"),
+      await screen.findByText("You don't have database access"),
     ).toBeVisible();
   });
 
