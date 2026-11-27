@@ -2662,6 +2662,10 @@ where
             ExecuteCount::Count(count) => count,
         };
 
+        // Whether rows or notices were sent that are not flushed yet. They are flushed once nothing
+        // further is ready to be sent. A result that has already ended is therefore not flushed
+        // here, and leaves in one write with the response that completes the statement.
+        let mut unflushed = false;
         // Send rows while the client still wants them and there are still rows to send.
         loop {
             // Fetch next batch of rows, waiting for a possible requested
@@ -2709,6 +2713,9 @@ where
                     _ = time::sleep_until(
                         deadline.unwrap_or_else(tokio::time::Instant::now),
                     ), if deadline.is_some() => FetchResult::Rows(None),
+                    // Last in a biased select, so this is only chosen when none of the above
+                    // is ready and the next iteration would wait.
+                    _ = std::future::ready(()), if unflushed => FetchResult::Flush,
                 }
             };
 
@@ -2765,11 +2772,15 @@ where
                         break;
                     }
 
-                    self.conn.flush().await?;
+                    unflushed = true;
                 }
                 FetchResult::Notice(notice) => {
                     self.send(notice.into_response()).await?;
+                    unflushed = true;
+                }
+                FetchResult::Flush => {
                     self.conn.flush().await?;
+                    unflushed = false;
                 }
                 FetchResult::Error(err) => {
                     let text = err.message.clone();
@@ -3567,6 +3578,8 @@ fn is_txn_exit_stmt(stmt: Option<&Statement<Raw>>) -> bool {
 #[derive(Debug)]
 enum FetchResult {
     Rows(Option<Box<dyn RowIterator + Send + Sync>>),
+    /// Nothing else is ready and unflushed output is pending.
+    Flush,
     Canceled,
     Error(ErrorResponse),
     Notice(AdapterNotice),
