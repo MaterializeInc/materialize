@@ -920,6 +920,9 @@ pub mod topk_agg {
     use differential_dataflow::consolidation;
     use smallvec::SmallVec;
 
+    // Every (group, time) in the B-tree reserves these slots, even for a single update.
+    const INLINE_UPDATES: usize = 2;
+
     // TODO: This struct looks a lot like ChangeBatch and indeed its code is a modified version of
     // that. It would be nice to find a way to reuse some or all of the code from there.
     //
@@ -927,7 +930,7 @@ pub mod topk_agg {
     // the `Ord` trait which for the usage we do above means that we need to clone the `order_key`
     // for each record. It would be nice to also remove the need for cloning that piece of data
     pub struct TopKBatch<T> {
-        updates: SmallVec<[(T, i64); 16]>,
+        updates: SmallVec<[(T, i64); INLINE_UPDATES]>,
         clean: usize,
         limit: i64,
     }
@@ -1004,7 +1007,7 @@ pub mod topk_agg {
 
     impl<T: Ord> IntoIterator for TopKBatch<T> {
         type Item = (T, i64);
-        type IntoIter = smallvec::IntoIter<[(T, i64); 16]>;
+        type IntoIter = smallvec::IntoIter<[(T, i64); INLINE_UPDATES]>;
 
         fn into_iter(mut self) -> Self::IntoIter {
             self.compact();
