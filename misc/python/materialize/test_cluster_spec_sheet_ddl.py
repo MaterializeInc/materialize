@@ -9,6 +9,7 @@
 
 import argparse
 import runpy
+from typing import cast
 from unittest.mock import Mock
 
 import psycopg
@@ -227,13 +228,15 @@ class ProbeConnection(Connection):
 
 @pytest.mark.parametrize("fail", [False, True])
 @pytest.mark.parametrize("concurrency", [2, 8])
-def test_responsiveness_events_and_connections_are_isolated(monkeypatch, fail, concurrency):
+def test_responsiveness_events_and_connections_are_isolated(
+    monkeypatch, fail, concurrency
+):
     connections = []
 
     def connect():
         conn = ProbeConnection()
         connections.append(conn)
-        return conn
+        return cast(psycopg.Connection, conn)
 
     class Driver:
         def __init__(self, connect, concurrency, schema, cluster, emit):
@@ -272,7 +275,8 @@ def test_responsiveness_events_and_connections_are_isolated(monkeypatch, fail, c
     assert all(c.autocommit and c.prepare_threshold is None for c in connections[:3])
     assert all(e["event"].startswith("responsiveness_") for e in events)
     assert all(
-        e["condition"] == "view_load_replan" and e["concurrency"] == concurrency for e in events
+        e["condition"] == "view_load_replan" and e["concurrency"] == concurrency
+        for e in events
     )
     assert events[-1]["failed"] == fail
     assert {
@@ -288,7 +292,15 @@ def test_probe_setup_failure_closes_connections():
     conn = ProbeConnection()
     conn.execute = Mock(side_effect=psycopg.OperationalError("setup failed"))
     with pytest.raises(psycopg.OperationalError, match="setup failed"):
-        ddl.run_responsiveness(lambda: conn, "probe", "c", 20, "probes_only", 0, Mock())
+        ddl.run_responsiveness(
+            lambda: cast(psycopg.Connection, conn),
+            "probe",
+            "c",
+            20,
+            "probes_only",
+            0,
+            Mock(),
+        )
     assert conn.closed
 
 
