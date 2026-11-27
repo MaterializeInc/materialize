@@ -560,12 +560,24 @@ fn test_connection_cancelation() {
 #[test] // allow(test-attribute)
 #[cfg_attr(miri, ignore)] // too slow
 fn test_metrics() {
-    #[derive(Clone, Default)]
+    #[derive(Clone)]
     struct Metrics {
         bytes_sent: Arc<AtomicUsize>,
         bytes_received: Arc<AtomicUsize>,
-        messages_sent: Arc<AtomicU64>,
+        messages_sent: prometheus::IntCounter,
         messages_received: Arc<AtomicU64>,
+    }
+
+    impl Default for Metrics {
+        fn default() -> Self {
+            Self {
+                bytes_sent: Default::default(),
+                bytes_received: Default::default(),
+                messages_sent: prometheus::IntCounter::new("messages_sent", "Messages sent")
+                    .unwrap(),
+                messages_received: Default::default(),
+            }
+        }
     }
 
     impl transport::Metrics<String, String> for Metrics {
@@ -577,8 +589,8 @@ fn test_metrics() {
             self.bytes_received.fetch_add(len, Ordering::SeqCst);
         }
 
-        fn message_sent(&mut self, _msg: &String) {
-            self.messages_sent.fetch_add(1, Ordering::SeqCst);
+        fn sent_message_counter(&self, _msg: &String) -> Option<&prometheus::IntCounter> {
+            Some(&self.messages_sent)
         }
 
         fn message_received(&mut self, _msg: &String) {
@@ -616,7 +628,7 @@ fn test_metrics() {
 
         assert!(metrics.bytes_sent.load(Ordering::SeqCst) >= 63);
         assert!(metrics.bytes_received.load(Ordering::SeqCst) >= 44);
-        assert_eq!(metrics.messages_sent.load(Ordering::SeqCst), 1);
+        assert_eq!(metrics.messages_sent.get(), 1);
         assert_eq!(metrics.messages_received.load(Ordering::SeqCst), 1);
 
         Ok(())
@@ -639,7 +651,7 @@ fn test_metrics() {
 
         assert!(metrics.bytes_sent.load(Ordering::SeqCst) >= 44);
         assert!(metrics.bytes_received.load(Ordering::SeqCst) >= 63);
-        assert_eq!(metrics.messages_sent.load(Ordering::SeqCst), 1);
+        assert_eq!(metrics.messages_sent.get(), 1);
         assert_eq!(metrics.messages_received.load(Ordering::SeqCst), 1);
 
         Ok(())

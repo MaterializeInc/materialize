@@ -9,7 +9,43 @@
 
 //! Unit tests for CTP internals. Protocol-level tests live in `tests/transport.rs`.
 
-use super::{CONNECTION_CLOSED, error_channel};
+use std::io::Cursor;
+
+use prometheus::IntCounter;
+use tokio::sync::mpsc;
+
+use super::{CONNECTION_CLOSED, Connection, Metrics, error_channel, metrics};
+
+#[mz_ore::test(tokio::test)]
+async fn send_error_counts_only_complete_frames() {
+    #[derive(Clone)]
+    struct Counts([IntCounter; 2]);
+
+    impl Metrics<u8, ()> for Counts {
+        fn bytes_sent(&mut self, _: usize) {}
+        fn bytes_received(&mut self, _: usize) {}
+        fn message_received(&mut self, _: &()) {}
+        fn sent_message_counter(&self, msg: &u8) -> Option<&IntCounter> {
+            Some(&self.0[usize::from(*msg)])
+        }
+    }
+
+    let counts = Counts(["first", "second"].map(|name| IntCounter::new(name, name).unwrap()));
+    // Each frame has an eight-byte prefix and a one-byte payload.
+    let mut bytes = [0; 13];
+    let writer = metrics::Writer::new(Cursor::new(bytes.as_mut_slice()), counts.clone());
+    let (tx, rx) = mpsc::unbounded_channel();
+    tx.send(0).unwrap();
+    tx.send(1).unwrap();
+    tx.send(1).unwrap();
+    drop(tx);
+
+    let (error_tx, mut error_rx) = error_channel();
+    Connection::<u8, ()>::run_send_task(writer, rx, error_tx).await;
+    assert!(error_rx.collect().await.contains("send error"));
+    assert_eq!(counts.0[0].get(), 1);
+    assert_eq!(counts.0[1].get(), 0);
+}
 
 #[mz_ore::test(tokio::test)]
 async fn error_channel_keeps_first_error() {

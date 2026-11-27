@@ -9,14 +9,17 @@
 
 //! Metrics support for the Cluster Transport Protocol.
 
+use std::collections::VecDeque;
 use std::io;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::UNIX_EPOCH;
 
+use mz_ore::cast::CastFrom;
 use mz_ore::metric;
 use mz_ore::metrics::{DeleteOnDropGauge, MetricsRegistry, UIntGaugeVec};
+use prometheus::IntCounter;
 use prometheus::core::AtomicU64;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tracing::error;
@@ -27,8 +30,10 @@ pub trait Metrics<Out, In>: Clone + Send + 'static {
     fn bytes_sent(&mut self, len: usize);
     /// Callback reporting numbers of bytes received.
     fn bytes_received(&mut self, len: usize);
-    /// Callback reporting messages sent.
-    fn message_sent(&mut self, msg: &Out);
+    /// The counter to increment once the underlying writer accepts the complete frame.
+    fn sent_message_counter(&self, _msg: &Out) -> Option<&IntCounter> {
+        None
+    }
     /// Callback reporting messages received.
     fn message_received(&mut self, msg: &In);
 }
@@ -40,7 +45,6 @@ pub struct NoopMetrics;
 impl<Out, In> Metrics<Out, In> for NoopMetrics {
     fn bytes_sent(&mut self, _len: usize) {}
     fn bytes_received(&mut self, _len: usize) {}
-    fn message_sent(&mut self, _msg: &Out) {}
     fn message_received(&mut self, _msg: &In) {}
 }
 
@@ -97,7 +101,6 @@ impl<Out, In> Metrics<Out, In> for PerClusterServerMetrics {
         }
     }
 
-    fn message_sent(&mut self, _msg: &Out) {}
     fn message_received(&mut self, _msg: &In) {}
 }
 
@@ -150,6 +153,8 @@ pub(super) struct Writer<W, M, Out, In> {
     #[pin]
     writer: W,
     metrics: M,
+    bytes_written: u64,
+    pending: VecDeque<(u64, IntCounter)>,
     _phantom: PhantomData<(Out, In)>,
 }
 
@@ -158,7 +163,23 @@ impl<W, M, Out, In> Writer<W, M, Out, In> {
         Self {
             writer,
             metrics,
+            bytes_written: 0,
+            pending: VecDeque::new(),
             _phantom: PhantomData,
+        }
+    }
+}
+
+impl<W, M: Metrics<Out, In>, Out, In> Writer<W, M, Out, In> {
+    /// Records the end of a frame after it has been written into the outer buffer.
+    pub fn frame_written(&mut self, message: &Out, buffered: usize) {
+        if let Some(counter) = self.metrics.sent_message_counter(message) {
+            if buffered == 0 {
+                counter.inc();
+            } else {
+                let end = self.bytes_written + u64::cast_from(buffered);
+                self.pending.push_back((end, counter.clone()));
+            }
         }
     }
 }
@@ -180,6 +201,13 @@ where
             && *len > 0
         {
             this.metrics.bytes_sent(*len);
+            *this.bytes_written += u64::cast_from(*len);
+            while let Some((_, counter)) = this
+                .pending
+                .pop_front_if(|(end, _)| *end <= *this.bytes_written)
+            {
+                counter.inc();
+            }
         }
 
         poll

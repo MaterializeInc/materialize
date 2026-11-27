@@ -305,8 +305,7 @@ impl<Out: Message, In: Message> Connection<Out, In> {
         let span = tracing::Span::current();
         let send_task = mz_ore::task::spawn(
             || "ctp::send",
-            Self::run_send_task(writer, out_rx, error_tx.clone(), metrics.clone())
-                .instrument(span.clone()),
+            Self::run_send_task(writer, out_rx, error_tx.clone()).instrument(span.clone()),
         );
         let recv_task = mz_ore::task::spawn(
             || "ctp::recv",
@@ -350,10 +349,9 @@ impl<Out: Message, In: Message> Connection<Out, In> {
 
     /// Run a connection's send task.
     async fn run_send_task<W: AsyncWrite + Unpin>(
-        writer: W,
+        writer: metrics::Writer<W, impl Metrics<Out, In>, Out, In>,
         mut msg_rx: mpsc::UnboundedReceiver<Out>,
         error_tx: ErrorTx,
-        mut metrics: impl Metrics<Out, In>,
     ) {
         let mut writer = BufWriter::new(writer);
         loop {
@@ -373,19 +371,22 @@ impl<Out: Message, In: Message> Connection<Out, In> {
                 },
             };
 
-            let mut result = write_message(&mut writer, msg.as_ref()).await;
-            // Flushing once the queue is empty means no message waits for a later one.
-            if result.is_ok() && msg_rx.is_empty() {
-                result = writer.flush().await.map_err(Into::into);
-            }
-            if let Err(error) = result {
+            let send = async {
+                write_message(&mut writer, msg.as_ref()).await?;
+                if let Some(msg) = &msg {
+                    let buffered = writer.buffer().len();
+                    writer.get_mut().frame_written(msg, buffered);
+                }
+                // Flushing once the queue is empty means no message waits for a later one.
+                if msg_rx.is_empty() {
+                    writer.flush().await?;
+                }
+                Ok::<_, anyhow::Error>(())
+            };
+            if let Err(error) = send.await {
                 warn!("ctp: send error: {error}");
                 error_tx.report(format!("send error: {error}"));
                 break;
-            };
-
-            if let Some(msg) = &msg {
-                metrics.message_sent(msg);
             }
         }
     }
