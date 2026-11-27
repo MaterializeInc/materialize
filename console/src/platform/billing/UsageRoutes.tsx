@@ -102,7 +102,7 @@ const UsageRoutes = ({
   runtimeConfig: CloudRuntimeConfig;
   stripePromise: Promise<Stripe | null>;
 }) => {
-  const { organization } = useCurrentOrganization();
+  const { organization, error: organizationError } = useCurrentOrganization();
 
   const isUpgradedPlan = getIsUpgradedPlan(organization?.subscription?.type);
   const { data: invoices } = useRecentInvoices();
@@ -146,12 +146,20 @@ const UsageRoutes = ({
         <Route
           index
           element={
-            <Navigate
-              to={
-                shouldRedirectToBilling ? "/usage/billing" : "/usage/overview"
-              }
-              replace
-            />
+            // The plan type decides which routes exist, so wait for it. If the
+            // lookup fails, fall through to Overview.
+            organization || organizationError ? (
+              <Navigate
+                to={
+                  shouldRedirectToBilling
+                    ? "/usage/billing"
+                    : isUpgradedPlan
+                      ? "/usage/overview"
+                      : "/usage/pricing"
+                }
+                replace
+              />
+            ) : null
           }
         />
       </Route>

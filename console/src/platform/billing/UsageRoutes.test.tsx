@@ -23,6 +23,8 @@ import type {
   ITeamUserPermission,
   User,
 } from "~/external-library-wrappers/frontegg";
+import { invoiceQueryKeys } from "~/platform/billing/queries";
+import { getQueryClient } from "~/queryClient";
 import {
   createProviderWrapper,
   healthyEnvironment,
@@ -46,8 +48,20 @@ vi.mock("./UsagePage", () => ({
 vi.mock("./BillingPage", () => ({
   default: () => <div>Billing Page</div>,
 }));
+vi.mock("./PricingPage", () => ({
+  default: () => <div>Pricing Page</div>,
+}));
 
-const adminUser: User = {
+const billingAdminUser: User = {
+  ...dummyValidUser,
+  permissions: [
+    { key: "materialize.invoice.read" } as ITeamUserPermission,
+    { key: "materialize.billing.write" } as ITeamUserPermission,
+  ],
+  roles: [],
+};
+
+const noBillingWriteUser: User = {
   ...dummyValidUser,
   permissions: [
     { key: "materialize.environment.write" } as ITeamUserPermission,
@@ -58,12 +72,13 @@ const adminUser: User = {
 
 // `auth`/`authActions` aren't exercised by this test (UsageRoutes only reads
 // `isImpersonating` and `user`); the shapes below just satisfy the type.
-const runtimeConfig = {
-  isImpersonating: false as const,
-  user: adminUser,
-  auth: { tenantsState: { tenants: [] } },
-  authActions: { switchTenant: vi.fn() },
-} as unknown as CloudRuntimeConfig;
+const buildRuntimeConfig = (user: User) =>
+  ({
+    isImpersonating: false as const,
+    user,
+    auth: { tenantsState: { tenants: [] } },
+    authActions: { switchTenant: vi.fn() },
+  }) as unknown as CloudRuntimeConfig;
 
 const stripePromise = Promise.resolve(null);
 
@@ -91,7 +106,7 @@ const oneInvoice = [
   },
 ];
 
-const renderAt = async (path: string) => {
+const renderAt = async (path: string, user: User = billingAdminUser) => {
   const Wrapper = await createProviderWrapper({
     initializeState: ({ set }) =>
       setFakeEnvironment(set, "aws/us-east-1", healthyEnvironment),
@@ -107,7 +122,7 @@ const renderAt = async (path: string) => {
           path="usage/*"
           element={
             <UsageRoutes
-              runtimeConfig={runtimeConfig}
+              runtimeConfig={buildRuntimeConfig(user)}
               stripePromise={stripePromise}
             />
           }
@@ -132,6 +147,43 @@ describe("UsageRoutes", () => {
     await waitFor(() => {
       expect(screen.getByRole("link", { name: "Billing" })).toBeVisible();
     });
+  });
+
+  it("hides Billing from a user without billing write permission", async () => {
+    server.use(
+      buildCloudOrganizationsResponse({ payload: buildOrganization() }),
+      buildInvoicesResponse({ invoices: oneInvoice }),
+    );
+    // Seeded so Billing's invoice gate is already open on first render.
+    getQueryClient().setQueryData(invoiceQueryKeys.all(), oneInvoice);
+    await renderAt("/usage/overview", noBillingWriteUser);
+
+    expect(await screen.findByRole("link", { name: "Overview" })).toBeVisible();
+    expect(screen.queryByRole("link", { name: "Billing" })).toBeNull();
+  });
+
+  it("lands on Overview when the organization lookup fails", async () => {
+    server.use(
+      buildCloudOrganizationsResponse({ status: 503 }),
+      buildInvoicesResponse({ invoices: oneInvoice }),
+    );
+    await renderAt("/usage");
+
+    expect(await screen.findByText("Usage Page")).toBeVisible();
+  });
+
+  it("lands an evaluation org without Billing on Pricing", async () => {
+    server.use(
+      buildCloudOrganizationsResponse({
+        payload: buildOrganization({
+          subscription: { type: "evaluation", marketplace: "direct" },
+        }),
+      }),
+      buildInvoicesResponse({ invoices: [] }),
+    );
+    await renderAt("/usage", noBillingWriteUser);
+
+    expect(await screen.findByText("Pricing Page")).toBeVisible();
   });
 
   it("shows Billing for an evaluation org even with no invoices yet", async () => {

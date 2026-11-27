@@ -10,8 +10,15 @@
 import { screen } from "@testing-library/react";
 import React from "react";
 
+import { buildCloudOrganizationsResponse } from "~/api/mocks/cloudGlobalApiHandlers";
+import server from "~/api/mocks/server";
 import { CloudAppConfig, SelfManagedAppConfig } from "~/config/AppConfig";
 import { appConfigAtom } from "~/config/store";
+import { dummyValidUser } from "~/external-library-wrappers/__mocks__/frontegg";
+import {
+  type ITeamUserPermission,
+  useAuthUser,
+} from "~/external-library-wrappers/frontegg";
 import {
   healthyEnvironment,
   renderComponent,
@@ -34,6 +41,9 @@ vi.mock("~/platform/query-history/QueryHistoryRoutes", () => ({
 vi.mock("~/platform/support/SupportPage", () => ({
   default: () => <div>Support page</div>,
 }));
+vi.mock("~/platform/billing/UsageRoutes", () => ({
+  default: () => <div>Usage page</div>,
+}));
 vi.mock("~/hooks/useFlags", () => ({
   useFlags: () => ({ "support-page-cns-147": true }),
 }));
@@ -42,6 +52,60 @@ const SELF_MANAGED_REGION_ID = "local/flexible-deployment";
 const SELF_MANAGED_REGION_SLUG = "local-flexible-deployment";
 
 describe("AuthenticatedRoutes", () => {
+  afterEach(() => {
+    vi.mocked(useAuthUser).mockReset();
+  });
+
+  const renderAsBillingAdmin = () => {
+    vi.mocked(useAuthUser).mockReturnValue({
+      ...dummyValidUser,
+      permissions: [
+        { key: "materialize.invoice.read" },
+        { key: "materialize.billing.write" },
+      ] as ITeamUserPermission[],
+      roles: [],
+    });
+    return renderComponent(<AuthenticatedRoutes />, {
+      initialRouterEntries: ["/"],
+      initializeState: async ({ set }) => {
+        set(appConfigAtom, new CloudAppConfig());
+        await setFakeEnvironment(set, "aws/us-east-1", {
+          state: "disabled",
+          errors: [],
+        });
+      },
+    });
+  };
+
+  it("sends a Billing Admin without environment access to usage", async () => {
+    await renderAsBillingAdmin();
+
+    expect(await screen.findByText("Usage page")).toBeVisible();
+  });
+
+  it("shows a Billing Admin the blocked notice for a blocked organization", async () => {
+    server.use(
+      buildCloudOrganizationsResponse({
+        payload: {
+          id: "org_id",
+          name: "Test Organization",
+          blocked: true,
+          onboarded: true,
+          trialExpiresAt: null,
+          subscription: { type: "capacity", marketplace: "direct" },
+        },
+      }),
+    );
+    await renderAsBillingAdmin();
+
+    expect(
+      await screen.findByText(
+        "Your Materialize plan has lapsed or is upgrading",
+      ),
+    ).toBeVisible();
+    expect(screen.queryByText("Usage page")).not.toBeInTheDocument();
+  });
+
   it("renders query history in self-managed deployments", async () => {
     await renderComponent(<AuthenticatedRoutes />, {
       initialRouterEntries: [

@@ -67,6 +67,10 @@ export function hasEnvironmentWritePermission(user: User | null): boolean {
   return hasPermission(user, "materialize.environment.write");
 }
 
+export function hasDatabaseAccessPermission(user: User | null): boolean {
+  return hasPermission(user, "materialize.database.access");
+}
+
 export function hasTenantApiTokenPermissions(user: User | null): boolean {
   return [
     "fe.secure.read.tenantApiTokens",
@@ -79,6 +83,15 @@ export function hasInvoiceReadPermission(
   user: User | null | undefined,
 ): boolean {
   return hasPermission(user, "materialize.invoice.read");
+}
+
+export function hasBillingWritePermission(user: User | null): boolean {
+  return hasPermission(user, "materialize.billing.write");
+}
+
+/** Whether the user can open `/usage/billing`, which also requires invoice read. */
+export function canManageBilling(user: User | null): boolean {
+  return hasBillingWritePermission(user) && hasInvoiceReadPermission(user);
 }
 
 export function isSuperUser(user: User | null): boolean {
@@ -238,9 +251,9 @@ export function useCanViewBilling({
     return false;
   }
 
-  const isOrgAdmin = hasEnvironmentWritePermission(runtimeConfig.user);
-
-  return !!flags["billing-ui-3756"] && isOrgAdmin;
+  return (
+    !!flags["billing-ui-3756"] && hasBillingWritePermission(runtimeConfig.user)
+  );
 }
 
 /**

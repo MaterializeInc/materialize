@@ -157,9 +157,11 @@ export const maybeEnvironmentForRegion = atomFamily(
 export const fetchEnvironmentsWithHealth = async ({
   cloudRegions,
   appConfig,
+  canAccessDatabase = true,
 }: {
   cloudRegions: Map<string, CloudRegion>;
   appConfig: AppConfig;
+  canAccessDatabase?: boolean;
 }) => {
   const result = new Map<string, Environment>();
 
@@ -198,6 +200,12 @@ export const fetchEnvironmentsWithHealth = async ({
 
   for (const region of cloudRegions.values()) {
     const regionId = getRegionId(region);
+    // Users without database access, such as Billing Admins, can't use a
+    // region, and the region API rejects them.
+    if (!canAccessDatabase) {
+      result.set(regionId, { state: "disabled", errors: [] });
+      continue;
+    }
     await Sentry.startSpan(
       {
         name: "fetch-environment-health",
@@ -372,7 +380,11 @@ const allEnvironmentsHealthy = (environments?: EnvironmentsWithHealth) => {
 /**
  * Polls for region information and environment health.
  */
-export const usePollEnvironmentHealth = (options: { intervalMs: number }) => {
+export const usePollEnvironmentHealth = (options: {
+  intervalMs: number;
+  canAccessDatabase?: boolean;
+}) => {
+  const canAccessDatabase = options.canAccessDatabase ?? true;
   const mergeEnvironments = useSetAtom(mergeEnvironmentsWithHealth);
   const cloudRegions = useAtomValue(cloudRegionsSelector);
   const appConfig = useAtomValue(appConfigAtom);
@@ -389,9 +401,11 @@ export const usePollEnvironmentHealth = (options: { intervalMs: number }) => {
     // already proven reachable, so frequent health checks just burn connection
     // slots. Poll fast until then so bootstrap transitions surface promptly.
     refetchInterval: (query) =>
-      allEnvironmentsHealthy(query.state.data)
-        ? options.intervalMs
-        : BOOTSTRAP_POLL_INTERVAL_MS,
+      !canAccessDatabase
+        ? false
+        : allEnvironmentsHealthy(query.state.data)
+          ? options.intervalMs
+          : BOOTSTRAP_POLL_INTERVAL_MS,
     queryFn: async () => {
       return Sentry.startSpan(
         {
@@ -403,6 +417,7 @@ export const usePollEnvironmentHealth = (options: { intervalMs: number }) => {
           const result = await fetchEnvironmentsWithHealth({
             cloudRegions,
             appConfig,
+            canAccessDatabase,
           });
           mergeEnvironments(result);
           return result;

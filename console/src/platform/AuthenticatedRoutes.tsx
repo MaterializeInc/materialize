@@ -20,6 +20,7 @@ import {
 import { AppPasswordRoutes } from "~/access/AppPasswordRoutes";
 import { LicenseRoutes } from "~/access/license/LicenseRoutes";
 import {
+  hasDatabaseAccessPermission,
   hasInvoiceReadPermission,
   useMaybeCurrentOrganizationId,
 } from "~/api/auth";
@@ -121,9 +122,18 @@ const EnvironmentNotReadyRoutesWrapper = () => {
         if (runtimeConfig.isImpersonating) {
           return <RedirectToHome />;
         }
+        // Users without database access, such as Billing Admins, have no
+        // usable region. Send them to usage instead. Requiring invoice read
+        // avoids a loop, since the usage routes redirect home without it.
+        const { user } = runtimeConfig;
         return (
           <RestrictIfBlocked>
-            <EnvironmentNotReadyRoutes user={runtimeConfig.user} />
+            {!hasDatabaseAccessPermission(user) &&
+            hasInvoiceReadPermission(user) ? (
+              <Navigate to="/usage" replace />
+            ) : (
+              <EnvironmentNotReadyRoutes user={user} />
+            )}
           </RestrictIfBlocked>
         );
       }}

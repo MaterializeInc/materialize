@@ -282,6 +282,33 @@ describe("store/environments", () => {
       );
     });
 
+    it("skips the region API for users without database access", async () => {
+      const regionRequest = vi.fn();
+      server.use(
+        http.get("*/api/region/*", () => {
+          regionRequest();
+          return HttpResponse.json({});
+        }),
+      );
+      const store = getStore();
+      renderHook(
+        () =>
+          usePollEnvironmentHealth({
+            intervalMs: 5000,
+            canAccessDatabase: false,
+          }),
+        { wrapper: Wrapper },
+      );
+      await waitFor(() => {
+        expect(store.get(environmentsWithHealth)).toBeTruthy();
+      });
+      expect(store.get(environmentsWithHealth)?.get("aws/us-east-1")).toEqual({
+        state: "disabled",
+        errors: [],
+      });
+      expect(regionRequest).not.toHaveBeenCalled();
+    });
+
     it("correctly reports environments that are pending enablement as creating", async () => {
       server.use(buildPendingRegionResponse("enablement-pending"));
       const store = getStore();

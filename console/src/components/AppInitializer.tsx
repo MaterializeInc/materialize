@@ -11,6 +11,7 @@ import React from "react";
 
 import { useSegmentPageTracking } from "~/analytics/segment";
 import useHubspotNpsSurvey from "~/analytics/useHubspotNpsSurvey";
+import { hasDatabaseAccessPermission } from "~/api/auth";
 import { AppConfigSwitch } from "~/config/AppConfigSwitch";
 import { User } from "~/external-library-wrappers/frontegg";
 import useIntercom from "~/hooks/useIntercom";
@@ -27,9 +28,9 @@ import { useTrackFocus } from "~/store/focus";
 import IncidentStatusWidget from "./IncidentStatusWidget/IncidentStatusWidget";
 
 /** Initializes global features, rendered after frontegg token is available if Cloud */
-const useAppInitializer = () => {
+const useAppInitializer = ({ canAccessDatabase = true } = {}) => {
   useTrackFocus();
-  usePollEnvironmentHealth({ intervalMs: 30_000 });
+  usePollEnvironmentHealth({ intervalMs: 30_000, canAccessDatabase });
   useShowEnvironmentErrors();
   useSetInitialRegion();
   usePrivileges();
@@ -41,7 +42,9 @@ const useAppInitializer = () => {
 };
 
 export const CloudAppInitializer = ({ user }: { user: User }) => {
-  useAppInitializer();
+  useAppInitializer({
+    canAccessDatabase: hasDatabaseAccessPermission(user),
+  });
   useHubspotNpsSurvey({ user });
   useSegmentPageTracking({ user });
   useSentryIdentifyOrganization({ user });

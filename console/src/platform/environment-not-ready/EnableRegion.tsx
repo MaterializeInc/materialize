@@ -12,6 +12,7 @@ import { useAtom, useAtomValue } from "jotai";
 import React from "react";
 import { Navigate } from "react-router-dom";
 
+import { hasDatabaseAccessPermission } from "~/api/auth";
 import ErrorBox from "~/components/ErrorBox";
 import { RegionSelectorForm } from "~/components/RegionSelectorForm";
 import TextLink from "~/components/TextLink";
@@ -50,6 +51,23 @@ const EnableRegionContent = ({ user }: { user: User }) => {
   const [selectedRegion, setSelectedRegion] = React.useState<string | null>(
     null,
   );
+
+  if (!hasDatabaseAccessPermission(user)) {
+    return (
+      <VStack spacing={4} align="flex-start" maxWidth="500px">
+        <Text as="h1" textStyle="heading-lg">
+          You don&apos;t have database access
+        </Text>
+        <Text
+          textStyle="text-base"
+          fontSize="16px"
+          color={colors.foreground.secondary}
+        >
+          Ask an organization admin to grant you access.
+        </Text>
+      </VStack>
+    );
+  }
 
   if (Array.from(environments.values()).every((e) => e.state === "disabled")) {
     return (

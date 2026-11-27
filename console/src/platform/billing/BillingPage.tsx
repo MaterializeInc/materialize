@@ -41,7 +41,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import React, { useMemo, useState } from "react";
 
 import {
-  hasEnvironmentWritePermission,
+  hasBillingWritePermission,
   queryKeys as authQueryKeys,
   useCurrentOrganization,
 } from "~/api/auth";
@@ -556,7 +556,7 @@ const CTABanner = ({
     </Button>
   ) : (
     <Text textStyle="text-small" as="i">
-      Contact an organization admin to upgrade.
+      Contact an organization or billing admin to upgrade.
     </Text>
   );
 
@@ -620,7 +620,7 @@ const BillingPage = ({
     refetchInterval: 5000,
   });
   const toast = useToast();
-  const canManagePayments = hasEnvironmentWritePermission(user);
+  const canManagePayments = hasBillingWritePermission(user);
 
   const { data: clientSecret, mutate: initializePayment } =
     useInitializeSetupIntent();

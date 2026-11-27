@@ -21,6 +21,7 @@ import React, { PropsWithChildren } from "react";
 import { Link } from "react-router-dom";
 
 import {
+  canManageBilling,
   hasEnvironmentWritePermission,
   useCurrentOrganization,
 } from "~/api/auth";
@@ -159,7 +160,7 @@ const BlockedStateContent = ({ user }: { user: User }) => {
               Contact support
             </Button>
           </SupportLink>
-          {isOrgAdmin && (
+          {canManageBilling(user) && (
             <Button as={Link} to="/usage/billing" variant="primary" size="sm">
               Upgrade plan
             </Button>

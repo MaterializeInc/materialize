@@ -22,13 +22,13 @@ import { renderComponent } from "~/test/utils";
 
 import BillingPage from "./BillingPage";
 
-const adminUser: User = {
+const billingAdminUser: User = {
   ...dummyValidUser,
   permissions: [
-    { key: "materialize.environment.write" } as ITeamUserPermission,
-    { key: "materialize.environment.read" } as ITeamUserPermission,
     { key: "materialize.invoice.read" } as ITeamUserPermission,
+    { key: "materialize.billing.write" } as ITeamUserPermission,
   ],
+  roles: [],
 };
 
 const nonAdminUser: User = {
@@ -75,14 +75,14 @@ describe("BillingPage", () => {
     server.resetHandlers();
   });
 
-  describe("admin user", () => {
+  describe("billing admin user", () => {
     it("shows payment management actions", async () => {
       server.use(
         buildCloudOrganizationsResponse({ payload: buildOrganization() }),
       );
 
       await renderComponent(
-        <BillingPage user={adminUser} stripePromise={stripePromise} />,
+        <BillingPage user={billingAdminUser} stripePromise={stripePromise} />,
       );
 
       await waitFor(() => {
@@ -111,7 +111,7 @@ describe("BillingPage", () => {
       );
 
       await renderComponent(
-        <BillingPage user={adminUser} stripePromise={stripePromise} />,
+        <BillingPage user={billingAdminUser} stripePromise={stripePromise} />,
       );
 
       await waitFor(() => {
@@ -127,7 +127,7 @@ describe("BillingPage", () => {
       );
 
       await renderComponent(
-        <BillingPage user={adminUser} stripePromise={stripePromise} />,
+        <BillingPage user={billingAdminUser} stripePromise={stripePromise} />,
       );
 
       await waitFor(() => {
@@ -135,7 +135,7 @@ describe("BillingPage", () => {
       });
 
       expect(
-        screen.queryByText(/Only organization admins can manage/),
+        screen.queryByText(/Only organization and billing admins can manage/),
       ).not.toBeInTheDocument();
     });
   });
@@ -172,7 +172,7 @@ describe("BillingPage", () => {
 
       expect(
         await screen.findByText(
-          "Only organization admins can manage payment methods. Contact an admin to make changes.",
+          "Only organization and billing admins can manage payment methods. Contact an admin to make changes.",
         ),
       ).toBeVisible();
     });
@@ -196,7 +196,7 @@ describe("BillingPage", () => {
       );
 
       const contactMessages = await screen.findAllByText(
-        "Contact an organization admin to upgrade.",
+        "Contact an organization or billing admin to upgrade.",
       );
       expect(contactMessages.length).toBeGreaterThanOrEqual(1);
     });

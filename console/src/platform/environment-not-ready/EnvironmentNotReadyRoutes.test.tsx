@@ -12,6 +12,7 @@ import React from "react";
 
 import server from "~/api/mocks/server";
 import { dummyValidUser } from "~/external-library-wrappers/__mocks__/frontegg";
+import { User } from "~/external-library-wrappers/frontegg";
 import {
   disabledEnvironment,
   healthyEnvironment,
@@ -27,10 +28,11 @@ const renderRoutes = (
   initialRouterEntries: string[],
   initializeState: InitializeStateFn = ({ set }) =>
     setFakeEnvironment(set, "aws/us-east-1", disabledEnvironment),
+  user: User = dummyValidUser,
 ) => {
   return renderComponent(
     <RenderWithPathname>
-      <EnvironmentNotReadyRoutes user={dummyValidUser} />
+      <EnvironmentNotReadyRoutes user={user} />
     </RenderWithPathname>,
     { initializeState, initialRouterEntries },
   );
@@ -48,6 +50,16 @@ describe("EnvironmentNotReadyRoutes", () => {
       await screen.findByText(
         "Where would you like to run your Materialize environment?",
       ),
+    ).toBeVisible();
+  });
+
+  it("tells a user without database access that they lack it", async () => {
+    await renderRoutes(["/enable-region"], undefined, {
+      ...dummyValidUser,
+      permissions: [],
+    });
+    expect(
+      await screen.findByText("You don't have database access"),
     ).toBeVisible();
   });
 
