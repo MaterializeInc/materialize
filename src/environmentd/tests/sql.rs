@@ -270,7 +270,8 @@ async fn test_view_commit_reads_cancellation_and_competing_mutation() {
             let (joined_tx, joined_rx) = oneshot::channel();
             let joined_tx = Mutex::new(Some(joined_tx));
             fail::cfg_callback("view_commit_join", move || {
-                if let Some(tx) = joined_tx.lock().unwrap().take() {
+                let tx = joined_tx.lock().unwrap().take();
+                if let Some(tx) = tx {
                     let _ = tx.send(());
                 }
             })
@@ -282,7 +283,10 @@ async fn test_view_commit_reads_cancellation_and_competing_mutation() {
                 limit.to_string(),
             )])));
             assert!(futures::poll!(&mut update).is_pending());
-            joined_rx.await.unwrap();
+            tokio::select! {
+                joined = joined_rx => joined.unwrap(),
+                result = &mut update => panic!("competing mutation completed without joining: {result:?}"),
+            }
             assert!(
                 !create.is_finished(),
                 "candidate retired while its worker was parked"
@@ -344,7 +348,10 @@ async fn test_view_commit_precedes_fresh_ddl_snapshot() {
             Sql::new("ALTER VIEW snapshot_base RENAME TO snapshot_renamed"),
         ));
         assert!(futures::poll!(&mut rename).is_pending());
-        joined.await.unwrap();
+        tokio::select! {
+            joined = joined => joined.unwrap(),
+            result = &mut rename => panic!("DDL snapshot completed without joining: {result:?}"),
+        }
         assert!(!create.is_finished());
         join_release.release();
         release.release();
