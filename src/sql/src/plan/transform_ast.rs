@@ -119,7 +119,7 @@ impl<'a> FuncRewriter<'a> {
         order_by: Vec<OrderByExpr<Aug>>,
         filter: Option<Box<Expr<Aug>>>,
         distinct: bool,
-        over: Option<WindowSpec<Aug>>,
+        over: Option<Box<WindowSpec<Aug>>>,
     ) -> Expr<Aug> {
         if self.rewriting_table_factor && self.status.is_ok() {
             self.status = Err(PlanError::Unstructured(
@@ -143,7 +143,7 @@ impl<'a> FuncRewriter<'a> {
         expr: Expr<Aug>,
         filter: Option<Box<Expr<Aug>>>,
         distinct: bool,
-        over: Option<WindowSpec<Aug>>,
+        over: Option<Box<WindowSpec<Aug>>>,
     ) -> Expr<Aug> {
         let sum = self
             .plan_agg(
@@ -177,7 +177,7 @@ impl<'a> FuncRewriter<'a> {
         expr: Expr<Aug>,
         filter: Option<Box<Expr<Aug>>>,
         distinct: bool,
-        over: Option<WindowSpec<Aug>>,
+        over: Option<Box<WindowSpec<Aug>>>,
     ) -> Expr<Aug> {
         let sum = self
             .plan_agg(
@@ -211,7 +211,7 @@ impl<'a> FuncRewriter<'a> {
         filter: Option<Box<Expr<Aug>>>,
         distinct: bool,
         sample: bool,
-        over: Option<WindowSpec<Aug>>,
+        over: Option<Box<WindowSpec<Aug>>>,
     ) -> Expr<Aug> {
         // N.B. this variance calculation uses the "textbook" algorithm, which
         // is known to accumulate problematic amounts of error. The numerically
@@ -352,7 +352,7 @@ impl<'a> FuncRewriter<'a> {
         filter: Option<Box<Expr<Aug>>>,
         distinct: bool,
         sample: bool,
-        over: Option<WindowSpec<Aug>>,
+        over: Option<Box<WindowSpec<Aug>>>,
     ) -> Expr<Aug> {
         self.plan_variance(expr, filter, distinct, sample, over)
             .call_unary(
@@ -366,7 +366,7 @@ impl<'a> FuncRewriter<'a> {
         expr: Expr<Aug>,
         filter: Option<Box<Expr<Aug>>>,
         distinct: bool,
-        over: Option<WindowSpec<Aug>>,
+        over: Option<Box<WindowSpec<Aug>>>,
     ) -> Expr<Aug> {
         // The code below converts `bool_and(x)` into:
         //
@@ -396,7 +396,7 @@ impl<'a> FuncRewriter<'a> {
         expr: Expr<Aug>,
         filter: Option<Box<Expr<Aug>>>,
         distinct: bool,
-        over: Option<WindowSpec<Aug>>,
+        over: Option<Box<WindowSpec<Aug>>>,
     ) -> Expr<Aug> {
         // The code below converts `bool_or(x)`z into:
         //

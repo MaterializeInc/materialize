@@ -2248,7 +2248,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 ),
                 args: self.fold_function_args(node.args),
                 filter: node.filter.map(|expr| Box::new(self.fold_expr(*expr))),
-                over: node.over.map(|over| self.fold_window_spec(over)),
+                over: node.over.map(|over| Box::new(self.fold_window_spec(*over))),
                 distinct: node.distinct,
             }
         })

@@ -1337,7 +1337,7 @@ pub struct Function<T: AstInfo> {
     pub args: FunctionArgs<T>,
     // aggregate functions may specify e.g. `COUNT(DISTINCT X) FILTER (WHERE ...)`
     pub filter: Option<Box<Expr<T>>>,
-    pub over: Option<WindowSpec<T>>,
+    pub over: Option<Box<WindowSpec<T>>>,
     // aggregate functions may specify eg `COUNT(DISTINCT x)`
     pub distinct: bool,
 }
