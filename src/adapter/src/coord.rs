@@ -1004,6 +1004,7 @@ pub enum TargetCluster {
 /// Result types for each stage of a sequence.
 pub(crate) enum StageResult<T, C = ExecuteContext> {
     /// Transfers the context to a coordinator-owned continuation.
+    /// The callback owns retirement, wakeup, and cancellation cleanup.
     Deferred(Box<dyn FnOnce(&mut Coordinator, C) + Send>),
     /// A task was spawned that will return the next stage.
     Handle(JoinHandle<Result<T, AdapterError>>),
@@ -4205,7 +4206,7 @@ impl Coordinator {
         self.optimizer_metrics.clone()
     }
 
-    /// Obtain a writeable Catalog reference.
+    /// Obtain a writeable Catalog reference after settling any in-flight view commit.
     fn catalog_mut(&mut self) -> &mut Catalog {
         mz_ore::soft_assert_or_log!(
             self.pending_view_commit.is_none(),
