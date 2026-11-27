@@ -3048,7 +3048,7 @@
     {
       "name": "persist_compaction_memory_bound_bytes",
       "typeName": "unsigned integer",
-      "default": "1073741824",
+      "default": "536870912",
       "description": "Attempt to limit compaction to this amount of memory.",
       "scope": "environment",
       "userVisible": false,
