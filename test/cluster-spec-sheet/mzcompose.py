@@ -15,6 +15,7 @@ import argparse
 import csv
 import functools
 import glob
+import hashlib
 import itertools
 import json
 import os
@@ -36,6 +37,7 @@ from psycopg import InterfaceError, OperationalError
 from psycopg import sql as psycopg_sql
 
 from materialize import MZ_ROOT, buildkite, pgbench
+from materialize.cluster_spec_sheet_ddl import DdlMeasurement
 from materialize.cluster_spec_sheet_qps import (
     QPS_CONCURRENCIES,
     QpsSweep,
@@ -148,6 +150,7 @@ SCENARIO_SOURCE_INGESTION_STRONG = "source_ingestion_strong"
 SCENARIO_QPS_ENVD_STRONG_SCALING = "qps_envd_strong_scaling"
 SCENARIO_COPY_FROM_STDIN_ENVD_STRONG_SCALING = "copy_from_stdin_envd_strong_scaling"
 SCENARIO_ENVD_OBJECTS_SCALABILITY_TABLES = "envd_objects_scalability_tables"
+SCENARIO_DDL_CATALOG_SCALING = "ddl_catalog_scaling"
 SCENARIO_ENVD_OBJECTS_SCALABILITY_MVS = "envd_objects_scalability_mvs"
 SCENARIO_CLUSTER_OBJECT_LIMITS_INDEXES_FROM_PERSIST_SOURCES = (
     "cluster_object_limits_indexes_from_persist_sources"
@@ -2641,6 +2644,239 @@ class Scenario(ABC):
         pass
 
 
+class DdlCatalogScalingScenario(EnvdObjectsScalabilityScenario):
+    PAD_SCHEMA = "ddl_pad"
+    PROBE_SCHEMA = "ddl_probe"
+
+    def __init__(
+        self,
+        padding: str,
+        concurrencies: list[int],
+        duration: float,
+        repeats: int,
+        expected_configuration: str | None = None,
+    ):
+        super().__init__()
+        if (
+            padding not in ("tables", "views", "mixed")
+            or not concurrencies
+            or any(c < 1 for c in concurrencies)
+            or duration <= 0
+            or repeats < 1
+        ):
+            raise ValueError("invalid DDL benchmark configuration")
+        self.padding = padding
+        self.concurrencies = concurrencies
+        self.duration = duration
+        self.repeats = repeats
+        self.expected_configuration = expected_configuration
+        self.configuration: str | None = None
+
+    def record_configuration(
+        self, runner: ScenarioRunner, size: int | float, stage: str
+    ) -> None:
+        queries = {
+            "overrides": "SELECT name, value FROM mz_internal.mz_overridden_system_parameters ORDER BY name",
+            "visible": "SHOW ALL",
+            "clusters": "SELECT c.name, p.name, p.value FROM mz_internal.mz_cluster_system_parameters p JOIN mz_clusters c ON c.id = p.cluster_id ORDER BY 1, 2",
+            "replicas": "SELECT c.name, r.name, p.name, p.value FROM mz_internal.mz_replica_system_parameters p JOIN mz_cluster_replicas r ON r.id = p.replica_id JOIN mz_clusters c ON c.id = r.cluster_id ORDER BY 1, 2, 3",
+        }
+        fingerprints = {}
+        for scope, query in queries.items():
+            rows = runner.run_query(query, fetch=True)
+            if rows is None:
+                raise RuntimeError(f"missing {scope} configuration")
+            if scope == "visible":
+                # Runtime identity differs intentionally between the two binaries
+                # and is recorded separately from configuration.
+                rows = [row[:2] for row in rows if row[0] != "mz_version"]
+            # Preserve equality evidence without persisting connection-enrichment
+            # payloads or other environment-specific setting values.
+            fingerprints[scope] = {
+                json.dumps(row[:-1]): hashlib.sha256(
+                    json.dumps(row[-1], sort_keys=True).encode()
+                ).hexdigest()
+                for row in rows
+            }
+        digest = hashlib.sha256(
+            json.dumps(fingerprints, sort_keys=True).encode()
+        ).hexdigest()
+        path = os.path.join(
+            "test",
+            "cluster-spec-sheet",
+            f"ddl-configuration-{self.padding}-{size}-{stage}.json",
+        )
+        with open(path, "w") as output:
+            json.dump(
+                {
+                    "recorded_at_unix": time.time(),
+                    "configuration_sha256": digest,
+                    "fingerprints": fingerprints,
+                    "runtime": runner.run_query("SELECT mz_version()", fetch=True),
+                },
+                output,
+                indent=2,
+            )
+        if buildkite.is_in_buildkite():
+            buildkite.upload_artifact(path, cwd=MZ_ROOT, quiet=True)
+        if self.configuration is None:
+            self.configuration = digest
+        if digest != self.configuration or (
+            self.expected_configuration and digest != self.expected_configuration
+        ):
+            raise RuntimeError(f"DDL configuration mismatch: {digest}; see {path}")
+
+    def name(self) -> str:
+        return SCENARIO_DDL_CATALOG_SCALING
+
+    def init(self, runner: ScenarioRunner) -> None:
+        super().init(runner)
+        runner.run_query(f"CREATE SCHEMA {self.PROBE_SCHEMA}")
+        runner.run_query(f"CREATE TABLE {self.PROBE_SCHEMA}.base (a int, b text)")
+        for worker in range(max(self.concurrencies)):
+            runner.run_query(
+                f"CREATE TABLE {self.PROBE_SCHEMA}.index_base_{worker} (a int, b text)"
+            )
+        rows = runner.run_query(
+            "SELECT count(*) FROM mz_objects WHERE id LIKE 'u%%'", fetch=True
+        )
+        assert rows is not None
+        self.base_objects = rows[0][0]
+
+    def add_objects(self, runner: ScenarioRunner, target_n: int) -> None:
+        self.record_configuration(runner, target_n, "before-padding")
+        target_n -= self.base_objects
+        if target_n < self._current_n:
+            raise ValueError("catalog sizes must be increasing")
+        statements = []
+        for i in range(self._current_n, target_n):
+            if self.padding == "tables":
+                stmt = f"CREATE TABLE IF NOT EXISTS {self.PAD_SCHEMA}.t_{i} (a int, b text)"
+            elif self.padding == "views":
+                stmt = f"CREATE VIEW IF NOT EXISTS {self.PAD_SCHEMA}.v_{i} AS SELECT {i} AS a"
+            else:
+                group, member = divmod(i, 3)
+                table = f"{self.PAD_SCHEMA}.t_{group}"
+                view = f"{self.PAD_SCHEMA}.v_{group}"
+                stmt = (
+                    f"CREATE TABLE IF NOT EXISTS {table} (a int, b text)"
+                    if member == 0
+                    else (
+                        f"CREATE VIEW IF NOT EXISTS {view} AS SELECT a, b FROM {table}"
+                        if member == 1
+                        else f"CREATE INDEX IF NOT EXISTS i_{group} IN CLUSTER c ON {view} (a)"
+                    )
+                )
+            statements.append(stmt)
+        _bulk_run(runner, statements, f"DDL padding ({self.padding})")
+        self._current_n = target_n
+
+    def run(self, runner: ScenarioRunner) -> None:
+        self.record_configuration(runner, runner.scale, "before-measurement")
+        # One artifact per size survives failure and is uploaded before cleanup.
+        path = os.path.join(
+            "test", "cluster-spec-sheet", f"ddl-{self.padding}-{runner.scale}.jsonl"
+        )
+        try:
+            with open(path, "w") as output:
+                phase_context: dict = {}
+
+                def emit(event: dict) -> None:
+                    event = {
+                        "recorded_at_unix": time.time(),
+                        "padding": self.padding,
+                        "padding_objects": self._current_n,
+                        "catalog_objects": runner.scale,
+                        **phase_context,
+                        **event,
+                    }
+                    output.write(json.dumps(event) + "\n")
+                    output.flush()
+                    if event["event"] == "phase_start":
+                        print(f"DDL phase: {event}", flush=True)
+
+                counts = runner.run_query(
+                    "SELECT type, count(*) FROM mz_objects WHERE id LIKE 'u%%' GROUP BY type ORDER BY type",
+                    fetch=True,
+                )
+                padding_count = runner.run_query(
+                    "SELECT count(*) FROM mz_objects o JOIN mz_schemas s ON o.schema_id = s.id WHERE s.name = %(schema)s",
+                    fetch=True,
+                    schema=self.PAD_SCHEMA,
+                )
+                if padding_count != [(self._current_n,)]:
+                    raise RuntimeError(f"incorrect padding count: {padding_count}")
+                if counts is None or sum(count for _, count in counts) != runner.scale:
+                    raise RuntimeError(f"incorrect user object count: {counts}")
+                emit({"event": "catalog_counts", "user_objects_by_type": counts})
+                idle_start = time.time()
+                idle_clock = time.perf_counter()
+                time.sleep(self.duration)
+                emit(
+                    {
+                        "event": "idle",
+                        "start_unix": idle_start,
+                        "end_unix": time.time(),
+                        "elapsed_seconds": time.perf_counter() - idle_clock,
+                    }
+                )
+                for concurrency in self.concurrencies:
+                    driver = DdlMeasurement(
+                        runner.target.new_connection,
+                        concurrency,
+                        self.PROBE_SCHEMA,
+                        "c",
+                        emit,
+                    )
+                    try:
+                        for kind in ("table", "view", "index"):
+                            phase_context = {"warmup": True, "concurrency": concurrency}
+                            driver.run(kind, "cycle", duration=5)
+                            for repetition in range(self.repeats):
+                                phase_context = {
+                                    "warmup": False,
+                                    "repetition": repetition,
+                                    "concurrency": concurrency,
+                                }
+                                slots = (
+                                    1 if kind == "index" else max(1, 32 // concurrency)
+                                )
+                                driver.run(kind, "create", slots=slots)
+                                driver.run(kind, "drop", slots=slots)
+                                result = driver.run(
+                                    kind, "cycle", duration=self.duration
+                                )
+                                # The object-scaling CSV stores integer-ms latencies.
+                                # JSONL retains full precision, throughput, and raw samples.
+                                for operation in ("create", "drop"):
+                                    latencies = [
+                                        s["latency_seconds"]
+                                        for s in result["samples"]
+                                        if s["operation"] == operation
+                                    ]
+                                    runner.add_result(
+                                        "ddl_ack_latency_mean",
+                                        f"{kind}_{operation}_{concurrency}_clients",
+                                        repetition,
+                                        size_bytes=None,
+                                        time_ms=round(
+                                            1000 * sum(latencies) / len(latencies)
+                                        ),
+                                    )
+                    finally:
+                        driver.close()
+                self.record_configuration(runner, runner.scale, "after-measurement")
+        finally:
+            if buildkite.is_in_buildkite():
+                buildkite.upload_artifact(path, cwd=MZ_ROOT, quiet=True)
+
+    def teardown(self, runner: ScenarioRunner) -> None:
+        _best_effort_drop(
+            runner, f"DROP SCHEMA {self.PROBE_SCHEMA} CASCADE", self.PROBE_SCHEMA
+        )
+        super().teardown(runner)
+
+
 class EnvdObjectsScalabilityTablesScenario(EnvdObjectsScalabilityScenario):
     """N empty tables in the catalog. No controller load; pure catalog/adapter."""
 
@@ -3547,7 +3783,7 @@ def enable_region(target: "CloudTarget", envd_cpus: int | None = None) -> None:
             # Pin the image built for this PR. Production does not accept a
             # custom version.
             "--version",
-            staging_version(),
+            target.staging_runtime_version or staging_version(),
         ]
 
     target.composition.run("mz", "region", "enable", *args, rm=True)
@@ -3893,10 +4129,21 @@ def add_target_arguments(parser: argparse.ArgumentParser) -> None:
         choices=["cloud-production", "cloud-staging", "docker"],
         help="Target to deploy to.",
     )
+    parser.add_argument(
+        "--staging-version",
+        help="Use this staging runtime version with the current benchmark harness.",
+    )
 
 
-def make_target(composition: Composition, target: str) -> tuple["BenchTarget", Mz]:
+def make_target(
+    composition: Composition, target: str, staging_runtime_version: str | None = None
+) -> tuple["BenchTarget", Mz]:
     """The bench target for `--target`, with the `mz` service configured for it."""
+    if staging_runtime_version is not None:
+        if not staging_runtime_version:
+            raise UIError("--staging-version must not be empty")
+        if target != "cloud-staging":
+            raise UIError("--staging-version requires --target=cloud-staging")
     if target == "cloud-production":
         bench_target: BenchTarget = CloudTarget(
             composition,
@@ -3917,6 +4164,7 @@ def make_target(composition: Composition, target: str) -> tuple["BenchTarget", M
             staging_app_password,
             region=STAGING_REGION,
             is_staging=True,
+            staging_runtime_version=staging_runtime_version,
         )
         mz = Mz(
             region=STAGING_REGION,
@@ -3947,7 +4195,7 @@ def workflow_ci_cleanup(
     if not args.cleanup:
         print("Not destroying the region: the run was started without --cleanup")
         return
-    target, mz = make_target(composition, args.target)
+    target, mz = make_target(composition, args.target, args.staging_version)
     if not isinstance(target, CloudTarget):
         print(f"Nothing to clean up for --target={args.target}")
         return
@@ -4032,6 +4280,20 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
         ),
     )
     parser.add_argument(
+        "--ddl-padding", choices=["tables", "views", "mixed"], default="mixed"
+    )
+    parser.add_argument(
+        "--ddl-concurrencies",
+        type=lambda s: [int(x) for x in s.split(",")],
+        default=[1, 8, 32],
+    )
+    parser.add_argument("--ddl-duration", type=float, default=60)
+    parser.add_argument("--ddl-repeats", type=int, default=3)
+    parser.add_argument(
+        "--ddl-configuration-sha256",
+        help="Reject a DDL run whose captured configuration differs from this fingerprint.",
+    )
+    parser.add_argument(
         "--cluster-object-limits-max",
         type=int,
         default=CLUSTER_OBJECT_LIMITS_DEFAULT_MAX,
@@ -4104,7 +4366,7 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
             f"{', '.join(sorted(cluster_object_limits_requested))}."
         )
 
-    target, mz = make_target(composition, args.target)
+    target, mz = make_target(composition, args.target, args.staging_version)
 
     with composition.override(mz):
         target_max = target.max_scale()
@@ -4238,6 +4500,7 @@ class CloudTarget(BenchTarget):
         app_password: str,
         region: str,
         is_staging: bool = False,
+        staging_runtime_version: str | None = None,
     ) -> None:
         self.composition = composition
         self.username = username
@@ -4245,6 +4508,7 @@ class CloudTarget(BenchTarget):
         self.app_password = app_password
         self.new_app_password: str | None = None
         self.is_staging = is_staging
+        self.staging_runtime_version = staging_runtime_version
 
     def qps_connection_flags(self) -> list[str]:
         assert self.new_app_password is not None
@@ -4501,6 +4765,22 @@ SCENARIOS: list[ScenarioSpec] = [
             CopyFromStdinEnvdStrongScalingScenario(1, t.replica_size_for_scale(1)),
         ),
         groups=("envd_qps_scalability",),
+    ),
+    ScenarioSpec(
+        SCENARIO_DDL_CATALOG_SCALING,
+        "DDL latency and throughput by catalog size",
+        lambda a, t: EnvdObjectsSweep(
+            SCENARIO_DDL_CATALOG_SCALING,
+            DdlCatalogScalingScenario(
+                a.ddl_padding,
+                a.ddl_concurrencies,
+                a.ddl_duration,
+                a.ddl_repeats,
+                a.ddl_configuration_sha256,
+            ),
+            sizes=a.envd_objects_scalability_sizes,
+        ),
+        groups=("ddl_catalog_scaling",),
     ),
     ScenarioSpec(
         SCENARIO_ENVD_OBJECTS_SCALABILITY_TABLES,

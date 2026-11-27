@@ -125,6 +125,77 @@ steps:
     agents:
       queue: linux-aarch64-medium
 
+  - id: cluster-spec-sheet-ddl-smoke
+    label: "Cluster spec sheet: DDL catalog scaling smoke (against Staging)"
+    timeout_in_minutes: 90
+    depends_on: devel-docker-tags
+    concurrency: 1
+    concurrency_group: "cluster-spec-sheet-account-$$CI_CONCURRENCY_POOL_SLOT"
+    concurrency_pool: 20
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: cluster-spec-sheet
+          run: default
+          args:
+            - --cleanup
+            - --target=cloud-staging
+            - --envd-objects-scalability-sizes=30,60
+            - --ddl-concurrencies=1,2
+            - --ddl-duration=2
+            - --ddl-repeats=1
+            - ddl_catalog_scaling
+    agents:
+      queue: linux-aarch64-medium
+
+  - &ddl_catalog_sweep
+    id: cluster-spec-sheet-ddl
+    label: "Cluster spec sheet: DDL catalog scaling 5k, 10k, 30k (against Staging)"
+    if: 'build.env("CI_DDL_BASELINE_VERSION") == null'
+    timeout_in_minutes: 1440
+    depends_on: cluster-spec-sheet-ddl-smoke
+    concurrency: 1
+    concurrency_group: "cluster-spec-sheet-account-$$CI_CONCURRENCY_POOL_SLOT"
+    concurrency_pool: 20
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: cluster-spec-sheet
+          run: default
+          args:
+            - --cleanup
+            - --target=cloud-staging
+            - --envd-objects-scalability-sizes=5000,10000,30000
+            - --ddl-concurrencies=1,8
+            - --ddl-duration=20
+            - --ddl-repeats=3
+            - ddl_catalog_scaling
+    agents:
+      queue: linux-aarch64-medium
+
+  # Single-shard pool steps in one build share an account and its concurrency lock.
+  - <<: *ddl_catalog_sweep
+    id: cluster-spec-sheet-ddl-baseline
+    label: "Cluster spec sheet: DDL comparison baseline (against Staging)"
+    if: 'build.env("CI_DDL_BASELINE_VERSION") != null'
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: cluster-spec-sheet
+          run: default
+          args:
+            - --cleanup
+            - --target=cloud-staging
+            - --staging-version=$CI_DDL_BASELINE_VERSION
+            - --envd-objects-scalability-sizes=5000,10000,30000
+            - --ddl-concurrencies=1,8
+            - --ddl-duration=20
+            - --ddl-repeats=3
+            - ddl_catalog_scaling
+
+  - <<: *ddl_catalog_sweep
+    id: cluster-spec-sheet-ddl-candidate
+    label: "Cluster spec sheet: DDL comparison candidate (against Staging)"
+    if: 'build.env("CI_DDL_BASELINE_VERSION") != null'
+    depends_on: cluster-spec-sheet-ddl-baseline
+
   - id: cluster-spec-sheet-staging
     label: "Cluster spec sheet: COPY + Object Scalability + Cluster Object Count Limits (against Staging)"
     timeout_in_minutes: 3600
