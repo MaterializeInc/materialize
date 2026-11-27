@@ -1435,4 +1435,173 @@ mod tests {
 
         task.await;
     }
+
+    /// Two clients on one in-memory blob and consensus. The first reaches
+    /// consensus through the returned [UnreliableHandle] and has a 1 second
+    /// writer lease, standing in for the 60 minute production default.
+    fn clients_with_flaky_writer() -> (
+        mz_persist::unreliable::UnreliableHandle,
+        crate::PersistClient,
+        crate::PersistClient,
+    ) {
+        use mz_ore::metrics::MetricsRegistry;
+        use mz_persist::location::{Blob, Consensus};
+        use mz_persist::mem::{MemBlob, MemBlobConfig, MemConsensus};
+        use mz_persist::unreliable::{UnreliableConsensus, UnreliableHandle};
+
+        use crate::async_runtime::IsolatedRuntime;
+        use crate::batch::INLINE_WRITES_SINGLE_MAX_BYTES;
+        use crate::cache::StateCache;
+        use crate::internal::metrics::Metrics;
+        use crate::rpc::NoopPubSubSender;
+        use crate::{PersistClient, PersistConfig};
+
+        let blob: Arc<dyn Blob> = Arc::new(MemBlob::open(MemBlobConfig::default()));
+        let consensus: Arc<dyn Consensus> = Arc::new(MemConsensus::default());
+        let unreliable = UnreliableHandle::default();
+        unreliable.totally_available();
+        let flaky_consensus: Arc<dyn Consensus> = Arc::new(UnreliableConsensus::new(
+            Arc::clone(&consensus),
+            unreliable.clone(),
+        ));
+        let new_client = |cfg: PersistConfig, consensus: Arc<dyn Consensus>| {
+            let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
+            PersistClient::new(
+                cfg,
+                Arc::clone(&blob),
+                consensus,
+                metrics,
+                Arc::new(IsolatedRuntime::new_for_tests()),
+                Arc::new(StateCache::new_no_metrics()),
+                Arc::new(NoopPubSubSender),
+            )
+            .expect("client construction failed")
+        };
+
+        let mut cfg_a = PersistConfig::new_for_tests();
+        cfg_a.writer_lease_duration = std::time::Duration::from_secs(1);
+        // Keep batches in blob, so that deleting one is observable.
+        cfg_a.set_config(&INLINE_WRITES_SINGLE_MAX_BYTES, 0);
+        let client_a = new_client(cfg_a, flaky_consensus);
+        let client_b = new_client(PersistConfig::new_for_tests(), consensus);
+        (unreliable, client_a, client_b)
+    }
+
+    /// Opens a writer and registers its schema, which the writer's first
+    /// append would otherwise do, but leaves the writer itself unregistered.
+    async fn open_writer_without_registering(
+        client: &crate::PersistClient,
+        shard_id: ShardId,
+    ) -> WriteHandle<String, String, u64, i64> {
+        let mut write = client
+            .open_writer(
+                shard_id,
+                Arc::new(Default::default()),
+                Arc::new(Default::default()),
+                crate::Diagnostics::for_tests(),
+            )
+            .await
+            .expect("invalid usage");
+        write
+            .try_register_schema()
+            .await
+            .expect("schema is registered");
+        write
+    }
+
+    // The first attempt lands but reports a timeout. Writer A's lease runs
+    // out and another client's commit expires it before the retry reaches
+    // consensus.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn caa_retry_after_writer_expiry_reports_success() {
+        use std::time::{Duration, Instant};
+
+        let data = [
+            (("0".to_owned(), "zero".to_owned()), 0, 1),
+            (("1".to_owned(), "one".to_owned()), 1, 1),
+        ];
+        let (unreliable, client_a, client_b) = clients_with_flaky_writer();
+        let shard_id = ShardId::new();
+        let mut write_a = open_writer_without_registering(&client_a, shard_id).await;
+        let (mut write_b, mut read_b) = client_b
+            .expect_open::<String, String, u64, i64>(shard_id)
+            .await;
+        write_a.expect_compare_and_append(&data[0..1], 0, 1).await;
+
+        // Every consensus call now takes effect and then reports a timeout.
+        unreliable.partially_available(1.0, 1.0);
+        let updates = data[1..2].to_vec();
+        let task = task::spawn(|| "writer-a", async move {
+            write_a
+                .compare_and_append(&updates, Antichain::from_elem(1), Antichain::from_elem(2))
+                .await
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while write_b.fetch_recent_upper().await != &Antichain::from_elem(2) {
+            assert!(
+                Instant::now() < deadline,
+                "first attempt of writer A never landed"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        write_b.expect_compare_and_append(&[], 2, 3).await;
+        unreliable.totally_available();
+
+        assert_eq!(
+            task.await.expect("invalid usage"),
+            Ok(()),
+            "the write at [1, 2) landed"
+        );
+        assert_eq!(read_b.expect_snapshot_and_fetch(1).await, all_ok(&data, 1));
+    }
+
+    // Writer A has never committed, so it has no writer state. Its only
+    // attempt times out without landing, and writer B appends the same data
+    // before the retry reaches consensus.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn caa_retry_of_unregistered_writer_reports_mismatch() {
+        use std::time::{Duration, Instant};
+
+        let data = [(("0".to_owned(), "zero".to_owned()), 0, 1)];
+        let (unreliable, client_a, client_b) = clients_with_flaky_writer();
+        let shard_id = ShardId::new();
+        let mut write_a = open_writer_without_registering(&client_a, shard_id).await;
+        let (mut write_b, mut read_b) = client_b
+            .expect_open::<String, String, u64, i64>(shard_id)
+            .await;
+
+        // Every consensus call now reports a timeout without taking effect.
+        unreliable.partially_available(0.0, 1.0);
+        let updates = data.to_vec();
+        let task = task::spawn(|| "writer-a", async move {
+            write_a
+                .compare_and_append(&updates, Antichain::from_elem(0), Antichain::from_elem(1))
+                .await
+        });
+
+        let failed = &client_a.metrics.cmds.compare_and_append.failed;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while failed.get() == 0 {
+            assert!(
+                Instant::now() < deadline,
+                "writer A never got an indeterminate error"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        write_b.expect_compare_and_append(&data, 0, 1).await;
+        unreliable.totally_available();
+
+        assert_eq!(
+            task.await.expect("invalid usage"),
+            Err(UpperMismatch {
+                expected: Antichain::from_elem(0),
+                current: Antichain::from_elem(1),
+            })
+        );
+        assert_eq!(read_b.expect_snapshot_and_fetch(0).await, all_ok(&data, 0));
+    }
 }
