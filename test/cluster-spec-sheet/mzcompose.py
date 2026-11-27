@@ -37,7 +37,13 @@ from psycopg import InterfaceError, OperationalError
 from psycopg import sql as psycopg_sql
 
 from materialize import MZ_ROOT, buildkite, pgbench
-from materialize.cluster_spec_sheet_ddl import DdlMeasurement
+from materialize.cluster_spec_sheet_ddl import (
+    DdlMeasurement,
+    responsiveness_conditions,
+    responsiveness_duration,
+    responsiveness_fixture_statements,
+    run_responsiveness,
+)
 from materialize.cluster_spec_sheet_qps import (
     QPS_CONCURRENCIES,
     QpsSweep,
@@ -2658,6 +2664,7 @@ class DdlCatalogScalingScenario(EnvdObjectsScalabilityScenario):
         idle_duration: float | None = None,
         tail_size: int | None = None,
         tail_duration: float = 0,
+        responsiveness_seconds: float = 0,
     ):
         super().__init__()
         if (
@@ -2678,6 +2685,7 @@ class DdlCatalogScalingScenario(EnvdObjectsScalabilityScenario):
         self.idle_duration = duration if idle_duration is None else idle_duration
         self.tail_size = tail_size
         self.tail_duration = tail_duration
+        self.responsiveness_duration = responsiveness_duration(responsiveness_seconds)
         self.expected_configuration = expected_configuration
         self.configuration: str | None = None
 
@@ -2746,6 +2754,9 @@ class DdlCatalogScalingScenario(EnvdObjectsScalabilityScenario):
             runner.run_query(
                 f"CREATE TABLE {self.PROBE_SCHEMA}.index_base_{worker} (a int, b text)"
             )
+        if self.responsiveness_duration:
+            for statement in responsiveness_fixture_statements(self.PROBE_SCHEMA, "c"):
+                runner.run_query(statement.as_string(), retries=0)
         rows = runner.run_query(
             "SELECT count(*) FROM mz_objects WHERE id LIKE 'u%%'", fetch=True
         )
@@ -2894,6 +2905,25 @@ class DdlCatalogScalingScenario(EnvdObjectsScalabilityScenario):
                                 driver.run(kind, "cycle", duration=self.tail_duration)
                     finally:
                         driver.close()
+                if self.responsiveness_duration and runner.scale in (
+                    5000,
+                    10000,
+                    30000,
+                ):
+                    for repetition in range(self.repeats):
+                        phase_context = {"repetition": repetition, "warmup": False}
+                        for condition, concurrency in responsiveness_conditions(
+                            self.concurrencies
+                        ):
+                            run_responsiveness(
+                                runner.target.new_connection,
+                                self.PROBE_SCHEMA,
+                                "c",
+                                self.responsiveness_duration,
+                                condition,
+                                concurrency,
+                                emit,
+                            )
                 self.record_configuration(runner, runner.scale, "after-measurement")
         finally:
             if buildkite.is_in_buildkite():
@@ -4322,6 +4352,12 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
     parser.add_argument("--ddl-tail-size", type=int)
     parser.add_argument("--ddl-tail-duration", type=float, default=0)
     parser.add_argument(
+        "--ddl-responsiveness-duration",
+        type=responsiveness_duration,
+        default=os.environ.get("CI_DDL_RESPONSIVENESS_DURATION", "0"),
+        help="Separate responsiveness phases at 5k/10k/30k objects. Zero disables them.",
+    )
+    parser.add_argument(
         "--ddl-configuration-sha256",
         help="Reject a DDL run whose captured configuration differs from this fingerprint.",
     )
@@ -4817,6 +4853,7 @@ SCENARIOS: list[ScenarioSpec] = [
                 a.ddl_idle_duration,
                 a.ddl_tail_size,
                 a.ddl_tail_duration,
+                a.ddl_responsiveness_duration,
             ),
             sizes=a.envd_objects_scalability_sizes,
         ),
