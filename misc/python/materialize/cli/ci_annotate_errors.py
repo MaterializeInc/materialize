@@ -254,12 +254,6 @@ PRODUCT_LIMITS_FIND_IGNORE_RE = re.compile(
     re.VERBOSE | re.MULTILINE,
 )
 
-# What logs_api leaves of Buildkite's timestamps, ANSI CSI and OSC escape
-# sequences, and the "\r" that the agent's pseudo-terminal adds before "\n".
-BUILDKITE_LOG_NOISE_RE = re.compile(
-    r"\x1b_|\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\r+(?=\n)"
-)
-
 
 @dataclass
 class ErrorLog:
@@ -1298,7 +1292,7 @@ def write_buildkite_log(until: str) -> str:
             break
         time.sleep(2)
     with open("buildkite.log", "w") as f:
-        f.write(BUILDKITE_LOG_NOISE_RE.sub("", log.rsplit(until, 1)[0]))
+        f.write(log.rsplit(until, 1)[0])
     return "buildkite.log"
 
 
