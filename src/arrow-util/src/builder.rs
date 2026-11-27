@@ -1017,8 +1017,9 @@ impl ArrowColumn {
                         )
                     })?;
 
-                    let value = coefficient
-                        .checked_mul(10_i128.pow(scale_diff))
+                    let value = 10_i128
+                        .checked_pow(scale_diff)
+                        .and_then(|factor| coefficient.checked_mul(factor))
                         .ok_or_else(|| {
                             anyhow::anyhow!("Decimal value {} out of range for parquet", dec)
                         })?;
