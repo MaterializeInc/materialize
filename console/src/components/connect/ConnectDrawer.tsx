@@ -44,6 +44,14 @@ const HOST_PLACEHOLDER = "<host>";
  */
 const MCP_OAUTH_MIN_VERSION = "26.30.0";
 
+/**
+ * First version that serves `/api/mcp`. Before it, `enable_mcp_unified` is off
+ * and the route answers 503.
+ *
+ * TODO: set to the release where DEX-114 turns `enable_mcp_unified` on.
+ */
+const MCP_UNIFIED_MIN_VERSION = "26.53.0-dev";
+
 type ConnectMethodId = "mcp" | "external-tools" | "terminal";
 
 const CONNECT_METHODS: {
@@ -133,6 +141,7 @@ const CloudConnectContent = ({
   const [currentEnvironment] = useAtom(currentEnvironmentState);
   const { clusterName } = useParams<ClusterDetailParams>();
   const oauthAvailable = useEnvironmentGate(MCP_OAUTH_MIN_VERSION) === true;
+  const unifiedAvailable = useEnvironmentGate(MCP_UNIFIED_MIN_VERSION) === true;
 
   if (currentEnvironment?.state !== "enabled") {
     return environmentPanel(currentEnvironment);
@@ -152,6 +161,7 @@ const CloudConnectContent = ({
     ssl: true,
     mcpBaseUrl,
     oauthAvailable,
+    unifiedAvailable,
     clusterName,
     canCreateAppPassword: !forAppPassword,
   };
@@ -174,6 +184,7 @@ const SelfManagedConnectContent = ({
   // has no issuer to redirect to, so those deployments stay on tokens.
   const oauthAvailable =
     useEnvironmentGate(MCP_OAUTH_MIN_VERSION) === true && oidcEnabled;
+  const unifiedAvailable = useEnvironmentGate(MCP_UNIFIED_MIN_VERSION) === true;
 
   if (
     appConfig.mode !== "self-managed" ||
@@ -199,6 +210,7 @@ const SelfManagedConnectContent = ({
     ssl: appConfig.environmentdScheme === "https",
     mcpBaseUrl,
     oauthAvailable,
+    unifiedAvailable,
     clusterName,
     canCreateAppPassword: false,
     idToken: oidcEnabled ? auth?.user?.id_token : undefined,

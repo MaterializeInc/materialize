@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 import {
+  availableMcpServers,
   buildBase64TokenCommand,
   buildMcpInstallLink,
   buildMcpSnippet,
@@ -197,6 +198,17 @@ describe("buildMcpSnippet", () => {
     );
   });
 
+  it("points the unified server at /api/mcp under the name materialize", () => {
+    const snippet = buildMcpSnippet({
+      client: client("claude-code"),
+      server: server("unified"),
+      baseUrl: BASE_URL,
+    });
+    expect(snippet).toEqual(
+      `claude mcp add --transport http materialize \\\n  ${BASE_URL}/api/mcp`,
+    );
+  });
+
   it.each(MCP_SERVERS)(
     "logs Codex in under the TOML table name for $id",
     (mcpServer) => {
@@ -320,5 +332,16 @@ describe("buildBase64TokenCommand", () => {
     expect(buildBase64TokenCommand("user@example.com", "<id-token>")).toEqual(
       "printf '%s' 'user@example.com:<id-token>' | base64 -w0",
     );
+  });
+});
+
+describe("availableMcpServers", () => {
+  it("lists the unified server only when the environment serves it", () => {
+    expect(
+      availableMcpServers({ unifiedAvailable: false }).map(({ id }) => id),
+    ).toEqual(["developer", "agent"]);
+    expect(
+      availableMcpServers({ unifiedAvailable: true }).map(({ id }) => id),
+    ).toEqual(["developer", "agent", "unified"]);
   });
 });
