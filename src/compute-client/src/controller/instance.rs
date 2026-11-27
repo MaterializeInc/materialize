@@ -3870,7 +3870,7 @@ pub(super) mod tests {
     }
 
     #[derive(Debug)]
-    struct UnusedStorage;
+    pub(in crate::controller) struct UnusedStorage;
 
     #[async_trait]
     impl mz_storage_client::storage_collections::StorageCollections for UnusedStorage {

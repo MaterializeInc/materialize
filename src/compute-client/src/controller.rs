@@ -1230,6 +1230,29 @@ impl ComputeController {
         self.stashed_response.take()
     }
 
+    /// Collects a bounded batch of consecutive frontier updates, starting with the one returned by
+    /// [`Self::process`].
+    pub fn collect_frontier_uppers(
+        &mut self,
+        id: GlobalId,
+        upper: Antichain<Timestamp>,
+    ) -> Vec<(GlobalId, Antichain<Timestamp>)> {
+        // Bound the time a frontier backlog can keep the coordinator from its other work.
+        const MAX_BATCH: usize = 1024;
+
+        let mut uppers = vec![(id, upper)];
+        while uppers.len() < MAX_BATCH && self.stashed_response.is_none() {
+            match self.response_rx.try_recv() {
+                Ok(ComputeControllerResponse::FrontierUpper { id, upper }) => {
+                    uppers.push((id, upper))
+                }
+                Ok(other) => self.stashed_response = Some(other),
+                Err(_) => break,
+            }
+        }
+        uppers
+    }
+
     #[mz_ore::instrument(level = "debug")]
     fn maintain(&mut self) {
         // Perform instance maintenance work.
@@ -1469,5 +1492,67 @@ impl Default for CollectionFrontiers {
             read_frontier: Antichain::from_elem(Timestamp::MIN),
             write_frontier: Antichain::from_elem(Timestamp::MIN),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test(tokio::test)]
+    async fn frontier_batches_preserve_order_and_yield_at_the_limit() {
+        use ComputeControllerResponse::{CopyToResponse, FrontierUpper};
+
+        let registry = MetricsRegistry::new();
+        let now = mz_ore::now::SYSTEM_TIME.clone();
+        let mut compute = ComputeController::new(
+            &mz_build_info::DUMMY_BUILD_INFO,
+            Arc::new(instance::tests::UnusedStorage),
+            false,
+            &registry,
+            PersistLocation::new_in_mem(),
+            ControllerMetrics::new(&registry),
+            now.clone(),
+            WallclockLagFn::new(now),
+        );
+        let update = |t| {
+            (
+                GlobalId::User(t % 2 + 1),
+                Antichain::from_elem(Timestamp::new(t)),
+            )
+        };
+        let send_upper = |t| {
+            let (id, upper) = update(t);
+            compute
+                .response_tx
+                .send(FrontierUpper { id, upper })
+                .unwrap();
+        };
+        for t in 0..1025 {
+            send_upper(t);
+        }
+        compute
+            .response_tx
+            .send(CopyToResponse(GlobalId::User(3), Ok(0)))
+            .unwrap();
+        send_upper(1025);
+
+        let mut batches = Vec::new();
+        while compute.stashed_response.is_some() || !compute.response_rx.is_empty() {
+            compute.ready().await;
+            match compute.process() {
+                Some(FrontierUpper { id, upper }) => {
+                    batches.push(Some(compute.collect_frontier_uppers(id, upper)));
+                }
+                Some(CopyToResponse(_, Ok(0))) => batches.push(None),
+                None => continue,
+                other => panic!("unexpected response: {other:?}"),
+            }
+        }
+        let batch = |range: std::ops::Range<u64>| Some(range.map(update).collect::<Vec<_>>());
+        assert_eq!(
+            batches,
+            [batch(0..1024), batch(1024..1025), None, batch(1025..1026)]
+        );
     }
 }
