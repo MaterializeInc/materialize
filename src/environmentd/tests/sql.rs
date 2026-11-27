@@ -117,6 +117,66 @@ impl Drop for CatalogVisibilityGate {
     }
 }
 
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+async fn test_timeline_holds_across_catalog_changes() {
+    use mz_postgres_util::{Sql, batch_execute, query_one};
+
+    let server = test_util::TestHarness::default().start().await;
+    let client = server.connect().await.unwrap();
+    for sql in [
+        "CREATE TABLE holds_table (a int)",
+        "INSERT INTO holds_table VALUES (1)",
+        "CREATE CLUSTER holds_cluster SIZE 'scale=1,workers=1'",
+        "CREATE INDEX holds_index IN CLUSTER holds_cluster ON holds_table (a)",
+        "SET cluster = holds_cluster",
+        "CREATE VIEW holds_view AS SELECT * FROM holds_table",
+    ] {
+        batch_execute(&client, Sql::new(sql)).await.unwrap();
+    }
+    assert_eq!(
+        query_one(&client, Sql::new("SELECT a FROM holds_view"), &[])
+            .await
+            .unwrap()
+            .get::<_, i32>(0),
+        1
+    );
+    for sql in ["DROP VIEW holds_view", "INSERT INTO holds_table VALUES (2)"] {
+        batch_execute(&client, Sql::new(sql)).await.unwrap();
+    }
+    assert_eq!(
+        query_one(&client, Sql::new("SELECT sum(a) FROM holds_table"), &[])
+            .await
+            .unwrap()
+            .get::<_, i64>(0),
+        3
+    );
+    for sql in ["DROP CLUSTER holds_cluster CASCADE", "RESET cluster"] {
+        batch_execute(&client, Sql::new(sql)).await.unwrap();
+    }
+    assert_eq!(
+        query_one(&client, Sql::new("SELECT sum(a) FROM holds_table"), &[])
+            .await
+            .unwrap()
+            .get::<_, i64>(0),
+        3
+    );
+    for sql in [
+        "CREATE VIEW holds_view AS SELECT * FROM holds_table",
+        "DROP TABLE holds_table CASCADE",
+        "CREATE TABLE holds_table (a int)",
+        "INSERT INTO holds_table VALUES (4)",
+    ] {
+        batch_execute(&client, Sql::new(sql)).await.unwrap();
+    }
+    assert_eq!(
+        query_one(&client, Sql::new("SELECT a FROM holds_table"), &[])
+            .await
+            .unwrap()
+            .get::<_, i32>(0),
+        4
+    );
+}
+
 // This failpoint is process-global. Run this test in its own process (as nextest does).
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
 #[allow(clippy::disallowed_methods)]
@@ -4753,7 +4813,12 @@ async fn test_cancel_linearize_commit_discards_set_local() {
         .enable_feature_flags(&["enable_refresh_every_mvs", "allow_real_time_recency"])
         .await;
     let client = server.connect().await.unwrap();
-    let client_cancel = client.cancel_token();
+    let backend_pid: i32 = client
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .unwrap()
+        .get(0);
+    let client_cancel = server.connect().await.unwrap();
 
     // This test will break in the year 30,000 after Jan 1st. When that happens, increase the year
     // to fix the test.
@@ -4799,7 +4864,12 @@ async fn test_cancel_linearize_commit_discards_set_local() {
         .retry_async_with_state(
             (client_cancel, rx),
             |_, (client_cancel, mut rx)| async move {
-                client_cancel.cancel_query(postgres::NoTls).await.unwrap();
+                // Wire cancellation has no acknowledgment and could arrive during the SHOW
+                // below. SQL cancellation returns after the coordinator handles the request.
+                client_cancel
+                    .query_one("SELECT pg_cancel_backend($1::int4)", &[&backend_pid])
+                    .await
+                    .unwrap();
                 let res = rx.try_recv();
                 ((client_cancel, rx), res)
             },
