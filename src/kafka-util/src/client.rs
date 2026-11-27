@@ -136,6 +136,9 @@ pub enum MzKafkaError {
     /// Connection reset
     #[error("Connection reset: {0}")]
     ConnectionReset(String),
+    /// A broker response exceeded `receive.message.max.bytes`
+    #[error("Broker response too large: {0}")]
+    ResponseTooLarge(String),
     /// Connection timeout
     #[error("Connection timeout")]
     ConnectionTimeout,
@@ -194,6 +197,8 @@ impl FromStr for MzKafkaError {
             Ok(Self::InvalidBrokerCertificate)
         } else if let Some((_prefix, inner)) = s.split_once("Send failed: ") {
             Ok(Self::ConnectionReset(inner.to_owned()))
+        } else if s.contains("increase receive.message.max.bytes") {
+            Ok(Self::ResponseTooLarge(s.to_owned()))
         } else if let Some((_prefix, inner)) = s.split_once("Receive failed: ") {
             Ok(Self::ConnectionReset(inner.to_owned()))
         } else if s.contains("request(s) timed out: disconnect") {
@@ -1204,6 +1209,16 @@ mod tests {
             .unwrap();
         cert.sign(&key, MessageDigest::sha256()).unwrap();
         String::from_utf8(cert.build().to_pem().unwrap()).unwrap()
+    }
+
+    #[mz_ore::test]
+    fn response_too_large_parses() {
+        let msg = "sasl_ssl://b-1.example:9096/1: Receive failed: Invalid response size \
+            104857715 (0..100000000): increase receive.message.max.bytes (after 158ms in state UP)";
+        assert_eq!(
+            MzKafkaError::from_str(msg),
+            Ok(MzKafkaError::ResponseTooLarge(msg.to_owned()))
+        );
     }
 
     #[mz_ore::test]
