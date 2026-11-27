@@ -4394,7 +4394,8 @@ async fn test_cancel_linearize_commit_discards_set_local() {
         .enable_feature_flags(&["enable_refresh_every_mvs", "allow_real_time_recency"])
         .await;
     let client = server.connect().await.unwrap();
-    let client_cancel = client.cancel_token();
+    let pid = client.backend_pid();
+    let client_cancel = server.connect().await.unwrap();
 
     // This test will break in the year 30,000 after Jan 1st. When that happens, increase the year
     // to fix the test.
@@ -4440,7 +4441,10 @@ async fn test_cancel_linearize_commit_discards_set_local() {
         .retry_async_with_state(
             (client_cancel, rx),
             |_, (client_cancel, mut rx)| async move {
-                client_cancel.cancel_query(postgres::NoTls).await.unwrap();
+                client_cancel
+                    .batch_execute(&format!("SELECT pg_cancel_backend({pid})"))
+                    .await
+                    .unwrap();
                 let res = rx.try_recv();
                 ((client_cancel, rx), res)
             },
