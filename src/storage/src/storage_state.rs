@@ -884,8 +884,28 @@ impl<'w> Worker<'w> {
 
                     let mut sink_write_frontier = sink_write_frontier.borrow_mut();
                     sink_write_frontier.clear();
-                    sink_write_frontier.insert(mz_repr::Timestamp::minimum());
+                    // The controller holds back the sink's input based on the reported write
+                    // frontier, so a sink that is not rendered must report the empty frontier.
+                    if !sink_description.as_of.is_empty() {
+                        sink_write_frontier.insert(mz_repr::Timestamp::minimum());
+                    }
                 }
+
+                // A restart takes its as-of from the upper of the sink's shard, which is empty
+                // once the sink has written all of its input, or once it was dropped and the
+                // shard finalized. A replica that lost its controller never hears about the
+                // drop, so the as-of is the only signal here, and `persist_source` panics on an
+                // empty one.
+                if sink_description.as_of.is_empty() {
+                    info!(
+                        "worker {}/{} skipping building sink dataflow for {sink_id} \
+                        because its as-of is empty",
+                        self.timely_worker.index(),
+                        self.timely_worker.peers(),
+                    );
+                    return;
+                }
+
                 self.storage_state
                     .aggregated_statistics
                     .initialize_sink(sink_id, || {

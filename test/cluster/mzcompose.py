@@ -1753,6 +1753,42 @@ def workflow_sink_failure(c: Composition) -> None:
             c.run_testdrive_files("sink-failure/03-verify-data.td")
 
 
+def workflow_test_sink_restart_after_drop(c: Composition) -> None:
+    """Regression test for PER-19: a sink restarting after its drop crashed clusterd."""
+
+    c.up("materialized", "kafka", "clusterd1")
+
+    c.testdrive(dedent("""
+            > CREATE CLUSTER cluster1 REPLICAS (r1 (
+                STORAGECTL ADDRESSES ['clusterd1:2100'],
+                STORAGE ADDRESSES ['clusterd1:2103'],
+                COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                COMPUTE ADDRESSES ['clusterd1:2102'],
+                WORKERS 2
+              ))
+            > CREATE CONNECTION kafka_conn
+              TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
+            > CREATE TABLE t (a text)
+
+            # Too large for a Kafka message, so the sink keeps failing and restarting.
+            > INSERT INTO t VALUES (repeat('x', 2000000))
+            > CREATE SINK snk FROM t
+              INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk')
+              FORMAT JSON ENVELOPE DEBEZIUM
+            > SELECT status FROM mz_internal.mz_sink_statuses WHERE name = 'snk'
+            stalled
+
+            # Without its controller, a unified clusterd keeps restarting the sink
+            # and never hears that it was dropped.
+            > DROP CLUSTER REPLICA cluster1.r1
+            > DROP SINK snk
+            """))
+
+    # Shards are finalized every 5s, and the sink restarts 5s after each failure.
+    time.sleep(30)
+    assert c.is_running("clusterd1"), "clusterd1 crashed"
+
+
 def workflow_test_bootstrap_vars(c: Composition) -> None:
     """Test default system vars values passed with a CLI option."""
 
