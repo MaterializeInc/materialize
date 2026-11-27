@@ -191,6 +191,10 @@ pub(crate) async fn handle_internal_console(
     let host = uri.host().unwrap().to_string();
     // Preserve the request, but update the URI to point upstream.
     *req.uri_mut() = uri;
+    // The client fails an HTTP/2 request on an HTTP/1 upstream connection
+    // with `UserUnsupportedVersion`, and the inbound version is whatever the
+    // browser negotiated with us.
+    *req.version_mut() = http::Version::HTTP_11;
 
     // If vercel sees the request being served from a different host it tries to redirect to it's own.
     req.headers_mut()
@@ -300,11 +304,16 @@ fn is_same_origin(req: &Request<Body>) -> bool {
     {
         return site == "same-origin" || site == "none";
     }
-    let (Some(origin), Some(host)) = (req.headers().get(ORIGIN), req.headers().get(HOST)) else {
+    let Some(origin) = req.headers().get(ORIGIN) else {
         // No `Origin` on a POST means it was not a cross-site form submission.
         return true;
     };
-    let (Ok(origin), Ok(host)) = (origin.to_str(), host.to_str()) else {
+    // HTTP/2 requests carry `:authority` in the URI and no `Host` header.
+    let host = match req.headers().get(HOST) {
+        Some(host) => host.to_str().ok(),
+        None => req.uri().authority().map(|a| a.as_str()),
+    };
+    let (Ok(origin), Some(host)) = (origin.to_str(), host) else {
         return false;
     };
     origin
@@ -374,4 +383,23 @@ fn preview_build_from_cookie(headers: &HeaderMap) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn test_is_same_origin_uses_http2_authority() {
+        let req = |origin: &str| {
+            Request::builder()
+                .method(Method::POST)
+                .uri("https://mz.example.com/internal-console/")
+                .header(ORIGIN, origin)
+                .body(Body::empty())
+                .unwrap()
+        };
+        assert!(is_same_origin(&req("https://mz.example.com")));
+        assert!(!is_same_origin(&req("https://evil.example.com")));
+    }
 }
