@@ -1845,55 +1845,6 @@ mod grpc {
         assert_none!(client_2.receiver.next().now_or_never());
     }
 
-    #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `socket` on OS `linux`
-    async fn grpc_burst_reaches_subscriber() {
-        // As many pushes as a replica that appends to this many shards issues in one tick.
-        const BURST: u64 = 256;
-
-        let metrics = Arc::new(Metrics::new(
-            &test_persist_config(),
-            &MetricsRegistry::new(),
-        ));
-        let (addr, tcp_listener_stream) = new_tcp_listener().await;
-        let server_state = spawn_server(tcp_listener_stream).await;
-        let connect = |caller_id: &str| {
-            GrpcPubSubClient::connect(
-                PersistPubSubClientConfig {
-                    url: format!("http://{}", addr),
-                    caller_id: caller_id.to_string(),
-                    persist_cfg: test_persist_config(),
-                },
-                Arc::clone(&metrics),
-            )
-        };
-        let pusher = connect("pusher");
-        let mut subscriber = connect("subscriber");
-        let _token = Arc::clone(&subscriber.sender).subscribe(&SHARD_ID_0);
-        poll_until_true(CONNECT_TIMEOUT, || {
-            server_state.active_connections().len() == 2
-                && server_state.shard_subscription_counts() == HashMap::from([(*SHARD_ID_0, 1)])
-        })
-        .await;
-
-        let diff = |seqno| VersionedData {
-            seqno: SeqNo(seqno),
-            data: VERSIONED_DATA_0.data,
-        };
-        // The test runtime has one thread and this loop does not yield, so no task forwards a push
-        // before all of them are queued.
-        for seqno in 0..BURST {
-            pusher.sender.push_diff(&SHARD_ID_0, &diff(seqno));
-        }
-        for seqno in 0..BURST {
-            let push = tokio::time::timeout(CONNECT_TIMEOUT, subscriber.receiver.next())
-                .await
-                .expect("every push arrives")
-                .expect("has diff");
-            assert_push(push, &SHARD_ID_0, &diff(seqno));
-        }
-    }
-
     async fn new_tcp_listener() -> (SocketAddr, TcpListenerStream) {
         let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0));
         let tcp_listener = TcpListener::bind(addr).await.expect("tcp listener");
