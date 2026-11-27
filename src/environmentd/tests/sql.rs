@@ -249,6 +249,9 @@ async fn test_view_commit_reads_cancellation_and_competing_mutation() {
         .abort_on_drop();
         tokio::time::timeout(Duration::from_secs(30), async {
             parked.await.unwrap();
+            query_one(&reader, Sql::new("SHOW CREATE TABLE commit_input"), &[])
+                .await
+                .unwrap();
             assert_eq!(
                 query_one(&reader, Sql::new(read), &[])
                     .await
@@ -286,7 +289,7 @@ async fn test_view_commit_reads_cancellation_and_competing_mutation() {
             );
             release.release();
             assert!(matches!(
-                create.await.unwrap(),
+                create.await.unwrap().0,
                 mz_adapter::ExecuteResponse::CreatedView
             ));
             update.await.unwrap();
@@ -306,6 +309,126 @@ async fn test_view_commit_reads_cancellation_and_competing_mutation() {
             limit
         );
     }
+}
+
+// The failpoints are process-global. Run this test in its own process.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn test_view_commit_precedes_fresh_ddl_snapshot() {
+    use mz_postgres_util::{Sql, batch_execute, query_one};
+
+    let server = test_util::TestHarness::default().start().await;
+    let writer = server.connect().await.unwrap();
+    let ddl = server.connect().await.unwrap();
+    let reader = server.connect().await.unwrap();
+    batch_execute(
+        &writer,
+        Sql::new("CREATE VIEW snapshot_base AS SELECT 7 AS a"),
+    )
+    .await
+    .unwrap();
+    batch_execute(&ddl, Sql::new("BEGIN")).await.unwrap();
+    let (release, parked) = CatalogVisibilityGate::install("view_commit_after_transaction");
+    let create = task::spawn(|| "snapshot_candidate", async move {
+        batch_execute(
+            &writer,
+            Sql::new("CREATE VIEW snapshot_candidate AS SELECT * FROM snapshot_base"),
+        )
+        .await
+    })
+    .abort_on_drop();
+    tokio::time::timeout(Duration::from_secs(30), async {
+        parked.await.unwrap();
+        let (join_release, joined) = CatalogVisibilityGate::install("view_commit_join");
+        let mut rename = Box::pin(batch_execute(
+            &ddl,
+            Sql::new("ALTER VIEW snapshot_base RENAME TO snapshot_renamed"),
+        ));
+        assert!(futures::poll!(&mut rename).is_pending());
+        joined.await.unwrap();
+        assert!(!create.is_finished());
+        join_release.release();
+        release.release();
+        create.await.unwrap();
+        rename.await.unwrap();
+        batch_execute(&ddl, Sql::new("COMMIT")).await.unwrap();
+        assert_eq!(
+            query_one(&reader, Sql::new("SELECT a FROM snapshot_candidate"), &[])
+                .await
+                .unwrap()
+                .get::<_, i32>(0),
+            7,
+        );
+        assert_eq!(
+            query_one(&reader, Sql::new("SELECT a FROM snapshot_renamed"), &[])
+                .await
+                .unwrap()
+                .get::<_, i32>(0),
+            7,
+        );
+    })
+    .await
+    .expect("fresh DDL snapshot did not join the view commit");
+}
+
+// The failpoints are process-global. Run this test in its own process.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn test_view_commit_survives_disconnect_and_empty_namespace_cleanup() {
+    use mz_postgres_util::{Sql, batch_execute, query_one};
+
+    let server = test_util::TestHarness::default().start().await;
+    let (writer, connection) = server.connect().with_handle().await.unwrap();
+    let connection = connection.abort_on_drop();
+    let cleanup = server.connect().await.unwrap();
+    let reader = server.connect().await.unwrap();
+    for sql in [
+        "CREATE TEMP VIEW cleanup_view AS SELECT 1",
+        "DROP VIEW cleanup_view",
+    ] {
+        batch_execute(&cleanup, Sql::new(sql)).await.unwrap();
+    }
+    let staged = server
+        .inner
+        .adapter_client()
+        .metrics()
+        .catalog_transact_phase_seconds
+        .with_label_values(&["stage_builtin"]);
+    let before = staged.get_sample_count();
+    let (release, parked) = CatalogVisibilityGate::install("view_commit_after_transaction");
+    let create = task::spawn(|| "disconnected_candidate", async move {
+        batch_execute(
+            &writer,
+            Sql::new("CREATE VIEW disconnected_view AS SELECT 7 AS a"),
+        )
+        .await
+    })
+    .abort_on_drop();
+    tokio::time::timeout(Duration::from_secs(30), async {
+        parked.await.unwrap();
+        drop(connection);
+        assert!(
+            create.await.is_err(),
+            "disconnected client received a response"
+        );
+        let (join_release, joined) = CatalogVisibilityGate::install("view_commit_join");
+        // With no remaining temporary items, termination must still join before
+        // removing the connection's in-memory namespace.
+        drop(cleanup);
+        joined.await.unwrap();
+        join_release.release();
+        release.release();
+        while staged.get_sample_count() == before {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            query_one(&reader, Sql::new("SELECT a FROM disconnected_view"), &[])
+                .await
+                .unwrap()
+                .get::<_, i32>(0),
+            7,
+        );
+    })
+    .await
+    .expect("disconnected view commit or namespace cleanup did not finish");
 }
 
 // This failpoint is process-global. Run this test in its own process (as nextest does).
