@@ -355,9 +355,6 @@ impl<Out: Message, In: Message> Connection<Out, In> {
         error_tx: ErrorTx,
         mut metrics: impl Metrics<Out, In>,
     ) {
-        // `mz_ore::netio` sets `TCP_NODELAY` on TCP streams, so the socket sends every write right
-        // away. Buffering joins the length prefix of a message with its body, and messages that
-        // are queued together.
         let mut writer = BufWriter::new(writer);
         loop {
             let msg = tokio::select! {
