@@ -177,6 +177,137 @@ async fn test_timeline_holds_across_catalog_changes() {
     );
 }
 
+// The failpoints are process-global. Run this test in its own process.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn test_view_commit_reads_cancellation_and_competing_mutation() {
+    use mz_adapter::session::SessionConfig;
+    use mz_auth::{Authenticated, AuthenticatorKind};
+    use mz_postgres_util::{Sql, batch_execute, query_one};
+    use mz_sql::session::metadata::SessionMetadata;
+
+    async fn session(adapter: &mz_adapter::Client) -> mz_adapter::SessionClient {
+        let session = adapter.new_session(
+            SessionConfig {
+                conn_id: adapter.new_conn_id().unwrap(),
+                uuid: uuid::Uuid::new_v4(),
+                user: "materialize".into(),
+                client_ip: Some(Ipv4Addr::LOCALHOST.into()),
+                external_metadata_rx: None,
+                helm_chart_version: None,
+                authenticator_kind: AuthenticatorKind::None,
+                groups: None,
+            },
+            Authenticated,
+        );
+        adapter.startup(session).await.unwrap()
+    }
+
+    let server = test_util::TestHarness::default().start().await;
+    let adapter = server.inner.adapter_client();
+    let reader = server.connect().await.unwrap();
+    for sql in [
+        "CREATE TABLE commit_input (a int)",
+        "INSERT INTO commit_input VALUES (7)",
+        "CREATE DEFAULT INDEX ON commit_input",
+    ] {
+        batch_execute(&reader, Sql::new(sql)).await.unwrap();
+    }
+    let mut admin = session(adapter).await;
+    for (failpoint, sql, read, expected, catalog_read, limit) in [
+        (
+            "view_commit_before_transaction",
+            "CREATE VIEW commit_before AS SELECT * FROM commit_input",
+            "SELECT a + 1 FROM commit_input",
+            8,
+            "SELECT count(*) FROM mz_views WHERE name = 'commit_before'",
+            200,
+        ),
+        (
+            "view_commit_after_transaction",
+            "CREATE VIEW commit_after AS SELECT * FROM commit_input",
+            "SELECT a + 2 FROM commit_input",
+            9,
+            "SELECT count(*) FROM mz_views WHERE name = 'commit_after'",
+            201,
+        ),
+    ] {
+        let mut writer = session(adapter).await;
+        let conn_id = writer.session().conn_id().unhandled();
+        let secret_key = writer.session().secret_key();
+        writer.start_transaction(Some(1)).unwrap();
+        let statement = mz_sql::parse::parse(sql).unwrap().pop().unwrap().ast;
+        writer
+            .declare("".into(), statement, sql.into())
+            .await
+            .unwrap();
+        let (release, parked) = CatalogVisibilityGate::install(failpoint);
+        let create = task::spawn(|| "candidate_create", async move {
+            writer
+                .execute("".into(), futures::future::pending(), None)
+                .await
+        })
+        .abort_on_drop();
+        tokio::time::timeout(Duration::from_secs(30), async {
+            parked.await.unwrap();
+            assert_eq!(
+                query_one(&reader, Sql::new(read), &[])
+                    .await
+                    .unwrap()
+                    .get::<_, i32>(0),
+                expected,
+            );
+            assert_eq!(
+                query_one(&reader, Sql::new(catalog_read), &[])
+                    .await
+                    .unwrap()
+                    .get::<_, i64>(0),
+                0,
+            );
+
+            let (joined_tx, joined_rx) = oneshot::channel();
+            let joined_tx = Mutex::new(Some(joined_tx));
+            fail::cfg_callback("view_commit_join", move || {
+                if let Some(tx) = joined_tx.lock().unwrap().take() {
+                    let _ = tx.send(());
+                }
+            })
+            .unwrap();
+            // Submit cancellation and the exempt mutation on the adapter command FIFO.
+            adapter.cancel_request(conn_id, secret_key);
+            let mut update = Box::pin(admin.set_system_vars(BTreeMap::from([(
+                "max_objects_per_schema".to_string(),
+                limit.to_string(),
+            )])));
+            assert!(futures::poll!(&mut update).is_pending());
+            joined_rx.await.unwrap();
+            assert!(
+                !create.is_finished(),
+                "candidate retired while its worker was parked"
+            );
+            release.release();
+            assert!(matches!(
+                create.await.unwrap(),
+                mz_adapter::ExecuteResponse::CreatedView
+            ));
+            update.await.unwrap();
+            fail::remove("view_commit_join");
+            assert_eq!(
+                query_one(&reader, Sql::new(catalog_read), &[])
+                    .await
+                    .unwrap()
+                    .get::<_, i64>(0),
+                1,
+            );
+        })
+        .await
+        .expect("view candidate did not finish safely");
+        assert_eq!(
+            admin.get_system_vars().await.max_objects_per_schema(),
+            limit
+        );
+    }
+}
+
 // This failpoint is process-global. Run this test in its own process (as nextest does).
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
 #[allow(clippy::disallowed_methods)]

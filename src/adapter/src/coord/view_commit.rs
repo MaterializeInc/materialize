@@ -16,6 +16,9 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use derivative::Derivative;
+use mz_sql::session::metadata::SessionMetadata;
+
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::CatalogItem;
 use mz_ore::metrics::MetricsFutureExt;
@@ -30,9 +33,13 @@ use crate::catalog::{self, Catalog, CatalogSession, TransactionResult, Unpublish
 use crate::coord::CreateViewStage;
 use crate::{AdapterError, AdapterNotice, ExecuteResponse};
 
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub(super) struct PendingViewCommit {
     id: CatalogItemId,
+    #[derivative(Debug = "ignore")]
     base: Arc<Catalog>,
+    #[derivative(Debug = "ignore")]
     worker: JoinHandle<(Result<UnpublishedTransaction, AdapterError>, Instant)>,
     ctx: ExecuteContext,
     name: String,
@@ -51,6 +58,10 @@ impl Drop for NotifyViewCommit {
     fn drop(&mut self) {
         let _ = self.tx.send(Message::ViewCommitReady(self.id));
     }
+}
+
+fn view_commit_test_barrier(name: &'static str) {
+    fail::fail_point!(name);
 }
 
 impl Coordinator {
@@ -117,6 +128,7 @@ impl Coordinator {
                 phase_seconds
                     .with_label_values(&["candidate_queue"])
                     .observe(queued.elapsed().as_secs_f64());
+                view_commit_test_barrier("view_commit_before_transaction");
                 let start = Instant::now();
                 let result = worker_base
                     .transact_unpublished(
@@ -129,6 +141,7 @@ impl Coordinator {
                 phase_seconds
                     .with_label_values(&["transact"])
                     .observe(start.elapsed().as_secs_f64());
+                view_commit_test_barrier("view_commit_after_transaction");
                 (result, Instant::now())
             }
             .instrument(tracing::Span::current()),
@@ -178,6 +191,7 @@ impl Coordinator {
         };
         let phase_seconds = self.metrics.catalog_transact_phase_seconds.clone();
         let join_started = Instant::now();
+        view_commit_test_barrier("view_commit_join");
         let (result, completed) = worker.await;
         phase_seconds
             .with_label_values(&["candidate_join_wait"])

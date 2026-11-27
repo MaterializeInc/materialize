@@ -462,6 +462,7 @@ pub struct CatalogSession {
     conn_id: ConnectionId,
     user: mz_sql::session::user::User,
     uuid: uuid::Uuid,
+    authenticated_role: mz_repr::role_id::RoleId,
 }
 
 impl From<&ConnMeta> for CatalogSession {
@@ -470,6 +471,7 @@ impl From<&ConnMeta> for CatalogSession {
             conn_id: conn.conn_id().clone(),
             user: conn.user().clone(),
             uuid: conn.uuid(),
+            authenticated_role: *conn.authenticated_role_id(),
         }
     }
 }
@@ -485,6 +487,10 @@ impl CatalogSession {
 
     fn uuid(&self) -> uuid::Uuid {
         self.uuid
+    }
+
+    fn authenticated_role_id(&self) -> &mz_repr::role_id::RoleId {
+        &self.authenticated_role
     }
 }
 
