@@ -7,35 +7,44 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { Text } from "@chakra-ui/react";
+import { Box, Text, Tooltip } from "@chakra-ui/react";
 import * as Sentry from "@sentry/react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
 
-import { useTruncationTitles } from "./useTruncationTitles";
+import { registerTruncationTitles } from "./truncationTitles";
 
 const LABEL = "a long cluster name";
-const OTHER_LABEL = "a long cluster name, but another one";
-
-const Truncated = ({ label = LABEL }: { label?: string }) => {
-  useTruncationTitles();
-  return <Text noOfLines={1}>{label}</Text>;
-};
+const QUALIFIED_LABEL = `materialize.public.${LABEL}`;
 
 /** jsdom has no layout, so give the text the widths a narrow cell would. */
-const renderWithWidths = (scrollWidth: number, clientWidth: number) => {
-  const { rerender } = render(<Truncated />);
+const renderWithWidths = (
+  scrollWidth: number,
+  clientWidth: number,
+  ui = <Text noOfLines={1}>{LABEL}</Text>,
+) => {
+  render(ui);
   const element = screen.getByText(LABEL);
   Object.defineProperty(element, "scrollWidth", { value: scrollWidth });
   Object.defineProperty(element, "clientWidth", { value: clientWidth });
-  return { element, rerender };
+  return element;
 };
 
-describe("useTruncationTitles", () => {
+describe("registerTruncationTitles", () => {
+  let unregister: () => void;
+
+  beforeEach(() => {
+    unregister = registerTruncationTitles();
+  });
+
+  afterEach(() => {
+    unregister();
+  });
+
   it("titles truncated text while hovered", async () => {
     const user = userEvent.setup();
-    const { element } = renderWithWidths(400, 100);
+    const element = renderWithWidths(400, 100);
 
     await user.hover(element);
     expect(element).toHaveAttribute("title", LABEL);
@@ -45,19 +54,43 @@ describe("useTruncationTitles", () => {
 
   it("leaves text that fits alone", async () => {
     const user = userEvent.setup();
-    const { element } = renderWithWidths(100, 100);
+    const element = renderWithWidths(100, 100);
 
     await user.hover(element);
     expect(element).not.toHaveAttribute("title");
   });
 
-  it("follows the text when it changes while hovered", async () => {
+  it("titles truncated text when an inline child is hovered", async () => {
     const user = userEvent.setup();
-    const { element, rerender } = renderWithWidths(400, 100);
+    const element = renderWithWidths(
+      400,
+      100,
+      <Text noOfLines={1}>
+        {LABEL} <b>in bold</b>
+      </Text>,
+    );
+
+    await user.hover(screen.getByText("in bold"));
+    expect(element).toHaveAttribute("title", `${LABEL} in bold`);
+  });
+
+  it("leaves truncated text alone where a tooltip shows it in full", async () => {
+    const user = userEvent.setup();
+    const element = renderWithWidths(
+      400,
+      100,
+      <Tooltip label={QUALIFIED_LABEL}>
+        <Box data-no-truncation-title>
+          <Text noOfLines={1}>{LABEL}</Text>
+        </Box>
+      </Tooltip>,
+    );
 
     await user.hover(element);
-    rerender(<Truncated label={OTHER_LABEL} />);
-    await waitFor(() => expect(element).toHaveAttribute("title", OTHER_LABEL));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(
+      QUALIFIED_LABEL,
+    );
+    expect(element).not.toHaveAttribute("title");
   });
 
   it("keeps the text out of Sentry click breadcrumbs", async () => {
@@ -69,7 +102,7 @@ describe("useTruncationTitles", () => {
       transport: () => ({ send: async () => ({}), flush: async () => true }),
     });
     const user = userEvent.setup();
-    const { element } = renderWithWidths(400, 100);
+    const element = renderWithWidths(400, 100);
 
     await user.click(element);
     expect(element).toHaveAttribute("title", LABEL);

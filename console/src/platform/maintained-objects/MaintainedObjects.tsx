@@ -181,7 +181,7 @@ const ObjectNameCell = ({ row }: { row: MaintainedObjectListItem }) => {
   const fullyQualified = namespace ? `${namespace}.${row.name}` : row.name;
   return (
     <Tooltip label={fullyQualified} lineHeight={1.2} openDelay={200}>
-      <Box>
+      <Box data-no-truncation-title>
         <Text
           textStyle="text-small"
           fontWeight="500"

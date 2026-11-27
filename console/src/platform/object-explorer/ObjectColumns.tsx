@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { Box, Text, Tooltip, VStack } from "@chakra-ui/react";
+import { Text, VStack } from "@chakra-ui/react";
 import { createColumnHelper } from "@tanstack/react-table";
 import React from "react";
 
@@ -47,13 +47,9 @@ const tableColumns = [
       const comment = info.getValue() ?? "";
       if (!comment) return null;
       return (
-        <Tooltip label={comment} lineHeight={1.2} openDelay={200}>
-          <Box>
-            <Text whiteSpace="normal" noOfLines={3}>
-              {comment}
-            </Text>
-          </Box>
-        </Tooltip>
+        <Text whiteSpace="normal" noOfLines={3}>
+          {comment}
+        </Text>
       );
     },
     meta: {

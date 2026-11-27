@@ -346,26 +346,12 @@ export const SidebarItemLabel = (props: TextProps) => {
 };
 
 export const SidebarItemValue = (props: TextProps) => {
-  let title: string | undefined = props.title;
-
-  if (title === undefined) {
-    if (
-      Array.isArray(props.children) &&
-      props.children.every((child) => typeof child === "string")
-    ) {
-      title = props.children.join(" ");
-    } else if (typeof props.children === "string") {
-      title = props.children;
-    }
-  }
-
   return (
     <Text
       overflow="hidden"
       textOverflow="ellipsis"
       whiteSpace="nowrap"
       textStyle="text-ui-reg"
-      title={title}
       {...props}
     />
   );

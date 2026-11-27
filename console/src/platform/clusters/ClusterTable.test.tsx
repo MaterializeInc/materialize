@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { screen, within } from "@testing-library/react";
+import { act, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
 
@@ -184,6 +184,24 @@ describe("ClusterTable", () => {
     expect(
       screen.queryByRole("button", { name: /Show replicas of/ }),
     ).not.toBeInTheDocument();
+  });
+
+  it("keeps a cluster's row when another cluster sorts ahead of it", async () => {
+    const compute = buildCluster();
+    await renderClustersList([compute]);
+    const name = screen.getByText("compute");
+
+    act(() =>
+      getStore().set(
+        allClusters,
+        mockSubscribeState({
+          data: [buildCluster({ id: "u2", name: "analytics" }), compute],
+        }),
+      ),
+    );
+
+    expect(await screen.findByText("analytics")).toBeVisible();
+    expect(name).toHaveTextContent("compute");
   });
 
   // The offline map is keyed by replica id. A cluster-level warning has to roll
