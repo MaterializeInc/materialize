@@ -302,6 +302,7 @@ impl Client {
             write_notify,
             session_defaults,
             catalog,
+            catalog_visibility,
             storage_collections,
             transient_id_gen,
             optimizer_metrics,
@@ -318,6 +319,7 @@ impl Client {
             CoordinatorClient::Session(self.clone()),
             connection_peeks,
             &catalog,
+            catalog_visibility,
             storage_collections,
             transient_id_gen,
             optimizer_metrics,
@@ -339,6 +341,7 @@ impl Client {
             frontend_cancel_rx,
         };
 
+        client.peek_client.await_catalog_visibility().await;
         let session = client.session();
 
         // Apply the superuser attribute to the session's user if
@@ -598,7 +601,13 @@ Issue a SQL query to get started. Need help?
     pub async fn catalog_snapshot_expensive(&self) -> Arc<Catalog> {
         let (tx, rx) = oneshot::channel();
         self.send(Command::CatalogSnapshot { tx });
-        let CatalogSnapshot { catalog } = rx.await.expect("coordinator unexpectedly gone");
+        let CatalogSnapshot {
+            catalog,
+            visibility,
+        } = rx.await.expect("coordinator unexpectedly gone");
+        if let Some(visibility) = visibility {
+            visibility.wait().await;
+        }
         catalog
     }
 

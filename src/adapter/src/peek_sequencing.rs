@@ -236,9 +236,15 @@ impl PeekClient {
     ) -> Result<Vec<Row>, AdapterError> {
         // Not `catalog_snapshot`, which expects the coordinator to outlive its
         // caller. A background client may race the coordinator's shutdown.
-        let CatalogSnapshot { catalog } = self
+        let CatalogSnapshot {
+            catalog,
+            visibility,
+        } = self
             .call_coordinator(|tx| Command::CatalogSnapshot { tx })
             .await?;
+        if let Some(visibility) = visibility {
+            visibility.wait().await;
+        }
         let (cluster_name, replica_name) = {
             let cluster = catalog
                 .try_get_cluster(cluster_id)

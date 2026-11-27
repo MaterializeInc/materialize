@@ -56,6 +56,365 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_postgres::error::{DbError, SqlState};
 use tracing::{debug, info};
 
+struct CatalogVisibilityGate {
+    failpoint: &'static str,
+    gate: Arc<(Mutex<bool>, std::sync::Condvar)>,
+    expired: Arc<AtomicBool>,
+}
+
+impl CatalogVisibilityGate {
+    fn install(failpoint: &'static str) -> (Self, oneshot::Receiver<()>) {
+        let gate = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+        let expired = Arc::new(AtomicBool::new(false));
+        let release = Self {
+            failpoint,
+            gate: Arc::clone(&gate),
+            expired: Arc::clone(&expired),
+        };
+        let (parked_tx, parked_rx) = oneshot::channel();
+        fail::cfg_callback(failpoint, {
+            let parked_tx = Mutex::new(Some(parked_tx));
+            move || {
+                let (released, wake) = &*gate;
+                let released = released.lock().unwrap();
+                let tx = parked_tx.lock().unwrap().take();
+                if let Some(tx) = tx {
+                    let _ = tx.send(());
+                }
+                let (mut released, timeout) = wake
+                    .wait_timeout_while(released, Duration::from_secs(10), |released| !*released)
+                    .unwrap();
+                if timeout.timed_out() && !*released {
+                    expired.store(true, Ordering::SeqCst);
+                    *released = true;
+                    wake.notify_all();
+                }
+            }
+        })
+        .unwrap();
+        (release, parked_rx)
+    }
+
+    fn release(self) {
+        // Check expiry and release under the same lock so expiry cannot turn a
+        // blocked operation into an apparent success between the two.
+        let (released, wake) = &*self.gate;
+        let mut released = released.lock().unwrap();
+        let expired = self.expired.load(Ordering::SeqCst);
+        *released = true;
+        wake.notify_all();
+        drop(released);
+        assert!(!expired, "{} pause expired", self.failpoint);
+    }
+}
+
+impl Drop for CatalogVisibilityGate {
+    fn drop(&mut self) {
+        let (released, wake) = &*self.gate;
+        *released.lock().unwrap() = true;
+        wake.notify_all();
+        fail::remove(self.failpoint);
+    }
+}
+
+// This failpoint is process-global. Run this test in its own process (as nextest does).
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+#[allow(clippy::disallowed_methods)]
+async fn test_ddl_catalog_visibility_and_liveness() {
+    use std::future::IntoFuture;
+
+    use mz_adapter::session::{EndTransactionAction, SessionConfig, TransactionOps};
+    use mz_auth::{Authenticated, AuthenticatorKind};
+
+    const FAILPOINT: &str = "group_commit_before_apply_write";
+    const READ: &str = "SELECT (SELECT count(*) FROM mz_views \
+                       WHERE name = 'visibility_view') FROM visibility_view";
+
+    async fn pending_ddl(adapter: &mz_adapter::Client, sql: &str) -> mz_adapter::SessionClient {
+        let session = adapter.new_session(
+            SessionConfig {
+                conn_id: adapter.new_conn_id().unwrap(),
+                uuid: uuid::Uuid::new_v4(),
+                user: "materialize".into(),
+                client_ip: Some(Ipv4Addr::LOCALHOST.into()),
+                external_metadata_rx: None,
+                helm_chart_version: None,
+                authenticator_kind: AuthenticatorKind::None,
+                groups: None,
+            },
+            Authenticated,
+        );
+        let mut session = adapter.startup(session).await.unwrap();
+        for sql in ["BEGIN", sql] {
+            session.start_transaction(Some(1)).unwrap();
+            let stmt = mz_sql::parse::parse(sql).unwrap().pop().unwrap().ast;
+            session.declare("".into(), stmt, sql.into()).await.unwrap();
+            session
+                .execute("".into(), futures::future::pending(), None)
+                .await
+                .unwrap();
+        }
+        assert!(matches!(
+            &session.session().transaction().inner().unwrap().ops,
+            TransactionOps::SingleStatement { .. }
+        ));
+        session
+    }
+
+    async fn until(mut condition: impl FnMut() -> bool) {
+        while !condition() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    let server = test_util::TestHarness::default().start().await;
+    let adapter = server.inner.adapter_client();
+    let (writer, writer_connection) = server.connect().with_handle().await.unwrap();
+    let _writer_connection = writer_connection.abort_on_drop();
+    let (reader, reader_connection) = server.connect().with_handle().await.unwrap();
+    let _reader_connection = reader_connection.abort_on_drop();
+    reader.query_one("SELECT 1", &[]).await.unwrap();
+
+    // COMMIT submits these saved statements directly to the coordinator. Sending
+    // fresh SQL after publication would wait at the frontend snapshot barrier,
+    // and could not distinguish a held DDL lock from a correctly released one.
+    let mut second = pending_ddl(adapter, "CREATE VIEW visibility_second AS SELECT 1").await;
+    let mut noop = pending_ddl(
+        adapter,
+        "CREATE VIEW IF NOT EXISTS visibility_view AS SELECT 2",
+    )
+    .await;
+    let mut duplicate = pending_ddl(adapter, "CREATE VIEW visibility_view AS SELECT 3").await;
+    let staged = adapter
+        .metrics()
+        .catalog_transact_phase_seconds
+        .with_label_values(&["stage_builtin"]);
+    let arrival_misses = adapter
+        .metrics()
+        .catalog_snapshot_cache
+        .with_label_values(&["statement_arrival_logging", "miss"]);
+    let active_sessions = adapter
+        .metrics()
+        .active_sessions
+        .with_label_values(&["user"]);
+    let stage_before = staged.get_sample_count();
+    let (release, parked_rx) = CatalogVisibilityGate::install(FAILPOINT);
+
+    let mut create = task::spawn(|| "visibility_create", async move {
+        writer
+            .batch_execute("CREATE VIEW visibility_view AS SELECT 1")
+            .await
+    })
+    .abort_on_drop();
+
+    tokio::time::timeout(Duration::from_secs(30), async {
+        parked_rx.await.unwrap();
+        // The first paused write may be a keepalive. The FIFO group committer
+        // also blocks every later builtin write. Staging, not the callback alone,
+        // establishes that the catalog mutation has happened before the reads.
+        until(|| staged.get_sample_count() > stage_before).await;
+        let first_stage = staged.get_sample_count();
+        let mut noop_commit = Box::pin(noop.end_transaction(EndTransactionAction::Commit));
+        let mut dup_commit = Box::pin(duplicate.end_transaction(EndTransactionAction::Commit));
+        assert!(futures::poll!(&mut noop_commit).is_pending());
+        assert!(futures::poll!(&mut dup_commit).is_pending());
+        // Submit the second mutation after the no-op and error on the same FIFO
+        // command channel, so neither can retain the DDL lock until its response.
+        let mut second_commit = Box::pin(second.end_transaction(EndTransactionAction::Commit));
+        assert!(futures::poll!(&mut second_commit).is_pending());
+        until(|| staged.get_sample_count() > first_stage).await;
+        assert!(
+            !create.is_finished(),
+            "CREATE responded before oracle apply"
+        );
+
+        let misses_before = arrival_misses.get();
+        let mut read = task::spawn(|| "visibility_read", async move {
+            reader.query_one(READ, &[]).await
+        })
+        .abort_on_drop();
+        until(|| arrival_misses.get() > misses_before).await;
+
+        let sessions_before = active_sessions.get();
+        let connect = server.connect().with_handle().into_future();
+        let mut startup_read = task::spawn(|| "visibility_startup_read", async move {
+            let (client, connection) = connect.await.unwrap();
+            let _connection = connection.abort_on_drop();
+            client.query_one(READ, &[]).await
+        })
+        .abort_on_drop();
+        until(|| active_sessions.get() > sessions_before).await;
+
+        // All requests have crossed their admission points while apply_write is
+        // held. This interval checks non-completion, not race synchronization.
+        tokio::select! {
+            result = &mut create => panic!("CREATE responded before apply: {result:?}"),
+            result = &mut second_commit => panic!("second DDL responded before apply: {result:?}"),
+            result = &mut noop_commit => panic!("IF NOT EXISTS responded before apply: {result:?}"),
+            result = &mut dup_commit => panic!("duplicate responded before apply: {result:?}"),
+            result = &mut read => panic!("snapshot read completed before apply: {result:?}"),
+            result = &mut startup_read => panic!("startup read completed before apply: {result:?}"),
+            _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+        }
+        release.release();
+        create.await.unwrap();
+        second_commit.await.unwrap();
+        noop_commit.await.unwrap();
+        let error = dup_commit.await.unwrap_err();
+        assert_contains!(error.to_string(), "already exists");
+        assert_eq!(read.await.unwrap().get::<_, i64>(0), 1);
+        assert_eq!(startup_read.await.unwrap().get::<_, i64>(0), 1);
+    })
+    .await
+    .expect("DDL visibility or lock-release check timed out");
+}
+
+// These failpoints are process-global. Run this test in its own process.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+#[allow(clippy::disallowed_methods)]
+async fn test_ddl_registration_visibility_and_cancellation() {
+    use futures::StreamExt;
+    use mz_adapter::session::{EndTransactionAction, SessionConfig};
+    use mz_adapter::{AdapterError, ExecuteResponse, PeekResponseUnary};
+    use mz_auth::{Authenticated, AuthenticatorKind};
+
+    let server = test_util::TestHarness::default().start().await;
+    let adapter = server.inner.adapter_client();
+    let (writer, connection) = server.connect().with_handle().await.unwrap();
+    let _connection = connection.abort_on_drop();
+    for sql in [
+        "CREATE TABLE registration_input (a int)",
+        "INSERT INTO registration_input VALUES (7)",
+        "CREATE DEFAULT INDEX ON registration_input",
+    ] {
+        writer.batch_execute(sql).await.unwrap();
+    }
+    let session = adapter.new_session(
+        SessionConfig {
+            conn_id: adapter.new_conn_id().unwrap(),
+            uuid: uuid::Uuid::new_v4(),
+            user: "materialize".into(),
+            client_ip: Some(Ipv4Addr::LOCALHOST.into()),
+            external_metadata_rx: None,
+            helm_chart_version: None,
+            authenticator_kind: AuthenticatorKind::None,
+            groups: None,
+        },
+        Authenticated,
+    );
+    let mut reader = adapter.startup(session).await.unwrap();
+    reader.start_transaction(Some(2)).unwrap();
+    for portal in ["old_snapshot", "next_statement"] {
+        let sql = "SELECT a FROM registration_input";
+        let stmt = mz_sql::parse::parse(sql).unwrap().pop().unwrap().ast;
+        reader
+            .declare(portal.into(), stmt, sql.into())
+            .await
+            .unwrap();
+    }
+
+    let staged = adapter
+        .metrics()
+        .catalog_transact_phase_seconds
+        .with_label_values(&["stage_builtin"]);
+    let peek_hits = adapter
+        .metrics()
+        .catalog_snapshot_cache
+        .with_label_values(&["try_peek", "hit"]);
+    let retained_hits = adapter
+        .metrics()
+        .catalog_snapshot_cache
+        .with_label_values(&["visibility_after_cancel", "hit"]);
+    let retained_misses = adapter
+        .metrics()
+        .catalog_snapshot_cache
+        .with_label_values(&["visibility_after_cancel", "miss"]);
+
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let (optimize, optimizing) = CatalogVisibilityGate::install("peek_before_optimize");
+        let mut old_read = task::spawn(|| "visibility_old_snapshot", async move {
+            let (response, _) = reader
+                .execute("old_snapshot".into(), futures::future::pending(), None)
+                .await
+                .unwrap();
+            let ExecuteResponse::SendingRowsStreaming { mut rows, .. } = response else {
+                panic!("indexed read did not register a streaming peek: {response:?}");
+            };
+            let mut values = Vec::new();
+            while let Some(response) = rows.next().await {
+                let PeekResponseUnary::Rows(mut batch) = response else {
+                    panic!("old-snapshot peek failed: {response:?}");
+                };
+                while let Some(row) = batch.next() {
+                    values.push(row.unpack_first().unwrap_int32());
+                }
+            }
+            assert_eq!(values, vec![7]);
+            reader
+        })
+        .abort_on_drop();
+        optimizing.await.unwrap();
+
+        let stage_before = staged.get_sample_count();
+        let (apply, applying) = CatalogVisibilityGate::install("group_commit_before_apply_write");
+        let create = task::spawn(|| "visibility_registration_create", async move {
+            writer
+                .batch_execute("CREATE VIEW registration_unrelated AS SELECT 1")
+                .await
+        })
+        .abort_on_drop();
+        applying.await.unwrap();
+        // A keepalive can reach the apply gate first. Staging establishes the
+        // revision change that forces the old plan through registration refresh.
+        while staged.get_sample_count() == stage_before {
+            tokio::task::yield_now().await;
+        }
+        optimize.release();
+        let mut reader = (&mut old_read).await;
+        assert!(!create.is_finished(), "DDL responded before apply");
+
+        // No declare or pgwire metadata request may consume the cached barrier
+        // before execute reaches its cancellable try_peek snapshot wait.
+        let hits_before = peek_hits.get();
+        let (cancel_tx, cancel_rx) = oneshot::channel();
+        let mut next = Box::pin(reader.execute(
+            "next_statement".into(),
+            async move {
+                cancel_rx.await.unwrap();
+                std::io::Error::other("cancel pending catalog visibility wait")
+            },
+            None,
+        ));
+        assert!(futures::poll!(&mut next).is_pending());
+        assert_eq!(
+            peek_hits.get(),
+            hits_before + 1,
+            "registration must cache its refresh"
+        );
+        cancel_tx.send(()).unwrap();
+        assert!(matches!(next.await, Err(AdapterError::Canceled)));
+
+        let hits_before = retained_hits.get();
+        let misses_before = retained_misses.get();
+        let mut snapshot = Box::pin(reader.catalog_snapshot("visibility_after_cancel"));
+        assert!(
+            futures::poll!(&mut snapshot).is_pending(),
+            "cancellation discarded the cached visibility barrier"
+        );
+        assert_eq!(retained_hits.get(), hits_before + 1);
+        assert_eq!(retained_misses.get(), misses_before);
+        apply.release();
+        snapshot.await;
+        create.await.unwrap();
+        reader
+            .end_transaction(EndTransactionAction::Rollback)
+            .await
+            .unwrap();
+    })
+    .await
+    .expect("registration visibility or cancellation check timed out");
+}
+
 /// An HTTP server whose responses can be controlled from another thread.
 struct MockHttpServer {
     _task: AbortOnDropHandle<()>,

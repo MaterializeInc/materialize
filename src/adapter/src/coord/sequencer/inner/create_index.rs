@@ -501,6 +501,7 @@ impl Coordinator {
             )
             .await;
 
+        let defer_visibility = ctx.finish_ddl_on_coordinator;
         let transact_result = self
             .catalog_transact_with_side_effects(Some(ctx), ops, move |coord, _ctx| {
                 Box::pin(async move {
@@ -512,8 +513,9 @@ impl Coordinator {
                         .catalog_mut()
                         .set_physical_plan(global_id, df_desc.clone());
 
-                    let notice_builtin_updates_fut =
-                        coord.persist_dataflow_metainfo(df_meta, global_id);
+                    let notice_builtin_updates_fut = coord
+                        .persist_dataflow_metainfo(df_meta, global_id)
+                        .filter(|_| !defer_visibility);
 
                     // TODO: Maybe in the future, pass the read holds
                     // `ship_new_dataflow` takes on to compute, to hold on to them

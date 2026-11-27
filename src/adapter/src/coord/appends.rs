@@ -39,7 +39,8 @@ use std::pin::Pin;
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
-use futures::future::{BoxFuture, FutureExt};
+use derivative::Derivative;
+use futures::future::{BoxFuture, FutureExt, Shared};
 use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::GROUP_COMMIT_MAX_ATTEMPTS;
 use mz_catalog::builtin::{BuiltinTable, MZ_SESSIONS};
@@ -912,6 +913,13 @@ impl Coordinator {
     pub(crate) fn builtin_table_update<'a>(&'a mut self) -> BuiltinTableAppend<'a> {
         BuiltinTableAppend { coord: self }
     }
+
+    pub(crate) fn pending_catalog_visibility(&self) -> Option<CatalogVisibilityBarrier> {
+        self.catalog_visibility
+            .as_ref()
+            .filter(|barrier| barrier.notify.peek().is_none())
+            .cloned()
+    }
 }
 
 /// Helper struct to run a builtin table append.
@@ -930,6 +938,20 @@ pub struct BuiltinTableAppend<'a> {
 /// type allows you to execute a builtin table write, e.g. via [`BuiltinTableAppend::execute`], and
 /// wait for it to complete, while other long running tasks are concurrently executing.
 pub type BuiltinTableAppendNotify = Pin<Box<dyn Future<Output = ()> + Send + Sync + 'static>>;
+
+/// Completion of the builtin writes associated with a published catalog snapshot.
+#[derive(Clone, Derivative)]
+#[derivative(Debug)]
+pub struct CatalogVisibilityBarrier {
+    #[derivative(Debug = "ignore")]
+    notify: Shared<BuiltinTableAppendNotify>,
+}
+
+impl CatalogVisibilityBarrier {
+    pub async fn wait(self) {
+        self.notify.await;
+    }
+}
 
 /// Completion handle for a builtin-table append response barrier.
 pub struct BuiltinTableAppendCompletion {
@@ -954,6 +976,21 @@ impl BuiltinTableAppendCompletion {
 }
 
 impl<'a> BuiltinTableAppend<'a> {
+    /// Stages a catalog mutation's builtin rows before its coordinator turn ends.
+    ///
+    /// Snapshot consumers must await the associated visibility barrier before choosing a read
+    /// timestamp. Background introspection writes do not participate in this contract.
+    pub fn execute_catalog(self, updates: Vec<BuiltinTableUpdate>) -> BuiltinTableAppendNotify {
+        let coord = self.coord;
+        let notify = coord.builtin_table_update().execute(updates).shared();
+        // The committer stages writes FIFO and notifies after applying their timestamp to the
+        // oracle, so the latest completion also covers all earlier catalog writes.
+        coord.catalog_visibility = Some(CatalogVisibilityBarrier {
+            notify: notify.clone(),
+        });
+        Box::pin(notify)
+    }
+
     /// Submit a write to a system table to be executed during the next group commit. This method
     /// __does not__ trigger a group commit.
     ///

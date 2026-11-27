@@ -619,6 +619,10 @@ impl Coordinator {
             .metrics
             .catalog_transact_phase_seconds
             .with_label_values(&["table_updates_residual_wait"]);
+        let defer_visibility = ctx
+            .as_ref()
+            .is_some_and(|ctx| ctx.finish_ddl_on_coordinator);
+        let table_updates = (!defer_visibility).then_some(table_updates);
         let side_effects_fut = side_effect(self, ctx);
 
         // Run our side effects concurrently with the table updates.
@@ -629,12 +633,17 @@ impl Coordinator {
                 .instrument(info_span!(
                     "coord::catalog_transact_with_side_effects::side_effects_fut"
                 )),
-            table_updates
-                .wall_time()
-                .observe(table_updates_wait)
-                .instrument(info_span!(
-                    "coord::catalog_transact_with_side_effects::table_updates"
-                )),
+            async move {
+                if let Some(table_updates) = table_updates {
+                    table_updates
+                        .wall_time()
+                        .observe(table_updates_wait)
+                        .instrument(info_span!(
+                            "coord::catalog_transact_with_side_effects::table_updates"
+                        ))
+                        .await;
+                }
+            },
         )
         .await;
 
@@ -686,6 +695,32 @@ impl Coordinator {
         Ok(())
     }
 
+    pub(super) fn finish_ddl_statement(
+        &mut self,
+        mut ctx: ExecuteContext,
+        result: Result<crate::ExecuteResponse, AdapterError>,
+    ) {
+        if let Some(visibility) = self.pending_catalog_visibility() {
+            let start = Instant::now();
+            let metric = self
+                .metrics
+                .catalog_transact_phase_seconds
+                .with_label_values(&["response_visibility_wait"]);
+            ctx.delay_response_until(BuiltinTableAppendCompletion::new(Box::pin(async move {
+                visibility.wait().await;
+                metric.observe(start.elapsed().as_secs_f64());
+            })));
+        }
+        if let Some(guard) = self
+            .active_conns
+            .get_mut(ctx.session().conn_id())
+            .and_then(|connection| connection.deferred_lock.take())
+        {
+            self.release_ddl_lock(guard);
+        }
+        ctx.retire(result);
+    }
+
     pub(super) fn release_ddl_lock(&self, guard: tokio::sync::OwnedMutexGuard<()>) {
         drop(guard);
         if !self.serialized_ddl.is_empty() {
@@ -716,6 +751,14 @@ impl Coordinator {
                 }
             },
         };
+        if let Some(visibility) = self.pending_catalog_visibility() {
+            pending
+                .context
+                .context_mut()
+                .delay_response_until(BuiltinTableAppendCompletion::new(Box::pin(
+                    visibility.wait(),
+                )));
+        }
         let result = loop {
             match self
                 .catalog_transact_commands(
@@ -927,7 +970,9 @@ impl Coordinator {
 
         self.track_catalog_audit_events(Some(conn_id), audit_events);
         let stage_start = Instant::now();
-        let table_updates = self.builtin_table_update().execute(builtin_table_updates);
+        let table_updates = self
+            .builtin_table_update()
+            .execute_catalog(builtin_table_updates);
         phase_seconds
             .with_label_values(&["stage_builtin"])
             .observe(stage_start.elapsed().as_secs_f64());
@@ -950,6 +995,10 @@ impl Coordinator {
             .metrics
             .catalog_transact_phase_seconds
             .with_label_values(&["table_updates_wait"]);
+        let defer_visibility = ctx
+            .as_ref()
+            .is_some_and(|ctx| ctx.finish_ddl_on_coordinator);
+        let table_updates = (!defer_visibility).then_some(table_updates);
         let apply_catalog_implications_fut =
             Box::pin(self.apply_catalog_implications(ctx, catalog_updates));
 
@@ -958,12 +1007,17 @@ impl Coordinator {
             apply_catalog_implications_fut.instrument(info_span!(
                 "coord::catalog_transact_with_context::side_effects_fut"
             )),
-            table_updates
-                .wall_time()
-                .observe(table_updates_wait)
-                .instrument(info_span!(
-                    "coord::catalog_transact_with_context::table_updates"
-                )),
+            async move {
+                if let Some(table_updates) = table_updates {
+                    table_updates
+                        .wall_time()
+                        .observe(table_updates_wait)
+                        .instrument(info_span!(
+                            "coord::catalog_transact_with_context::table_updates"
+                        ))
+                        .await;
+                }
+            },
         )
         .await;
 
@@ -1221,7 +1275,9 @@ impl Coordinator {
         // Append our builtin table updates, then return the notify so we can run other tasks in
         // parallel.
         let stage_start = Instant::now();
-        let builtin_update_notify = self.builtin_table_update().execute(builtin_table_updates);
+        let builtin_update_notify = self
+            .builtin_table_update()
+            .execute_catalog(builtin_table_updates);
         phase_seconds
             .with_label_values(&["stage_builtin"])
             .observe(stage_start.elapsed().as_secs_f64());
