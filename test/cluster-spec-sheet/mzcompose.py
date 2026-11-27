@@ -2905,11 +2905,7 @@ class DdlCatalogScalingScenario(EnvdObjectsScalabilityScenario):
                                 driver.run(kind, "cycle", duration=self.tail_duration)
                     finally:
                         driver.close()
-                if self.responsiveness_duration and runner.scale in (
-                    5000,
-                    10000,
-                    30000,
-                ):
+                if self.responsiveness_duration:
                     for repetition in range(self.repeats):
                         phase_context = {"repetition": repetition, "warmup": False}
                         for condition, concurrency in responsiveness_conditions(
@@ -4355,7 +4351,7 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
         "--ddl-responsiveness-duration",
         type=responsiveness_duration,
         default=os.environ.get("CI_DDL_RESPONSIVENESS_DURATION", "0"),
-        help="Separate responsiveness phases at 5k/10k/30k objects. Zero disables them.",
+        help="Separate responsiveness phases at each catalog size. Zero disables them.",
     )
     parser.add_argument(
         "--ddl-configuration-sha256",

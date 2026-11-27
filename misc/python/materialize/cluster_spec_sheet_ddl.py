@@ -194,10 +194,11 @@ def responsiveness_duration(value: str | float) -> float:
 
 
 def responsiveness_conditions(concurrencies: list[int]) -> list[tuple[str, int]]:
+    if any(concurrency < 1 for concurrency in concurrencies):
+        raise ValueError("DDL concurrency must be positive")
     return [("probes_only", 0)] + [
         (condition, concurrency)
         for concurrency in concurrencies
-        if concurrency in (1, 8)
         for condition in ("view_load", "view_load_replan")
     ]
 
@@ -285,7 +286,10 @@ def run_responsiveness(
     """
     if responsiveness_duration(duration) == 0:
         raise ValueError("responsiveness condition requires a positive duration")
-    if (condition, concurrency) not in responsiveness_conditions([1, 8]):
+    valid = (condition == "probes_only" and concurrency == 0) or (
+        condition in ("view_load", "view_load_replan") and concurrency > 0
+    )
+    if not valid:
         raise ValueError("invalid responsiveness condition")
     lock = Lock()
 
@@ -337,8 +341,13 @@ def run_responsiveness(
             elif not expected or not all(row and row[0] for row in expected):
                 raise RuntimeError("empty replan result")
 
-            def execute(conn=conn, query=query, expected=expected):
-                if conn.execute(query).fetchall() != expected:
+            def execute(conn=conn, query=query, expected=expected, name=name):
+                rows = conn.execute(query).fetchall()
+                if name == "replan":
+                    # Plan estimates may change without changing the fixture's results.
+                    if not rows or not all(row and row[0] for row in rows):
+                        raise RuntimeError("empty replan result")
+                elif rows != expected:
                     raise RuntimeError("responsiveness result changed")
 
             probes.append((name, execute, hz))

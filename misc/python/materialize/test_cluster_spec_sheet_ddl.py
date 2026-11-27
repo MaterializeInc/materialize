@@ -196,15 +196,18 @@ def test_responsiveness_duration_rejects_invalid_values(value):
         ddl.responsiveness_duration(value)
 
 
-def test_responsiveness_conditions_do_not_expand_ddl_concurrencies():
+def test_responsiveness_conditions_follow_configured_concurrencies():
     assert ddl.responsiveness_conditions([1, 8, 32]) == [
         ("probes_only", 0),
         ("view_load", 1),
         ("view_load_replan", 1),
         ("view_load", 8),
         ("view_load_replan", 8),
+        ("view_load", 32),
+        ("view_load_replan", 32),
     ]
-    assert ddl.responsiveness_conditions([32]) == [("probes_only", 0)]
+    with pytest.raises(ValueError, match="positive"):
+        ddl.responsiveness_conditions([0])
 
 
 class ProbeConnection(Connection):
@@ -223,7 +226,8 @@ class ProbeConnection(Connection):
 
 
 @pytest.mark.parametrize("fail", [False, True])
-def test_responsiveness_events_and_connections_are_isolated(monkeypatch, fail):
+@pytest.mark.parametrize("concurrency", [2, 8])
+def test_responsiveness_events_and_connections_are_isolated(monkeypatch, fail, concurrency):
     connections = []
 
     def connect():
@@ -255,7 +259,7 @@ def test_responsiveness_events_and_connections_are_isolated(monkeypatch, fail):
 
     def run():
         ddl.run_responsiveness(
-            connect, "probe", "c", 20, "view_load_replan", 8, events.append
+            connect, "probe", "c", 20, "view_load_replan", concurrency, events.append
         )
 
     if fail:
@@ -268,7 +272,7 @@ def test_responsiveness_events_and_connections_are_isolated(monkeypatch, fail):
     assert all(c.autocommit and c.prepare_threshold is None for c in connections[:3])
     assert all(e["event"].startswith("responsiveness_") for e in events)
     assert all(
-        e["condition"] == "view_load_replan" and e["concurrency"] == 8 for e in events
+        e["condition"] == "view_load_replan" and e["concurrency"] == concurrency for e in events
     )
     assert events[-1]["failed"] == fail
     assert {
@@ -356,7 +360,7 @@ def test_responsiveness_cli_rejects_invalid_duration(harness, monkeypatch, env, 
     assert error.value.code == 2
 
 
-@pytest.mark.parametrize("duration,size", [(0, 5000), (20, 5000), (20, 1000)])
+@pytest.mark.parametrize("duration,size", [(0, 5000), (20, 5000), (20, 60)])
 def test_responsiveness_runs_only_after_normal_matrix(
     harness, monkeypatch, tmp_path, duration, size
 ):
@@ -404,6 +408,6 @@ def test_responsiveness_runs_only_after_normal_matrix(
     # Six kind/concurrency pairs, each with warmup, three batches/cycles and tail.
     assert len(calls[:66]) == 66
     assert all(call[0] != "responsiveness" for call in calls[:66])
-    assert len(calls) == (81 if duration and size == 5000 else 66)
+    assert len(calls) == (81 if duration else 66)
     assert runner.add_result.call_count == 36
     assert scenario.record_configuration.call_args.args[-1] == "after-measurement"
