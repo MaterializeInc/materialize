@@ -2063,7 +2063,7 @@ def workflow_connection_updates(c: Composition, parser: WorkflowArgumentParser) 
             f"in dry-run, got {len(altered)}: {altered}"
         )
 
-    def assert_idempotent_after_update(project: str) -> None:
+    def assert_idempotent_after_update(project: str) -> list[str]:
         result = run_mz_deploy(c, project, "apply", "--dry-run", "--output", "json")
         dry_run = parse_dry_run_json(result)
         conn_phase = find_phase(dry_run["phases"], "connections")
@@ -2076,6 +2076,7 @@ def workflow_connection_updates(c: Composition, parser: WorkflowArgumentParser) 
         assert len(up_to_date) >= 1, (
             f"[{project}] re-apply should report up_to_date, " f"got {len(up_to_date)}"
         )
+        return [a["object"] for a in up_to_date]
 
     # ── 1. Initial baseline apply ────────────────────────────────────────
     # First baseline apply also creates the `app` database, secrets, and the
@@ -2086,7 +2087,8 @@ def workflow_connection_updates(c: Composition, parser: WorkflowArgumentParser) 
 
     with c.test_case("connection-ssh-tunnel-up-to-date"):
         # The public keys Materialize generates for ssh_conn are not drift.
-        assert_idempotent_after_update("connection-updates/baseline")
+        up_to_date = assert_idempotent_after_update("connection-updates/baseline")
+        assert "app.public.ssh_conn" in up_to_date, up_to_date
 
     with c.test_case("connection-add-option"):
         # Baseline lacks SSL MODE; add-option adds it. Exercises the SET

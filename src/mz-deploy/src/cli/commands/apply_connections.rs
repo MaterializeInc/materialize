@@ -279,19 +279,25 @@ fn diff_connection_options(
     project_opts: &[ConnectionOption<Raw>],
     live_opts: &[ConnectionOption<Raw>],
 ) -> (Vec<ConnectionOption<Raw>>, Vec<ConnectionOptionName>) {
-    let project_map: BTreeMap<ConnectionOptionName, &ConnectionOption<Raw>> =
-        project_opts.iter().map(|o| (o.name, o)).collect();
     // SHOW CREATE CONNECTION lists the public keys Materialize generated for an
-    // SSH tunnel, which a project cannot declare. Dropping them makes
-    // Materialize show new public keys that match none of its private keys.
+    // SSH tunnel. Dropping them makes Materialize show new public keys that
+    // match none of its private keys. A project copied from that output
+    // declares them, and setting them would alter the connection on every
+    // apply.
+    let generated = |name: ConnectionOptionName| {
+        matches!(
+            name,
+            ConnectionOptionName::PublicKey1 | ConnectionOptionName::PublicKey2
+        )
+    };
+    let project_map: BTreeMap<ConnectionOptionName, &ConnectionOption<Raw>> = project_opts
+        .iter()
+        .filter(|o| !generated(o.name))
+        .map(|o| (o.name, o))
+        .collect();
     let live_map: BTreeMap<ConnectionOptionName, &ConnectionOption<Raw>> = live_opts
         .iter()
-        .filter(|o| {
-            !matches!(
-                o.name,
-                ConnectionOptionName::PublicKey1 | ConnectionOptionName::PublicKey2
-            )
-        })
+        .filter(|o| !generated(o.name))
         .map(|o| (o.name, o))
         .collect();
 
@@ -343,6 +349,22 @@ mod tests {
         let (to_set, to_drop) = diff_connection_options(&opts, &opts);
         assert!(to_set.is_empty());
         assert!(to_drop.is_empty());
+    }
+
+    #[mz_ore::test]
+    fn test_diff_ignores_generated_public_keys() {
+        let declared = vec![make_option(ConnectionOptionName::Host, "bastion")];
+        let live = vec![
+            make_option(ConnectionOptionName::Host, "bastion"),
+            make_option(ConnectionOptionName::PublicKey1, "ssh-ed25519 a"),
+            make_option(ConnectionOptionName::PublicKey2, "ssh-ed25519 b"),
+        ];
+        // `live` as the project is a definition copied from SHOW CREATE CONNECTION.
+        for project in [&declared, &live] {
+            let (to_set, to_drop) = diff_connection_options(project, &live);
+            assert!(to_set.is_empty());
+            assert!(to_drop.is_empty());
+        }
     }
 
     #[mz_ore::test]
