@@ -427,7 +427,7 @@ impl Catalog {
                     .expect("expression cache shard should exist for opened catalogs"),
                 persist: config.persist_client,
                 current_items,
-                remove_prior_versions: !config.read_only,
+                read_only: config.read_only,
                 compact_shard: config.read_only,
                 dyncfgs,
             };
