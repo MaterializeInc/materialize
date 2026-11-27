@@ -1239,6 +1239,14 @@ impl Coordinator {
         params: Params,
         mut ctx: ExecuteContext,
     ) {
+        // ACL plans can capture whole object sets, as REASSIGN OWNED does, but
+        // do not take the DDL guard. Join before those sets are resolved.
+        if matches!(
+            StatementClassification::from(&*stmt),
+            StatementClassification::ACL
+        ) {
+            Box::pin(self.settle_view_commit()).await;
+        }
         if let Some(visibility) = self.pending_catalog_visibility() {
             ctx.delay_response_until(crate::coord::appends::BuiltinTableAppendCompletion::new(
                 Box::pin(visibility.wait()),
