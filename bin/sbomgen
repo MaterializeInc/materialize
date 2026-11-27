@@ -20,3 +20,6 @@ cd "$(dirname "$0")/.."
 find . -type f -name "Dockerfile" -exec sed -i 's/MZFROM/FROM/g' {} +
 inspector-sbomgen directory --path . --skip-files test --outfile sbom.json --disable-progress-bar || true
 inspector-sbomgen directory --path . --skip-files test --outfile inspector-results.json --disable-progress-bar --scan-sbom --scan-sbom-output-format cyclonedx --aws-region us-east-1 || true
+if [[ -f sbom.json ]]; then
+    bin/pyactivate -m materialize.sbom sbom.json
+fi
