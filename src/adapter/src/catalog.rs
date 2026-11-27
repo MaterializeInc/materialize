@@ -4108,6 +4108,8 @@ mod tests {
                                     Err(..) => {} // It's ok, we might have given invalid args to the function
                                 }
                             }
+                            // Constant folding never evaluates an unbounded call.
+                            _ if mir.contains_unbounded() => {}
                             _ => unreachable!(
                                 "all args are literals, so should have reduced to a literal"
                             ),

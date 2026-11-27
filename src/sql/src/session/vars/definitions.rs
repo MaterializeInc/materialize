@@ -1940,7 +1940,7 @@ feature_flags!(
     {
         name: enable_jq,
         desc: "the jq function",
-        default: false,
+        default: true,
         enable_for_item_parsing: true,
     },
     {
