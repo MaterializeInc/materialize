@@ -1840,14 +1840,29 @@ impl Coordinator {
                 (response, action)
             }
             Ok(Some(TransactionOps::SingleStatement { stmt, params })) => {
-                self.internal_cmd_tx
-                    .send(Message::ExecuteSingleStatementTransaction {
-                        ctx,
-                        otel_ctx: OpenTelemetryContext::obtain(),
-                        stmt,
-                        params,
-                    })
-                    .expect("must send");
+                let message = Message::ExecuteSingleStatementTransaction {
+                    ctx,
+                    otel_ctx: OpenTelemetryContext::obtain(),
+                    stmt,
+                    params,
+                };
+                // Keep this test pause off the loop so authorization can change after COMMIT
+                // admission but before the saved statement executes.
+                let paused = || {
+                    fail::fail_point!("single_statement_transaction_ready", |_| true);
+                    false
+                };
+                if paused() {
+                    let tx = self.internal_cmd_tx.clone();
+                    mz_ore::task::spawn(|| "single_statement_transaction_ready", async move {
+                        while paused() {
+                            tokio::time::sleep(Duration::from_millis(10)).await;
+                        }
+                        let _ = tx.send(message);
+                    });
+                    return;
+                }
+                self.internal_cmd_tx.send(message).expect("must send");
                 return;
             }
             Ok(_) => (response, action),
