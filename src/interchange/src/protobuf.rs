@@ -12,9 +12,10 @@ use std::collections::BTreeSet;
 use anyhow::{Context, anyhow, bail};
 use mz_ore::str::StrExt;
 use mz_repr::{ColumnName, Datum, Row, RowPacker, SqlColumnType, SqlScalarType};
+use prost_reflect::prost::Message;
 use prost_reflect::{
     Cardinality, DescriptorPool, DynamicMessage, FieldDescriptor, Kind, MessageDescriptor,
-    ReflectMessage, Value,
+    ReflectMessage, Value, prost_types,
 };
 
 /// A decoded description of the schema of a Protobuf message.
@@ -29,6 +30,7 @@ impl DecodedDescriptors {
     /// Builds a `DecodedDescriptors` from an encoded `FileDescriptorSet` and
     /// the fully qualified name of a message inside that file descriptor set.
     pub fn from_bytes(bytes: &[u8], message_name: String) -> Result<Self, anyhow::Error> {
+        check_syntax(bytes)?;
         let fds = DescriptorPool::decode(bytes).context("decoding file descriptor set")?;
         let message_descriptor = fds.get_message_by_name(&message_name).ok_or_else(|| {
             anyhow!(
@@ -59,6 +61,26 @@ impl DecodedDescriptors {
     pub fn columns(&self) -> &[(ColumnName, SqlColumnType)] {
         &self.columns
     }
+}
+
+/// Rejects files whose `syntax` is neither `proto2` nor `proto3`.
+///
+/// NOTE: `DescriptorPool::decode` panics while building the error for an
+/// unknown syntax (prost-reflect 0.16), so this has to run first.
+fn check_syntax(bytes: &[u8]) -> Result<(), anyhow::Error> {
+    let fds =
+        prost_types::FileDescriptorSet::decode(bytes).context("decoding file descriptor set")?;
+    for file in &fds.file {
+        match file.syntax.as_deref() {
+            None | Some("proto2" | "proto3") => {}
+            Some(syntax) => bail!(
+                "protobuf file {} uses unsupported syntax {}",
+                file.name().quoted(),
+                syntax.quoted(),
+            ),
+        }
+    }
+    Ok(())
 }
 
 /// Decodes a particular Protobuf message from its wire format.
@@ -237,4 +259,29 @@ fn pack_value(
         ),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn unsupported_syntax() {
+        let fds = prost_types::FileDescriptorSet {
+            file: vec![prost_types::FileDescriptorProto {
+                name: Some("p.proto".into()),
+                syntax: Some("editions".into()),
+                message_type: vec![prost_types::DescriptorProto {
+                    name: Some("M".into()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+        };
+        let err = DecodedDescriptors::from_bytes(&fds.encode_to_vec(), ".M".into()).unwrap_err();
+        assert!(
+            err.to_string().contains("unsupported syntax"),
+            "unexpected error: {err}"
+        );
+    }
 }
