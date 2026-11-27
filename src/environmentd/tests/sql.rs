@@ -117,6 +117,66 @@ impl Drop for CatalogVisibilityGate {
     }
 }
 
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+async fn test_timeline_holds_across_catalog_changes() {
+    use mz_postgres_util::{Sql, batch_execute, query_one};
+
+    let server = test_util::TestHarness::default().start().await;
+    let client = server.connect().await.unwrap();
+    for sql in [
+        "CREATE TABLE holds_table (a int)",
+        "INSERT INTO holds_table VALUES (1)",
+        "CREATE CLUSTER holds_cluster SIZE 'scale=1,workers=1'",
+        "CREATE INDEX holds_index IN CLUSTER holds_cluster ON holds_table (a)",
+        "SET cluster = holds_cluster",
+        "CREATE VIEW holds_view AS SELECT * FROM holds_table",
+    ] {
+        batch_execute(&client, Sql::new(sql)).await.unwrap();
+    }
+    assert_eq!(
+        query_one(&client, Sql::new("SELECT a FROM holds_view"), &[])
+            .await
+            .unwrap()
+            .get::<_, i32>(0),
+        1
+    );
+    for sql in ["DROP VIEW holds_view", "INSERT INTO holds_table VALUES (2)"] {
+        batch_execute(&client, Sql::new(sql)).await.unwrap();
+    }
+    assert_eq!(
+        query_one(&client, Sql::new("SELECT sum(a) FROM holds_table"), &[])
+            .await
+            .unwrap()
+            .get::<_, i64>(0),
+        3
+    );
+    for sql in ["DROP CLUSTER holds_cluster CASCADE", "RESET cluster"] {
+        batch_execute(&client, Sql::new(sql)).await.unwrap();
+    }
+    assert_eq!(
+        query_one(&client, Sql::new("SELECT sum(a) FROM holds_table"), &[])
+            .await
+            .unwrap()
+            .get::<_, i64>(0),
+        3
+    );
+    for sql in [
+        "CREATE VIEW holds_view AS SELECT * FROM holds_table",
+        "DROP TABLE holds_table CASCADE",
+        "CREATE TABLE holds_table (a int)",
+        "INSERT INTO holds_table VALUES (4)",
+    ] {
+        batch_execute(&client, Sql::new(sql)).await.unwrap();
+    }
+    assert_eq!(
+        query_one(&client, Sql::new("SELECT a FROM holds_table"), &[])
+            .await
+            .unwrap()
+            .get::<_, i32>(0),
+        4
+    );
+}
+
 // This failpoint is process-global. Run this test in its own process (as nextest does).
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
 #[allow(clippy::disallowed_methods)]
