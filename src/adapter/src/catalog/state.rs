@@ -98,9 +98,10 @@ use uuid::Uuid;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::AdapterError;
+use crate::catalog::CatalogSession;
 use crate::catalog::{Catalog, ConnCatalog};
 use crate::config::ScopedParameters;
-use crate::coord::{ConnMeta, infer_sql_type_for_catalog};
+use crate::coord::infer_sql_type_for_catalog;
 use crate::optimize::{self, Optimize, OptimizerCatalog};
 use crate::session::Session;
 
@@ -2987,7 +2988,7 @@ impl CatalogState {
     pub(crate) fn add_to_audit_log(
         system_configuration: &SystemVars,
         oracle_write_ts: mz_repr::Timestamp,
-        session: Option<&ConnMeta>,
+        session: Option<&CatalogSession>,
         tx: &mut mz_catalog::durable::Transaction,
         audit_events: &mut Vec<VersionedEvent>,
         event_type: EventType,

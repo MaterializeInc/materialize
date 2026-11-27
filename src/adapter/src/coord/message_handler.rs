@@ -263,6 +263,9 @@ impl Coordinator {
                     .boxed_local()
                     .await;
             }
+            Message::ViewCommitReady(id) => {
+                self.handle_view_commit_ready(id).await;
+            }
             Message::DeferredStatementReady => {
                 self.handle_deferred_statement().boxed_local().await;
             }

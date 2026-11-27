@@ -457,6 +457,44 @@ pub struct TransactionResult {
     pub audit_events: Vec<VersionedEvent>,
 }
 
+/// Connection identity needed to authorize and audit a catalog transaction.
+pub struct CatalogSession {
+    conn_id: ConnectionId,
+    user: mz_sql::session::user::User,
+    uuid: uuid::Uuid,
+}
+
+impl From<&ConnMeta> for CatalogSession {
+    fn from(conn: &ConnMeta) -> Self {
+        Self {
+            conn_id: conn.conn_id().clone(),
+            user: conn.user().clone(),
+            uuid: conn.uuid(),
+        }
+    }
+}
+
+impl CatalogSession {
+    pub(super) fn conn_id(&self) -> &ConnectionId {
+        &self.conn_id
+    }
+
+    pub(super) fn user(&self) -> &mz_sql::session::user::User {
+        &self.user
+    }
+
+    fn uuid(&self) -> uuid::Uuid {
+        self.uuid
+    }
+}
+
+/// A durable commit whose state and effects still need coordinator publication.
+#[must_use]
+pub(crate) struct UnpublishedTransaction {
+    state: Option<CatalogState>,
+    result: TransactionResult,
+}
+
 #[derive(Debug)]
 pub(crate) enum CommandWork {
     Connection(super::command::connection::ConnectionPreparation),
@@ -769,6 +807,24 @@ impl Catalog {
         session: Option<&ConnMeta>,
         ops: Vec<Op>,
     ) -> Result<TransactionResult, AdapterError> {
+        let session = session.map(CatalogSession::from);
+        let candidate = self
+            .transact_unpublished(storage_collections, oracle_write_ts, session.as_ref(), ops)
+            .await?;
+        Ok(self.publish_transaction(candidate))
+    }
+
+    /// Commits durable state without publishing the in-memory catalog or its revision.
+    ///
+    /// The caller must exclude other catalog mutations until publishing the result.
+    /// A successful result must be published even if its client disconnects or cancels.
+    pub(crate) async fn transact_unpublished(
+        &self,
+        storage_collections: Option<&mut Arc<dyn StorageCollections + Send + Sync>>,
+        oracle_write_ts: mz_repr::Timestamp,
+        session: Option<&CatalogSession>,
+        ops: Vec<Op>,
+    ) -> Result<UnpublishedTransaction, AdapterError> {
         trace!("transact: {:?}", ops);
         fail::fail_point!("catalog_transact", |arg| {
             Err(AdapterError::Unstructured(anyhow::anyhow!(
@@ -841,15 +897,14 @@ impl Catalog {
             .await
             .unwrap_or_terminate("catalog storage transaction commit must succeed");
 
-        // Dropping here keeps the mutable borrow on self, preventing us accidentally
-        // mutating anything until after f is executed.
         drop(storage);
-        self.publish_transaction_state(new_state);
-
-        Ok(TransactionResult {
-            builtin_table_updates,
-            catalog_updates,
-            audit_events,
+        Ok(UnpublishedTransaction {
+            state: new_state,
+            result: TransactionResult {
+                builtin_table_updates,
+                catalog_updates,
+                audit_events,
+            },
         })
     }
 
@@ -866,6 +921,8 @@ impl Catalog {
         commands: &mut [super::command::CatalogCommand],
         responses: &mut BTreeMap<usize, CommandResponse>,
     ) -> Result<TransactionResult, CommandExecutionError> {
+        let session = session.map(CatalogSession::from);
+        let session = session.as_ref();
         fail::fail_point!("catalog_transact", |arg| {
             Err(AdapterError::Unstructured(anyhow::anyhow!("failpoint: {arg:?}")).into())
         });
@@ -905,6 +962,15 @@ impl Catalog {
             catalog_updates,
             audit_events,
         })
+    }
+
+    /// Publishes a committed candidate against its unchanged base catalog.
+    pub(crate) fn publish_transaction(
+        &mut self,
+        candidate: UnpublishedTransaction,
+    ) -> TransactionResult {
+        self.publish_transaction_state(candidate.state);
+        candidate.result
     }
 
     fn publish_transaction_state(&mut self, new_state: Option<CatalogState>) {
@@ -990,6 +1056,8 @@ impl Catalog {
         prev_snapshot: Option<Snapshot>,
         oracle_write_ts: mz_repr::Timestamp,
     ) -> Result<(CatalogState, Snapshot), AdapterError> {
+        let session = session.map(CatalogSession::from);
+        let session = session.as_ref();
         // For DDL transactions, items are not temporary (CREATE TABLE FROM SOURCE, etc.)
         // but we still need to check for collisions.
         let temporary_ids = self.temporary_ids(&ops, BTreeSet::new())?;
@@ -1104,7 +1172,7 @@ impl Catalog {
         mode: TransactInnerMode,
         storage_collections: Option<&mut Arc<dyn StorageCollections + Send + Sync>>,
         oracle_write_ts: mz_repr::Timestamp,
-        session: Option<&ConnMeta>,
+        session: Option<&CatalogSession>,
         operations: TransactionOperations<'_>,
         temporary_ids: BTreeSet<CatalogItemId>,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
@@ -1356,7 +1424,7 @@ impl Catalog {
     #[instrument]
     async fn transact_op(
         oracle_write_ts: mz_repr::Timestamp,
-        session: Option<&ConnMeta>,
+        session: Option<&CatalogSession>,
         op: Op,
         temporary_ids: &BTreeSet<CatalogItemId>,
         audit_events: &mut Vec<VersionedEvent>,
@@ -3640,7 +3708,7 @@ impl Catalog {
 /// mapping matches the creating session.
 fn temporary_item_owner_session(
     state: &CatalogState,
-    session: Option<&ConnMeta>,
+    session: Option<&CatalogSession>,
     item: &CatalogItem,
     item_name: &str,
 ) -> Result<Uuid, AdapterError> {
@@ -3812,7 +3880,7 @@ impl ObjectsToDrop {
     pub fn generate(
         drop_object_infos: impl IntoIterator<Item = DropObjectInfo>,
         state: &CatalogState,
-        session: Option<&ConnMeta>,
+        session: Option<&CatalogSession>,
     ) -> Result<Self, AdapterError> {
         let mut delta = ObjectsToDrop::default();
 
@@ -3827,7 +3895,7 @@ impl ObjectsToDrop {
         &mut self,
         drop_object_info: DropObjectInfo,
         state: &CatalogState,
-        session: Option<&ConnMeta>,
+        session: Option<&CatalogSession>,
     ) -> Result<(), AdapterError> {
         self.comments
             .insert(state.get_comment_id(drop_object_info.to_object_id()));
