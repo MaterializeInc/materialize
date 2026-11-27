@@ -146,6 +146,7 @@ impl Coordinator {
             explainee,
         }: plan::ExplainPlanPlan,
     ) {
+        Box::pin(self.settle_view_commit()).await;
         let plan::Explainee::ReplanView(id) = explainee else {
             unreachable!() // Asserted in `sequence_explain_plan`.
         };
@@ -447,6 +448,12 @@ impl Coordinator {
                 owner_id: *ctx.session().current_role_id(),
             },
         ];
+
+        if !temporary && drop_ids.is_empty() && self.can_commit_view_off_coordinator(ctx) {
+            return self
+                .start_view_commit(ctx, item_id, name.item, if_not_exists, ops)
+                .await;
+        }
 
         match self
             .catalog_transact_with_context(None, Some(ctx), ops)

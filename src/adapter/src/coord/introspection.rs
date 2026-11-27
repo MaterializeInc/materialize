@@ -209,7 +209,7 @@ impl Coordinator {
     fn sequence_introspection_subscribe_optimize_mir(
         &self,
         stage: IntrospectionSubscribeOptimizeMir,
-    ) -> Result<StageResult<Box<IntrospectionSubscribeStage>>, AdapterError> {
+    ) -> Result<StageResult<Box<IntrospectionSubscribeStage>, ()>, AdapterError> {
         let IntrospectionSubscribeOptimizeMir {
             mut validity,
             plan,
@@ -270,7 +270,7 @@ impl Coordinator {
     fn sequence_introspection_subscribe_timestamp_optimize_lir(
         &self,
         stage: IntrospectionSubscribeTimestampOptimizeLir,
-    ) -> Result<StageResult<Box<IntrospectionSubscribeStage>>, AdapterError> {
+    ) -> Result<StageResult<Box<IntrospectionSubscribeStage>, ()>, AdapterError> {
         let IntrospectionSubscribeTimestampOptimizeLir {
             validity,
             mut optimizer,
@@ -311,7 +311,7 @@ impl Coordinator {
     async fn sequence_introspection_subscribe_finish(
         &mut self,
         stage: IntrospectionSubscribeFinish,
-    ) -> Result<StageResult<Box<IntrospectionSubscribeStage>>, AdapterError> {
+    ) -> Result<StageResult<Box<IntrospectionSubscribeStage>, ()>, AdapterError> {
         let IntrospectionSubscribeFinish {
             validity: _,
             global_lir_plan,
@@ -554,7 +554,7 @@ impl Staged for IntrospectionSubscribeStage {
         self,
         coord: &mut Coordinator,
         _ctx: &mut (),
-    ) -> Result<StageResult<Box<Self>>, AdapterError> {
+    ) -> Result<StageResult<Box<Self>, ()>, AdapterError> {
         match self {
             Self::OptimizeMir(stage) => coord.sequence_introspection_subscribe_optimize_mir(stage),
             Self::TimestampOptimizeLir(stage) => {

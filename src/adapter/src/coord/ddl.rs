@@ -930,6 +930,7 @@ impl Coordinator {
         commands: &mut [catalog::command::CatalogCommand],
         responses: &mut BTreeMap<usize, catalog::CommandResponse>,
     ) -> Result<(), catalog::CommandExecutionError> {
+        Box::pin(self.settle_view_commit()).await;
         if self.controller.read_only() {
             return Err(AdapterError::ReadOnly.into());
         }
@@ -985,7 +986,7 @@ impl Coordinator {
         Ok(())
     }
 
-    async fn finish_catalog_transaction(
+    pub(super) async fn finish_catalog_transaction(
         &mut self,
         ctx: Option<&mut ExecuteContext>,
         table_updates: BuiltinTableAppendNotify,
@@ -1053,6 +1054,7 @@ impl Coordinator {
         conn_id: Option<&ConnectionId>,
         mut ops: Vec<catalog::Op>,
     ) -> Result<(BuiltinTableAppendNotify, Vec<ParsedStateUpdate>), AdapterError> {
+        Box::pin(self.settle_view_commit()).await;
         if self.controller.read_only() {
             return Err(AdapterError::ReadOnly);
         }
@@ -1347,7 +1349,7 @@ impl Coordinator {
         Ok((builtin_update_notify, catalog_updates))
     }
 
-    fn track_catalog_audit_events(
+    pub(super) fn track_catalog_audit_events(
         &self,
         conn_id: Option<&ConnectionId>,
         audit_events: Vec<VersionedEvent>,
