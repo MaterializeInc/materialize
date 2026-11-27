@@ -307,7 +307,7 @@ def run_responsiveness(
     select = sql.SQL("SELECT count(*), sum(a) FROM {}").format(table)
     # explain_replan_view awaits settle_view_commit on the coordinator. This
     # condition measures that joining limitation, not general nonblocking DDL.
-    replan = sql.SQL("EXPLAIN OPTIMIZED PLAN FOR REPLAN VIEW {}").format(
+    replan = sql.SQL("EXPLAIN LOCALLY OPTIMIZED PLAN FOR REPLAN VIEW {}").format(
         sql.Identifier(schema, "replan_view")
     )
     with ExitStack() as resources:
