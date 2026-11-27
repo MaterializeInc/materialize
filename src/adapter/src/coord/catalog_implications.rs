@@ -951,9 +951,16 @@ impl Coordinator {
         // Note: We only apply these changes below.
         let timeline_start = Instant::now();
         let mut timeline_id_bundles = BTreeMap::new();
+        let has_removals = !storage_gids_to_drop.is_empty()
+            || !compute_gids_to_drop.is_empty()
+            || !clusters_to_drop.is_empty();
 
         for (timeline, TimelineState { read_holds, .. }) in &self.global_timelines {
             let mut id_bundle = CollectionIdBundle::default();
+            if !has_removals {
+                timeline_id_bundles.insert(timeline.clone(), id_bundle);
+                continue;
+            }
 
             for storage_id in read_holds.storage_ids() {
                 if storage_gids_to_drop.contains(&storage_id) {
@@ -983,7 +990,11 @@ impl Coordinator {
                 .get(&timeline)
                 .expect("all timelines have a timestamp oracle");
 
-            let empty = read_holds.id_bundle().difference(&id_bundle).is_empty();
+            let empty = if id_bundle.is_empty() {
+                read_holds.is_empty()
+            } else {
+                read_holds.id_bundle().difference(&id_bundle).is_empty()
+            };
             timeline_associations.insert(timeline, (empty, id_bundle));
         }
         let timeline_seconds = timeline_start.elapsed().as_secs_f64();
