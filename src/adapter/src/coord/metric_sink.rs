@@ -384,7 +384,7 @@ impl Coordinator {
     fn metric_sink_optimize(
         &self,
         stage: MetricSinkOptimize,
-    ) -> Result<StageResult<Box<MetricSinkStage>>, AdapterError> {
+    ) -> Result<StageResult<Box<MetricSinkStage>, ()>, AdapterError> {
         let MetricSinkOptimize {
             mut validity,
             definition,
@@ -469,7 +469,7 @@ impl Coordinator {
     async fn metric_sink_finish(
         &mut self,
         stage: MetricSinkFinish,
-    ) -> Result<StageResult<Box<MetricSinkStage>>, AdapterError> {
+    ) -> Result<StageResult<Box<MetricSinkStage>, ()>, AdapterError> {
         let MetricSinkFinish {
             validity: _,
             definition,
@@ -699,7 +699,7 @@ impl Staged for MetricSinkStage {
         self,
         coord: &mut Coordinator,
         _ctx: &mut (),
-    ) -> Result<StageResult<Box<Self>>, AdapterError> {
+    ) -> Result<StageResult<Box<Self>, ()>, AdapterError> {
         match self {
             Self::Optimize(stage) => coord.metric_sink_optimize(stage),
             Self::Finish(stage) => coord.metric_sink_finish(stage).await,

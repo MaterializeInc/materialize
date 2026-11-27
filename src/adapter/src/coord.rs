@@ -243,6 +243,7 @@ mod metric_sink;
 mod privatelink_status;
 mod sql;
 mod validity;
+mod view_commit;
 
 /// Boxes a coordinator dispatcher while bounding its inline state.
 fn box_dispatcher<'a, F>(future: F) -> LocalBoxFuture<'a, ()>
@@ -388,6 +389,7 @@ pub enum Message {
         write_ts: Timestamp,
     },
     DeferredStatementReady,
+    ViewCommitReady(CatalogItemId),
     AdvanceTimelines,
     ClusterEvent(ClusterEvent),
     LinearizeReads,
@@ -580,6 +582,7 @@ impl Message {
             Message::PrivateLinkVpcEndpointEvents(_) => "private_link_vpc_endpoint_events",
             Message::ClusterControllerRequest(_) => "cluster_controller_request",
             Message::DeferredStatementReady => "deferred_statement_ready",
+            Message::ViewCommitReady(_) => "view_commit_ready",
         }
     }
 }
@@ -999,7 +1002,10 @@ pub enum TargetCluster {
 }
 
 /// Result types for each stage of a sequence.
-pub(crate) enum StageResult<T> {
+pub(crate) enum StageResult<T, C = ExecuteContext> {
+    /// Transfers the context to a coordinator-owned continuation.
+    /// The callback owns retirement, wakeup, and cancellation cleanup.
+    Deferred(Box<dyn FnOnce(&mut Coordinator, C) + Send>),
     /// A task was spawned that will return the next stage.
     Handle(JoinHandle<Result<T, AdapterError>>),
     /// A task was spawned that will return a response for the client.
@@ -1021,7 +1027,7 @@ pub(crate) trait Staged: Send {
         self,
         coord: &mut Coordinator,
         ctx: &mut Self::Ctx,
-    ) -> Result<StageResult<Box<Self>>, AdapterError>;
+    ) -> Result<StageResult<Box<Self>, Self::Ctx>, AdapterError>;
 
     /// Prepares a message for the Coordinator.
     fn message(self, ctx: Self::Ctx, span: Span) -> Message;
@@ -1940,6 +1946,7 @@ pub struct Coordinator {
     ///   various points, and we would need to correctly reset those changes before re-planning and
     ///   re-sequencing.
     serialized_ddl: LockedVecDeque<DeferredDdl>,
+    pending_view_commit: Option<view_commit::PendingViewCommit>,
 
     /// Handle to secret manager that can create and delete secrets from
     /// an arbitrary secret storage engine.
@@ -4199,8 +4206,12 @@ impl Coordinator {
         self.optimizer_metrics.clone()
     }
 
-    /// Obtain a writeable Catalog reference.
+    /// Obtain a writeable Catalog reference after settling any in-flight view commit.
     fn catalog_mut(&mut self) -> &mut Catalog {
+        mz_ore::soft_assert_or_log!(
+            self.pending_view_commit.is_none(),
+            "unjoined catalog mutation"
+        );
         // make_mut will cause any other Arc references (from owned_catalog) to
         // continue to be valid by cloning the catalog, putting it in a new Arc,
         // which lives at self._catalog. If there are no other Arc references,
@@ -5112,6 +5123,7 @@ pub fn serve(
                     peek_registry: Arc::default(),
                     pending_linearize_read_txns: BTreeMap::new(),
                     serialized_ddl: LockedVecDeque::new(),
+                    pending_view_commit: None,
                     active_compute_sinks: BTreeMap::new(),
                     active_webhooks: BTreeMap::new(),
                     active_copies: BTreeMap::new(),

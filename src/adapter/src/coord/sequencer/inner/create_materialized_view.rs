@@ -175,6 +175,7 @@ impl Coordinator {
             explainee,
         }: plan::ExplainPlanPlan,
     ) {
+        Box::pin(self.settle_view_commit()).await;
         let plan::Explainee::ReplanMaterializedView(id) = explainee else {
             unreachable!() // Asserted in `sequence_explain_plan`.
         };

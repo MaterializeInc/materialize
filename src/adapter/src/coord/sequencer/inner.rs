@@ -189,6 +189,10 @@ impl Coordinator {
             let next = Box::pin(stage.stage(self, &mut ctx).instrument(parent_span.clone())).await;
             let res = return_if_err!(next, ctx);
             stage = match res {
+                StageResult::Deferred(continuation) => {
+                    continuation(self, ctx);
+                    return;
+                }
                 StageResult::Handle(handle) => {
                     let internal_cmd_tx = self.internal_cmd_tx.clone();
                     self.handle_spawn(ctx, handle, cancel_enabled, move |ctx, next| {

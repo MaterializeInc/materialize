@@ -1239,6 +1239,14 @@ impl Coordinator {
         params: Params,
         mut ctx: ExecuteContext,
     ) {
+        // ACL plans can capture whole object sets, as REASSIGN OWNED does, but
+        // do not take the DDL guard. Join before those sets are resolved.
+        if matches!(
+            StatementClassification::from(&*stmt),
+            StatementClassification::ACL
+        ) {
+            Box::pin(self.settle_view_commit()).await;
+        }
         if let Some(visibility) = self.pending_catalog_visibility() {
             ctx.delay_response_until(crate::coord::appends::BuiltinTableAppendCompletion::new(
                 Box::pin(visibility.wait()),
@@ -1389,6 +1397,7 @@ impl Coordinator {
                         if !ctx.session().transaction().is_ddl() {
                             // Preparation can yield before the first dry run. Capture both
                             // baselines now so unrelated commits cannot mix their contents.
+                            Box::pin(self.settle_view_commit()).await;
                             let (state, snapshot) = self.catalog().ddl_transaction_snapshot().await;
 
                             // Initialize our transaction with a set of empty ops, or return an error
@@ -2158,6 +2167,9 @@ impl Coordinator {
         // waits for its own retraction before it observes retirement.
         drop(retire_notify);
 
+        if self.catalog().state().has_temporary_namespace(&conn_id) {
+            Box::pin(self.settle_view_commit()).await;
+        }
         self.drop_temp_items(&conn_id).await;
         // Only call catalog_mut() if a temporary namespace actually exists for this connection.
         // This avoids an expensive Arc::make_mut clone for the common case where the connection

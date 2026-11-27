@@ -177,6 +177,320 @@ async fn test_timeline_holds_across_catalog_changes() {
     );
 }
 
+// The failpoints are process-global. Run this test in its own process.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn test_view_commit_reads_cancellation_and_competing_mutation() {
+    use mz_adapter::session::SessionConfig;
+    use mz_auth::{Authenticated, AuthenticatorKind};
+    use mz_postgres_util::{Sql, batch_execute, query_one};
+    use mz_sql::session::metadata::SessionMetadata;
+
+    async fn session(adapter: &mz_adapter::Client) -> mz_adapter::SessionClient {
+        let session = adapter.new_session(
+            SessionConfig {
+                conn_id: adapter.new_conn_id().unwrap(),
+                uuid: uuid::Uuid::new_v4(),
+                user: "materialize".into(),
+                client_ip: Some(Ipv4Addr::LOCALHOST.into()),
+                external_metadata_rx: None,
+                helm_chart_version: None,
+                authenticator_kind: AuthenticatorKind::None,
+                groups: None,
+            },
+            Authenticated,
+        );
+        adapter.startup(session).await.unwrap()
+    }
+
+    let server = test_util::TestHarness::default().start().await;
+    let adapter = server.inner.adapter_client();
+    let reader = server.connect().await.unwrap();
+    for sql in [
+        "CREATE TABLE commit_input (a int)",
+        "INSERT INTO commit_input VALUES (7)",
+        "CREATE DEFAULT INDEX ON commit_input",
+    ] {
+        batch_execute(&reader, Sql::new(sql)).await.unwrap();
+    }
+    let mut admin = session(adapter).await;
+    for (failpoint, sql, read, expected, catalog_read, limit) in [
+        (
+            "view_commit_before_transaction",
+            "CREATE VIEW commit_before AS SELECT * FROM commit_input",
+            "SELECT a + 1 FROM commit_input",
+            8,
+            "SELECT count(*) FROM mz_views WHERE name = 'commit_before'",
+            200,
+        ),
+        (
+            "view_commit_after_transaction",
+            "CREATE VIEW commit_after AS SELECT * FROM commit_input",
+            "SELECT a + 2 FROM commit_input",
+            9,
+            "SELECT count(*) FROM mz_views WHERE name = 'commit_after'",
+            201,
+        ),
+    ] {
+        let mut writer = session(adapter).await;
+        let conn_id = writer.session().conn_id().unhandled();
+        let secret_key = writer.session().secret_key();
+        writer.start_transaction(Some(1)).unwrap();
+        let statement = mz_sql::parse::parse(sql).unwrap().pop().unwrap().ast;
+        writer
+            .declare("".into(), statement, sql.into())
+            .await
+            .unwrap();
+        let (release, parked) = CatalogVisibilityGate::install(failpoint);
+        let create = task::spawn(|| "candidate_create", async move {
+            writer
+                .execute("".into(), futures::future::pending(), None)
+                .await
+        })
+        .abort_on_drop();
+        tokio::time::timeout(Duration::from_secs(30), async {
+            parked.await.unwrap();
+            query_one(&reader, Sql::new("SHOW CREATE TABLE commit_input"), &[])
+                .await
+                .unwrap();
+            assert_eq!(
+                query_one(&reader, Sql::new(read), &[])
+                    .await
+                    .unwrap()
+                    .get::<_, i32>(0),
+                expected,
+            );
+            assert_eq!(
+                query_one(&reader, Sql::new(catalog_read), &[])
+                    .await
+                    .unwrap()
+                    .get::<_, i64>(0),
+                0,
+            );
+
+            let (joined_tx, joined_rx) = oneshot::channel();
+            let joined_tx = Mutex::new(Some(joined_tx));
+            fail::cfg_callback("view_commit_join", move || {
+                let tx = joined_tx.lock().unwrap().take();
+                if let Some(tx) = tx {
+                    let _ = tx.send(());
+                }
+            })
+            .unwrap();
+            // Submit cancellation and the exempt mutation on the adapter command FIFO.
+            adapter.cancel_request(conn_id, secret_key);
+            let mut update = Box::pin(admin.set_system_vars(BTreeMap::from([(
+                "max_objects_per_schema".to_string(),
+                limit.to_string(),
+            )])));
+            assert!(futures::poll!(&mut update).is_pending());
+            tokio::select! {
+                joined = joined_rx => joined.unwrap(),
+                result = &mut update => panic!("competing mutation completed without joining: {result:?}"),
+            }
+            assert!(
+                !create.is_finished(),
+                "candidate retired while its worker was parked"
+            );
+            release.release();
+            assert!(matches!(
+                create.await.unwrap().0,
+                mz_adapter::ExecuteResponse::CreatedView
+            ));
+            update.await.unwrap();
+            fail::remove("view_commit_join");
+            assert_eq!(
+                query_one(&reader, Sql::new(catalog_read), &[])
+                    .await
+                    .unwrap()
+                    .get::<_, i64>(0),
+                1,
+            );
+        })
+        .await
+        .expect("view candidate did not finish safely");
+        assert_eq!(
+            admin.get_system_vars().await.max_objects_per_schema(),
+            limit
+        );
+    }
+}
+
+// The failpoints are process-global. Run this test in its own process.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn test_view_commit_precedes_fresh_ddl_snapshot() {
+    use mz_postgres_util::{Sql, batch_execute, query_one};
+
+    let server = test_util::TestHarness::default().start().await;
+    let writer = server.connect().await.unwrap();
+    let ddl = server.connect().await.unwrap();
+    let reader = server.connect().await.unwrap();
+    batch_execute(
+        &writer,
+        Sql::new("CREATE VIEW snapshot_base AS SELECT 7 AS a"),
+    )
+    .await
+    .unwrap();
+    batch_execute(&ddl, Sql::new("BEGIN")).await.unwrap();
+    let (release, parked) = CatalogVisibilityGate::install("view_commit_after_transaction");
+    let create = task::spawn(|| "snapshot_candidate", async move {
+        batch_execute(
+            &writer,
+            Sql::new("CREATE VIEW snapshot_candidate AS SELECT * FROM snapshot_base"),
+        )
+        .await
+    })
+    .abort_on_drop();
+    tokio::time::timeout(Duration::from_secs(30), async {
+        parked.await.unwrap();
+        let (join_release, joined) = CatalogVisibilityGate::install("view_commit_join");
+        let mut rename = Box::pin(batch_execute(
+            &ddl,
+            Sql::new("ALTER VIEW snapshot_base RENAME TO snapshot_renamed"),
+        ));
+        assert!(futures::poll!(&mut rename).is_pending());
+        tokio::select! {
+            joined = joined => joined.unwrap(),
+            result = &mut rename => panic!("DDL snapshot completed without joining: {result:?}"),
+        }
+        assert!(!create.is_finished());
+        join_release.release();
+        release.release();
+        create.await.unwrap();
+        rename.await.unwrap();
+        batch_execute(&ddl, Sql::new("COMMIT")).await.unwrap();
+        assert_eq!(
+            query_one(&reader, Sql::new("SELECT a FROM snapshot_candidate"), &[])
+                .await
+                .unwrap()
+                .get::<_, i32>(0),
+            7,
+        );
+        assert_eq!(
+            query_one(&reader, Sql::new("SELECT a FROM snapshot_renamed"), &[])
+                .await
+                .unwrap()
+                .get::<_, i32>(0),
+            7,
+        );
+    })
+    .await
+    .expect("fresh DDL snapshot did not join the view commit");
+}
+
+// The failpoints are process-global. Run this test in its own process.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn test_view_commit_survives_disconnect_and_empty_namespace_cleanup() {
+    use mz_postgres_util::{Sql, batch_execute, query_one};
+
+    let server = test_util::TestHarness::default().start().await;
+    let (writer, connection) = server.connect().with_handle().await.unwrap();
+    let connection = connection.abort_on_drop();
+    let cleanup = server.connect().await.unwrap();
+    let reader = server.connect().await.unwrap();
+    for sql in [
+        "CREATE TEMP VIEW cleanup_view AS SELECT 1",
+        "DROP VIEW cleanup_view",
+    ] {
+        batch_execute(&cleanup, Sql::new(sql)).await.unwrap();
+    }
+    let staged = server
+        .inner
+        .adapter_client()
+        .metrics()
+        .catalog_transact_phase_seconds
+        .with_label_values(&["stage_builtin"]);
+    let before = staged.get_sample_count();
+    let (release, parked) = CatalogVisibilityGate::install("view_commit_after_transaction");
+    let create = task::spawn(|| "disconnected_candidate", async move {
+        batch_execute(
+            &writer,
+            Sql::new("CREATE VIEW disconnected_view AS SELECT 7 AS a"),
+        )
+        .await
+    })
+    .abort_on_drop();
+    tokio::time::timeout(Duration::from_secs(30), async {
+        parked.await.unwrap();
+        drop(connection);
+        assert!(
+            create.await.is_err(),
+            "disconnected client received a response"
+        );
+        let (join_release, joined) = CatalogVisibilityGate::install("view_commit_join");
+        // With no remaining temporary items, termination must still join before
+        // removing the connection's in-memory namespace.
+        drop(cleanup);
+        joined.await.unwrap();
+        join_release.release();
+        release.release();
+        while staged.get_sample_count() == before {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            query_one(&reader, Sql::new("SELECT a FROM disconnected_view"), &[])
+                .await
+                .unwrap()
+                .get::<_, i32>(0),
+            7,
+        );
+    })
+    .await
+    .expect("disconnected view commit or namespace cleanup did not finish");
+}
+
+// The failpoints are process-global. Run this test in its own process.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn test_view_commit_precedes_acl_object_resolution() {
+    use mz_postgres_util::{Sql, batch_execute, query_one};
+
+    let server = test_util::TestHarness::default().start().await;
+    let admin = server.connect().await.unwrap();
+    for sql in [
+        "CREATE ROLE view_owner_before",
+        "CREATE ROLE view_owner_after",
+        "GRANT view_owner_before, view_owner_after TO materialize",
+        "CREATE SCHEMA commit_owned",
+        "ALTER SCHEMA commit_owned OWNER TO view_owner_before",
+    ] {
+        batch_execute(&admin, Sql::new(sql)).await.unwrap();
+    }
+    let writer = server.connect().user("view_owner_before").await.unwrap();
+    let (release, parked) = CatalogVisibilityGate::install("view_commit_after_transaction");
+    let create = task::spawn(|| "owned_candidate", async move {
+        batch_execute(
+            &writer,
+            Sql::new("CREATE VIEW commit_owned.pending AS SELECT 1 AS a"),
+        )
+        .await
+    })
+    .abort_on_drop();
+    tokio::time::timeout(Duration::from_secs(30), async {
+        parked.await.unwrap();
+        let (join_release, joined) = CatalogVisibilityGate::install("view_commit_join");
+        let mut reassign = Box::pin(batch_execute(&admin, Sql::new(
+            "REASSIGN OWNED BY view_owner_before TO view_owner_after"
+        )));
+        assert!(futures::poll!(&mut reassign).is_pending());
+        tokio::select! {
+            joined = joined => joined.unwrap(),
+            result = &mut reassign => panic!("ownership plan completed without joining: {result:?}"),
+        }
+        join_release.release();
+        release.release();
+        create.await.unwrap();
+        reassign.await.unwrap();
+        assert_eq!(
+            query_one(&admin, Sql::new(
+                "SELECT r.name FROM mz_objects o
+                 JOIN mz_schemas s ON s.id = o.schema_id
+                 JOIN mz_roles r ON r.id = o.owner_id
+                 WHERE s.name = 'commit_owned' AND o.name = 'pending'"
+            ), &[]).await.unwrap().get::<_, String>(0),
+            "view_owner_after",
+        );
+    }).await.expect("ownership resolution did not follow view publication");
+}
+
 // This failpoint is process-global. Run this test in its own process (as nextest does).
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
 #[allow(clippy::disallowed_methods)]
