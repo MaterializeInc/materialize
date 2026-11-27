@@ -7,8 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+mod snapshot;
 #[cfg(test)]
 mod tests;
+
+pub(crate) use self::snapshot::SnapshotTrace;
 
 use std::cmp::max;
 use std::collections::{BTreeMap, VecDeque};
@@ -353,9 +356,7 @@ pub(crate) struct PersistHandle<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> {
     /// Catalog shard ID.
     shard_id: ShardId,
     /// Cache of the most recent catalog snapshot.
-    ///
-    /// We use a tuple instead of [`StateUpdate`] to make consolidation easier.
-    pub(crate) snapshot: Vec<(T, Timestamp, Diff)>,
+    pub(crate) snapshot: SnapshotTrace<T>,
     /// Applies custom processing, filtering, and fencing for each individual update.
     update_applier: U,
     /// The current upper of the persist shard.
@@ -368,7 +369,7 @@ pub(crate) struct PersistHandle<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> {
     bootstrap_complete: bool,
     /// Metrics for the persist catalog.
     metrics: Arc<Metrics>,
-    /// Snapshot size at the last amortized consolidation, used by
+    /// Snapshot size at the last periodic consolidation, used by
     /// [`Self::maybe_consolidate`] to decide when to consolidate. Initialized
     /// lazily on the first call.
     size_at_last_consolidation: Option<usize>,
@@ -556,7 +557,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         let mut updates: BTreeMap<_, Vec<_>> = BTreeMap::new();
         let updates_applied_before = self.updates_applied;
 
-        // Reset the amortized consolidation tracker so it picks up the
+        // Reset the periodic consolidation tracker so it picks up the
         // current snapshot size as its baseline.
         self.size_at_last_consolidation = None;
 
@@ -605,12 +606,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         Ok(())
     }
 
-    /// Apply a batch of updates and then consolidate the snapshot. This is the
-    /// typical entry point for callers that apply updates in a single batch.
-    ///
-    /// For hot loops that apply updates across many timestamps (e.g., `sync_inner`),
-    /// use `apply_updates` directly and call `consolidate()` periodically (e.g.,
-    /// on snapshot doubling) to bound memory while staying amortized O(N log N).
+    /// Applies a batch of updates and consolidates the snapshot on success.
     pub(crate) fn apply_updates_and_consolidate(
         &mut self,
         updates: impl IntoIterator<Item = StateUpdate<T>>,
@@ -622,11 +618,9 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
 
     /// Apply a batch of updates to the catalog state without consolidating.
     ///
-    /// Does NOT consolidate the snapshot afterward. If you are calling this once,
-    /// prefer `apply_updates_and_consolidate`. This method exists for loops that
-    /// call it many times — consolidating per call would be O(K * N log N) instead
-    /// of O(N log N). Callers should consolidate periodically (e.g., on snapshot
-    /// doubling) to bound memory.
+    /// Callers replaying multiple timestamps must periodically consolidate to
+    /// bound buffered updates. Other callers should use
+    /// [`Self::apply_updates_and_consolidate`].
     #[mz_ore::instrument(level = "debug")]
     fn apply_updates(
         &mut self,
@@ -681,10 +675,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         Ok(())
     }
 
-    /// Consolidate the snapshot if it has at least doubled in size since the
-    /// last consolidation. This amortizes the O(N log N) consolidation cost
-    /// over many small updates, keeping the total work O(N log N) rather than
-    /// O(K * N log N) for K timestamps.
+    /// Bounds buffered update growth while replaying multiple timestamps.
     fn maybe_consolidate(&mut self) {
         let threshold = *self
             .size_at_last_consolidation
@@ -700,23 +691,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
     #[mz_ore::instrument]
     pub(crate) fn consolidate(&mut self) {
         self.metrics.snapshot_consolidations.inc();
-        soft_assert_no_log!(
-            self.snapshot
-                .windows(2)
-                .all(|updates| updates[0].1 <= updates[1].1),
-            "snapshot should be sorted by timestamp, {:#?}",
-            self.snapshot
-        );
-
-        let new_ts = self
-            .snapshot
-            .last()
-            .map(|(_, ts, _)| *ts)
-            .unwrap_or_else(Timestamp::minimum);
-        for (_, ts, _) in &mut self.snapshot {
-            *ts = new_ts;
-        }
-        differential_dataflow::consolidation::consolidate_updates(&mut self.snapshot);
+        self.snapshot.consolidate();
     }
 
     /// Execute and return the results of `f` on the current catalog trace.
@@ -724,7 +699,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
     /// Will return an error if the catalog has been fenced out.
     async fn with_trace<R>(
         &mut self,
-        f: impl FnOnce(&Vec<(T, Timestamp, Diff)>) -> Result<R, CatalogError>,
+        f: impl FnOnce(&SnapshotTrace<T>) -> Result<R, CatalogError>,
     ) -> Result<R, CatalogError> {
         self.sync_to_current_upper().await?;
         f(&self.snapshot)
@@ -792,7 +767,7 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
         self.with_trace(|trace| {
             let timer = histogram.start_timer();
             let mut snapshot = Snapshot::empty();
-            for (kind, ts, diff) in trace {
+            for (kind, ts, diff) in trace.iter() {
                 let diff = *diff;
                 if diff != Diff::ONE && diff != Diff::MINUS_ONE {
                     panic!("invalid update in consolidated trace: ({kind:?}, {ts:?}, {diff:?})");
@@ -1105,7 +1080,7 @@ impl UnopenedPersistCatalogState {
             persist_client,
             shard_id: catalog_shard_id,
             // Initialize empty in-memory state.
-            snapshot: Vec::new(),
+            snapshot: SnapshotTrace::new(),
             update_applier: UnopenedCatalogStateInner::new(),
             upper,
             fenceable_token: FenceableToken::new(deploy_generation),
@@ -1282,9 +1257,9 @@ impl UnopenedPersistCatalogState {
         // count for metrics.
         let (audit_logs, snapshot): (Vec<_>, Vec<_>) = self
             .snapshot
-            .into_iter()
+            .into_updates()
             .partition(|(update, _, _)| update.is_audit_log());
-        self.snapshot = snapshot;
+        self.snapshot = snapshot.into();
         let audit_log_count = audit_logs.iter().map(|(_, _, diff)| diff).sum::<Diff>();
         drop(audit_logs);
 
@@ -1309,7 +1284,7 @@ impl UnopenedPersistCatalogState {
             upper: self.upper,
             fenceable_token: self.fenceable_token,
             // Initialize empty in-memory state.
-            snapshot: Vec::new(),
+            snapshot: SnapshotTrace::new(),
             update_applier: CatalogStateInner::new(),
             catalog_content_version: self.catalog_content_version,
             bootstrap_complete: false,
@@ -1325,7 +1300,7 @@ impl UnopenedPersistCatalogState {
             .collection_entries
             .with_label_values(&[&CollectionType::AuditLog.to_string()])
             .add(audit_log_count.into_inner());
-        let updates = self.snapshot.into_iter().map(|(kind, ts, diff)| {
+        let updates = self.snapshot.into_updates().map(|(kind, ts, diff)| {
             let kind = TryIntoStateUpdateKind::try_into(kind).expect("kind decoding error");
             StateUpdate { kind, ts, diff }
         });
@@ -1652,7 +1627,7 @@ impl CatalogStateInner {
     /// handles must have been released before refreshing changed collections.
     fn refresh_decoded_state(
         &mut self,
-        trace: &[(StateUpdateKind, Timestamp, Diff)],
+        trace: &SnapshotTrace<StateUpdateKind>,
     ) -> Result<DecodedCatalogState, TryFromProtoError> {
         // Decode only updates since the preceding transaction. On a decoding error,
         // discard the candidate so the next attempt rebuilds from the authoritative trace.
@@ -1670,7 +1645,7 @@ impl CatalogStateInner {
             }
             None => {
                 let mut snapshot = DecodedCatalogState::default();
-                for (kind, _, diff) in trace {
+                for (kind, _, diff) in trace.iter() {
                     snapshot.apply(kind, *diff)?;
                 }
                 snapshot
@@ -1818,7 +1793,7 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
     async fn get_next_id(&mut self, id_type: &str) -> Result<u64, CatalogError> {
         self.with_trace(|trace| {
             Ok(trace
-                .into_iter()
+                .iter()
                 .rev()
                 .filter_map(|(kind, _, _)| match kind {
                     StateUpdateKind::IdAllocator(key, value) if key.name == id_type => {
@@ -2398,7 +2373,8 @@ impl UnopenedPersistCatalogState {
     ) -> Result<impl IntoIterator<Item = StateUpdate> + '_, CatalogError> {
         self.sync_to_current_upper().await?;
         self.consolidate();
-        Ok(self.snapshot.iter().cloned().map(|(kind, ts, diff)| {
+        Ok(self.snapshot.iter().map(|(kind, ts, diff)| {
+            let (kind, ts, diff) = (kind.clone(), *ts, *diff);
             let kind = TryIntoStateUpdateKind::try_into(kind).expect("kind decoding error");
             StateUpdate { kind, ts, diff }
         }))

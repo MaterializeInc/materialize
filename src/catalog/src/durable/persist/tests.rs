@@ -52,13 +52,18 @@ fn test_decoded_state_refresh_and_decode_recovery() {
     let mut fence = FenceableToken::new(None);
     let mut state = CatalogStateInner::new();
     let original = setting("original");
-    let trace = vec![(original.clone(), 1.into(), Diff::ONE)];
+    let mut trace =
+        super::snapshot::SnapshotTrace::from(vec![(original.clone(), 1.into(), Diff::ONE)]);
+    trace.consolidate();
     let base = state
         .refresh_decoded_state(&trace)
         .expect("initialize cache");
     drop(base);
-    let mut apply = |state: &mut CatalogStateInner, kind, diff| {
-        state
+    let mut apply = |state: &mut CatalogStateInner,
+                     trace: &mut super::snapshot::SnapshotTrace<StateUpdateKind>,
+                     kind,
+                     diff| {
+        if let Some(update) = state
             .apply_update(
                 StateUpdate {
                     kind,
@@ -68,45 +73,45 @@ fn test_decoded_state_refresh_and_decode_recovery() {
                 &mut fence,
                 &metrics,
             )
-            .expect("apply unfenced update");
+            .expect("apply unfenced update")
+        {
+            trace.push((update.kind, update.ts, update.diff));
+        }
     };
 
     let mut previous = original.clone();
     for i in 0..100 {
         let next = setting(&i.to_string());
-        apply(&mut state, previous, Diff::MINUS_ONE);
-        apply(&mut state, next.clone(), Diff::ONE);
+        apply(&mut state, &mut trace, previous, Diff::MINUS_ONE);
+        apply(&mut state, &mut trace, next.clone(), Diff::ONE);
         assert_eq!(state.pending_decoded_updates.len(), 2);
+        trace.consolidate();
         previous = next;
     }
-    apply(&mut state, previous, Diff::MINUS_ONE);
-    apply(&mut state, original.clone(), Diff::ONE);
+    apply(&mut state, &mut trace, previous, Diff::MINUS_ONE);
+    apply(&mut state, &mut trace, original.clone(), Diff::ONE);
+    trace.consolidate();
     assert!(state.pending_decoded_updates.is_empty());
     let valid_wal = wal(&ShardId::new().to_string());
-    apply(&mut state, valid_wal.clone(), Diff::ONE);
-    apply(&mut state, valid_wal.clone(), Diff::MINUS_ONE);
+    apply(&mut state, &mut trace, valid_wal.clone(), Diff::ONE);
+    apply(&mut state, &mut trace, valid_wal.clone(), Diff::MINUS_ONE);
+    trace.consolidate();
     assert!(state.pending_decoded_updates.is_empty());
 
     let replacement = setting("replacement");
-    apply(&mut state, original, Diff::MINUS_ONE);
-    apply(&mut state, replacement.clone(), Diff::ONE);
+    apply(&mut state, &mut trace, original, Diff::MINUS_ONE);
+    apply(&mut state, &mut trace, replacement.clone(), Diff::ONE);
     let malformed = wal("invalid-shard-id");
-    apply(&mut state, malformed.clone(), Diff::ONE);
-    let corrupt = vec![
-        (replacement.clone(), 2.into(), Diff::ONE),
-        (malformed.clone(), 2.into(), Diff::ONE),
-    ];
-    assert!(state.refresh_decoded_state(&corrupt).is_err());
+    apply(&mut state, &mut trace, malformed.clone(), Diff::ONE);
+    trace.consolidate();
+    assert!(state.refresh_decoded_state(&trace).is_err());
     assert!(state.decoded_state.is_none());
     assert!(state.pending_decoded_updates.is_empty());
-    assert!(state.refresh_decoded_state(&corrupt).is_err());
+    assert!(state.refresh_decoded_state(&trace).is_err());
 
-    apply(&mut state, malformed, Diff::MINUS_ONE);
-    apply(&mut state, valid_wal.clone(), Diff::ONE);
-    let repaired = vec![
-        (replacement, 3.into(), Diff::ONE),
-        (valid_wal.clone(), 3.into(), Diff::ONE),
-    ];
+    apply(&mut state, &mut trace, malformed, Diff::MINUS_ONE);
+    apply(&mut state, &mut trace, valid_wal.clone(), Diff::ONE);
+    trace.consolidate();
     let mut expected = Snapshot::empty();
     expected.settings.insert(
         proto::SettingKey {
@@ -122,7 +127,7 @@ fn test_decoded_state_refresh_and_decode_recovery() {
     expected.txn_wal_shard.insert((), value);
     assert_eq!(
         state
-            .refresh_decoded_state(&repaired)
+            .refresh_decoded_state(&trace)
             .expect("rebuild repaired cache"),
         DecodedCatalogState::try_from(expected).expect("decode expected snapshot")
     );
