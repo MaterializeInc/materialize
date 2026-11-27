@@ -10,6 +10,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::num::NonZeroU32;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::anyhow;
@@ -161,10 +162,112 @@ impl<'a> DryRunTransaction<'a> {
     }
 }
 
+/// Durable catalog collections decoded into Rust key/value maps for transaction reads.
+///
+/// These are the protobuf [`Snapshot`] collections, not the adapter's derived
+/// planning objects and lookup indexes. Transactions can share these immutable
+/// base maps while keeping their pending writes separate. Cloning shares the
+/// maps without copying their entries.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct DecodedCatalogState {
+    databases: Arc<BTreeMap<DatabaseKey, DatabaseValue>>,
+    schemas: Arc<BTreeMap<SchemaKey, SchemaValue>>,
+    roles: Arc<BTreeMap<RoleKey, RoleValue>>,
+    role_auth: Arc<BTreeMap<RoleAuthKey, RoleAuthValue>>,
+    items: Arc<BTreeMap<ItemKey, ItemValue>>,
+    item_columns: Arc<BTreeMap<ItemColumnsKey, ItemColumnsValue>>,
+    index_columns: Arc<BTreeMap<IndexColumnsKey, IndexColumnsValue>>,
+    comments: Arc<BTreeMap<CommentKey, CommentValue>>,
+    clusters: Arc<BTreeMap<ClusterKey, ClusterValue>>,
+    network_policies: Arc<BTreeMap<NetworkPolicyKey, NetworkPolicyValue>>,
+    cluster_replica_sizes: Arc<BTreeMap<ClusterReplicaSizeKey, ClusterReplicaSizeValue>>,
+    query_policies: Arc<BTreeMap<QueryPolicyKey, QueryPolicyValue>>,
+    cluster_replicas: Arc<BTreeMap<ClusterReplicaKey, ClusterReplicaValue>>,
+    introspection_sources:
+        Arc<BTreeMap<ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue>>,
+    id_allocator: Arc<BTreeMap<IdAllocKey, IdAllocValue>>,
+    configs: Arc<BTreeMap<ConfigKey, ConfigValue>>,
+    settings: Arc<BTreeMap<SettingKey, SettingValue>>,
+    system_object_mappings: Arc<BTreeMap<GidMappingKey, GidMappingValue>>,
+    system_configurations: Arc<BTreeMap<ServerConfigurationKey, ServerConfigurationValue>>,
+    cluster_system_configurations:
+        Arc<BTreeMap<ClusterSystemConfigurationKey, ClusterSystemConfigurationValue>>,
+    replica_system_configurations:
+        Arc<BTreeMap<ReplicaSystemConfigurationKey, ReplicaSystemConfigurationValue>>,
+    default_privileges: Arc<BTreeMap<DefaultPrivilegesKey, DefaultPrivilegesValue>>,
+    source_references: Arc<BTreeMap<SourceReferencesKey, SourceReferencesValue>>,
+    system_privileges: Arc<BTreeMap<SystemPrivilegesKey, SystemPrivilegesValue>>,
+    storage_collection_metadata:
+        Arc<BTreeMap<StorageCollectionMetadataKey, StorageCollectionMetadataValue>>,
+    unfinalized_shards: Arc<BTreeMap<UnfinalizedShardKey, ()>>,
+    txn_wal_shard: Arc<BTreeMap<(), TxnWalShardValue>>,
+}
+
+impl TryFrom<Snapshot> for DecodedCatalogState {
+    type Error = TryFromProtoError;
+
+    fn try_from(snapshot: Snapshot) -> Result<Self, Self::Error> {
+        fn decode<K, V, KP, VP>(
+            map: BTreeMap<KP, VP>,
+        ) -> Result<Arc<BTreeMap<K, V>>, TryFromProtoError>
+        where
+            K: RustType<KP> + Ord,
+            V: RustType<VP>,
+        {
+            map.into_iter()
+                .map(RustType::from_proto)
+                .collect::<Result<_, _>>()
+                .map(Arc::new)
+        }
+
+        Ok(Self {
+            databases: decode(snapshot.databases)?,
+            schemas: decode(snapshot.schemas)?,
+            roles: decode(snapshot.roles)?,
+            role_auth: decode(snapshot.role_auth)?,
+            items: decode(snapshot.items)?,
+            item_columns: decode(snapshot.item_columns)?,
+            index_columns: decode(snapshot.index_columns)?,
+            comments: decode(snapshot.comments)?,
+            clusters: decode(snapshot.clusters)?,
+            network_policies: decode(snapshot.network_policies)?,
+            cluster_replica_sizes: decode(snapshot.cluster_replica_sizes)?,
+            query_policies: decode(snapshot.query_policies)?,
+            cluster_replicas: decode(snapshot.cluster_replicas)?,
+            introspection_sources: decode(snapshot.introspection_sources)?,
+            id_allocator: decode(snapshot.id_allocator)?,
+            configs: decode(snapshot.configs)?,
+            settings: decode(snapshot.settings)?,
+            system_object_mappings: decode(snapshot.system_object_mappings)?,
+            system_configurations: decode(snapshot.system_configurations)?,
+            cluster_system_configurations: decode(snapshot.cluster_system_configurations)?,
+            replica_system_configurations: decode(snapshot.replica_system_configurations)?,
+            default_privileges: decode(snapshot.default_privileges)?,
+            source_references: decode(snapshot.source_references)?,
+            system_privileges: decode(snapshot.system_privileges)?,
+            storage_collection_metadata: decode(snapshot.storage_collection_metadata)?,
+            unfinalized_shards: decode(snapshot.unfinalized_shards)?,
+            txn_wal_shard: decode(snapshot.txn_wal_shard)?,
+        })
+    }
+}
+
 impl<'a> Transaction<'a> {
     pub(super) fn new(
         durable_catalog: &'a mut dyn DurableCatalogState,
-        Snapshot {
+        snapshot: Snapshot,
+        upper: mz_repr::Timestamp,
+    ) -> Result<Transaction<'a>, CatalogError> {
+        Ok(Self::from_shared(
+            durable_catalog,
+            snapshot.try_into()?,
+            upper,
+        ))
+    }
+
+    pub(super) fn from_shared(
+        durable_catalog: &'a mut dyn DurableCatalogState,
+        DecodedCatalogState {
             databases,
             schemas,
             roles,
@@ -192,9 +295,9 @@ impl<'a> Transaction<'a> {
             storage_collection_metadata,
             unfinalized_shards,
             txn_wal_shard,
-        }: Snapshot,
+        }: DecodedCatalogState,
         upper: mz_repr::Timestamp,
-    ) -> Result<Transaction<'a>, CatalogError> {
+    ) -> Transaction<'a> {
         // For these collections uniqueness is plain equality of the name fields, so the same
         // predicate answers both "do these two conflict?" and "did this update keep the same key?".
         let database_unique_fn: fn(&DatabaseValue, &DatabaseValue) -> bool =
@@ -212,23 +315,23 @@ impl<'a> Transaction<'a> {
         let cluster_replica_unique_fn: fn(&ClusterReplicaValue, &ClusterReplicaValue) -> bool =
             |a, b| a.cluster_id == b.cluster_id && a.name == b.name;
 
-        Ok(Transaction {
+        Transaction {
             durable_catalog,
-            databases: TableTransaction::new_with_uniqueness_fn(
+            databases: TableTransaction::from_shared_with_uniqueness_fn(
                 databases,
                 database_unique_fn,
                 database_unique_fn,
-            )?,
-            schemas: TableTransaction::new_with_uniqueness_fn(
+            ),
+            schemas: TableTransaction::from_shared_with_uniqueness_fn(
                 schemas,
                 schema_unique_fn,
                 schema_unique_fn,
-            )?,
+            ),
             // Temporary items from different sessions may share a name in the
             // temporary schema (whose durable schema id is a sentinel shared
             // by every session), so name uniqueness is additionally scoped by
             // the owning session.
-            items: TableTransaction::new_with_uniqueness_fn(
+            items: TableTransaction::from_shared_with_uniqueness_fn(
                 items,
                 |a: &ItemValue, b| {
                     a.schema_id == b.schema_id
@@ -250,59 +353,63 @@ impl<'a> Transaction<'a> {
                         // `item_type` is slow, only compute it once name and schema match.
                         && prev.item_type() == next.item_type()
                 },
-            )?,
-            item_columns: TableTransaction::new(item_columns)?,
-            index_columns: TableTransaction::new(index_columns)?,
-            comments: TableTransaction::new(comments)?,
-            roles: TableTransaction::new_with_uniqueness_fn(roles, role_key, role_key)?,
-            role_auth: TableTransaction::new(role_auth)?,
-            clusters: TableTransaction::new_with_uniqueness_fn(
+            ),
+            item_columns: TableTransaction::from_shared(item_columns),
+            index_columns: TableTransaction::from_shared(index_columns),
+            comments: TableTransaction::from_shared(comments),
+            roles: TableTransaction::from_shared_with_uniqueness_fn(roles, role_key, role_key),
+            role_auth: TableTransaction::from_shared(role_auth),
+            clusters: TableTransaction::from_shared_with_uniqueness_fn(
                 clusters,
                 cluster_unique_fn,
                 cluster_unique_fn,
-            )?,
-            network_policies: TableTransaction::new_with_uniqueness_fn(
+            ),
+            network_policies: TableTransaction::from_shared_with_uniqueness_fn(
                 network_policies,
                 network_policy_unique_fn,
                 network_policy_unique_fn,
-            )?,
-            cluster_replica_sizes: TableTransaction::new_with_uniqueness_fn(
+            ),
+            cluster_replica_sizes: TableTransaction::from_shared_with_uniqueness_fn(
                 cluster_replica_sizes,
                 cluster_replica_size_unique_fn,
                 cluster_replica_size_unique_fn,
-            )?,
-            query_policies: TableTransaction::new_with_uniqueness_fn(
+            ),
+            query_policies: TableTransaction::from_shared_with_uniqueness_fn(
                 query_policies,
                 |a: &QueryPolicyValue, b| a.name == b.name,
                 |prev: &QueryPolicyValue, next| prev.name == next.name,
-            )?,
-            cluster_replicas: TableTransaction::new_with_uniqueness_fn(
+            ),
+            cluster_replicas: TableTransaction::from_shared_with_uniqueness_fn(
                 cluster_replicas,
                 cluster_replica_unique_fn,
                 cluster_replica_unique_fn,
-            )?,
-            introspection_sources: TableTransaction::new(introspection_sources)?,
-            id_allocator: TableTransaction::new(id_allocator)?,
-            configs: TableTransaction::new(configs)?,
-            settings: TableTransaction::new(settings)?,
-            source_references: TableTransaction::new(source_references)?,
-            system_gid_mapping: TableTransaction::new(system_object_mappings)?,
-            system_configurations: TableTransaction::new(system_configurations)?,
-            cluster_system_configurations: TableTransaction::new(cluster_system_configurations)?,
-            replica_system_configurations: TableTransaction::new(replica_system_configurations)?,
-            default_privileges: TableTransaction::new(default_privileges)?,
-            system_privileges: TableTransaction::new(system_privileges)?,
-            storage_collection_metadata: TableTransaction::new(storage_collection_metadata)?,
-            unfinalized_shards: TableTransaction::new(unfinalized_shards)?,
+            ),
+            introspection_sources: TableTransaction::from_shared(introspection_sources),
+            id_allocator: TableTransaction::from_shared(id_allocator),
+            configs: TableTransaction::from_shared(configs),
+            settings: TableTransaction::from_shared(settings),
+            source_references: TableTransaction::from_shared(source_references),
+            system_gid_mapping: TableTransaction::from_shared(system_object_mappings),
+            system_configurations: TableTransaction::from_shared(system_configurations),
+            cluster_system_configurations: TableTransaction::from_shared(
+                cluster_system_configurations,
+            ),
+            replica_system_configurations: TableTransaction::from_shared(
+                replica_system_configurations,
+            ),
+            default_privileges: TableTransaction::from_shared(default_privileges),
+            system_privileges: TableTransaction::from_shared(system_privileges),
+            storage_collection_metadata: TableTransaction::from_shared(storage_collection_metadata),
+            unfinalized_shards: TableTransaction::from_shared(unfinalized_shards),
             // Uniqueness violations for this value occur at the key rather than
             // the value (the key is the unit struct `()` so this is a singleton
             // value).
-            txn_wal_shard: TableTransaction::new(txn_wal_shard)?,
+            txn_wal_shard: TableTransaction::from_shared(txn_wal_shard),
             audit_log_updates: Vec::new(),
             upper,
             op_id: 0,
             commit_capability: Some(CommitCapability),
-        })
+        }
     }
 
     pub fn get_item(&self, id: &CatalogItemId) -> Option<Item> {
@@ -3567,7 +3674,7 @@ struct UniquenessCheck<V> {
 /// `V` is the an arbitrary value type.
 #[derive(Debug)]
 struct TableTransaction<K, V> {
-    initial: BTreeMap<K, V>,
+    initial: Arc<BTreeMap<K, V>>,
     // The desired updates to keys after commit.
     // Invariant: Value is sorted by `ts`.
     pending: BTreeMap<K, Vec<TransactionUpdate<V>>>,
@@ -3580,53 +3687,49 @@ where
     K: Ord + Eq + Clone + Debug,
     V: Ord + Clone + Debug + UniqueName,
 {
-    /// Create a new TableTransaction with initial data.
-    ///
-    /// Internally the catalog serializes data as protobuf. All fields in a proto message are
-    /// optional, which makes using them in Rust cumbersome. Generic parameters `KP` and `VP` are
-    /// protobuf types which deserialize to `K` and `V` that a [`TableTransaction`] is generic
-    /// over.
-    fn new<KP, VP>(initial: BTreeMap<KP, VP>) -> Result<Self, TryFromProtoError>
-    where
-        K: RustType<KP>,
-        V: RustType<VP>,
-    {
-        let initial = initial
-            .into_iter()
-            .map(RustType::from_proto)
-            .collect::<Result<_, _>>()?;
-
-        Ok(Self {
+    fn from_shared(initial: Arc<BTreeMap<K, V>>) -> Self {
+        Self {
             initial,
             pending: BTreeMap::new(),
             uniqueness_check: None,
-        })
+        }
     }
 
-    /// Like [`Self::new`], but with the collection's uniqueness constraint.
-    /// See [`UniquenessCheck`] for more details on the uniqueness constraint.
+    fn from_shared_with_uniqueness_fn(
+        initial: Arc<BTreeMap<K, V>>,
+        violation: fn(a: &V, b: &V) -> bool,
+        is_unique_key_unchanged_after_update: fn(prev: &V, next: &V) -> bool,
+    ) -> Self {
+        Self {
+            initial,
+            pending: BTreeMap::new(),
+            uniqueness_check: Some(UniquenessCheck {
+                violation,
+                is_unique_key_unchanged_after_update,
+            }),
+        }
+    }
+
+    #[cfg(test)]
     fn new_with_uniqueness_fn<KP, VP>(
         initial: BTreeMap<KP, VP>,
-        uniqueness_violation: fn(a: &V, b: &V) -> bool,
+        violation: fn(a: &V, b: &V) -> bool,
         is_unique_key_unchanged_after_update: fn(prev: &V, next: &V) -> bool,
     ) -> Result<Self, TryFromProtoError>
     where
         K: RustType<KP>,
         V: RustType<VP>,
     {
-        let initial = initial
-            .into_iter()
-            .map(RustType::from_proto)
-            .collect::<Result<_, _>>()?;
-
-        Ok(Self {
-            initial,
-            pending: BTreeMap::new(),
-            uniqueness_check: Some(UniquenessCheck {
-                violation: uniqueness_violation,
-                is_unique_key_unchanged_after_update,
-            }),
-        })
+        Ok(Self::from_shared_with_uniqueness_fn(
+            Arc::new(
+                initial
+                    .into_iter()
+                    .map(RustType::from_proto)
+                    .collect::<Result<_, _>>()?,
+            ),
+            violation,
+            is_unique_key_unchanged_after_update,
+        ))
     }
 
     /// Consumes and returns the pending changes and their diffs. `Diff` is
