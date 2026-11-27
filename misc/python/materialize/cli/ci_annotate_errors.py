@@ -118,6 +118,8 @@ ERROR_RE = re.compile(
     # cargo-fuzz crash, emitted by the cargo-fuzz mzcompose runner (one block
     # per failing target, with the crash input and a reproduce command)
     | ----------\ CARGO-FUZZ\ FAILURE\ START\ ----------[\s\S]*?----------\ CARGO-FUZZ\ FAILURE\ END\ ----------
+    # failing property of an Antithesis run, emitted by test/antithesis-results
+    | ----------\ ANTITHESIS\ FAILURE\ START\ ----------[\s\S]*?----------\ ANTITHESIS\ FAILURE\ END\ ----------
     # output consistency tests
     # | possibly\ invalid\ operation\ specification # disabled
     # for miri test summary
@@ -1008,7 +1010,8 @@ def _collect_errors_in_logs(
 
     for match in ERROR_RE.finditer(data, start_position):
         error = match.group(0)
-        if IGNORE_RE.search(error):
+        # A failing Antithesis property is a failure whatever its details say.
+        if IGNORE_RE.search(error) and not error.startswith(b"---------- ANTITHESIS"):
             continue
         label = os.getenv("BUILDKITE_LABEL")
         if (
