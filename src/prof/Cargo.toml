@@ -13,20 +13,13 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 backtrace.workspace = true
-flate2.workspace = true
 jemalloc_pprof = { workspace = true, optional = true }
 pprof_util.workspace = true
 mz-ore = { path = "../ore", default-features = false, features = ["async"] }
 pprof.workspace = true
-prost.workspace = true
 tikv-jemalloc-ctl = { workspace = true, optional = true }
 tracing.workspace = true
 tokio.workspace = true
-
-[build-dependencies]
-anyhow.workspace = true
-mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
-prost-build.workspace = true
 
 [features]
 default = []
