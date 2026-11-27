@@ -30,6 +30,18 @@ use mz_repr::{Datum, RelationDesc, Row, SqlScalarType};
 pub const ARROW_EXTENSION_NAME_KEY: &str = "ARROW:extension:name";
 const EXTENSION_PREFIX: &str = "materialize.v1.";
 
+/// How a jsonb string scalar is written to a `Utf8` column.
+///
+/// `LargeUtf8` columns always hold JSON text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JsonbStringEncoding {
+    /// JSON text, quoted and escaped.
+    Json,
+    /// The bare string contents. Readers cannot tell the string `"1"` from the
+    /// number `1`, so this exists only for tables that already hold such values.
+    Raw,
+}
+
 pub struct ArrowBuilder {
     columns: Vec<ArrowColumn>,
     /// A crude estimate of the size of the data in the builder
@@ -189,6 +201,7 @@ impl ArrowBuilder {
                 typename_from_field(field)?,
                 item_capacity,
                 data_capacity,
+                JsonbStringEncoding::Json,
             )?);
         }
         Ok(Self {
@@ -203,11 +216,13 @@ impl ArrowBuilder {
     /// `item_capacity` is used to initialize the capacity of each column's builder which defines
     /// the number of values that can be appended to each column before reallocating.
     /// `data_capacity` is used to initialize the buffer size of the string and binary builders.
+    /// `jsonb_string_encoding` applies to jsonb columns the schema types as `Utf8`.
     /// Errors if the schema contains an unimplemented type.
     pub fn new_with_schema(
         schema: Arc<Schema>,
         item_capacity: usize,
         data_capacity: usize,
+        jsonb_string_encoding: JsonbStringEncoding,
     ) -> Result<Self, anyhow::Error> {
         let mut columns = vec![];
         for field in schema.fields() {
@@ -218,6 +233,7 @@ impl ArrowBuilder {
                 typename_from_field(field)?,
                 item_capacity,
                 data_capacity,
+                jsonb_string_encoding,
             )?);
         }
         Ok(Self {
@@ -586,6 +602,7 @@ fn builder_for_datatype(
     data_type: &DataType,
     item_capacity: usize,
     data_capacity: usize,
+    jsonb_string_encoding: JsonbStringEncoding,
 ) -> Result<ColBuilder, anyhow::Error> {
     let builder = match &data_type {
         DataType::Boolean => {
@@ -642,6 +659,7 @@ fn builder_for_datatype(
                 typename_from_field(field)?,
                 item_capacity,
                 data_capacity,
+                jsonb_string_encoding,
             )?;
             ColBuilder::ListBuilder(Box::new(
                 ListBuilder::new(inner_col_builder).with_field(Arc::clone(field)),
@@ -657,6 +675,7 @@ fn builder_for_datatype(
                     typename_from_field(field)?,
                     item_capacity,
                     data_capacity,
+                    jsonb_string_encoding,
                 )?;
                 field_builders.push(Box::new(inner_col_builder));
             }
@@ -681,6 +700,7 @@ fn builder_for_datatype(
                     typename_from_field(value_field)?,
                     item_capacity,
                     data_capacity,
+                    jsonb_string_encoding,
                 )?;
                 // Use the names from the schema's entries struct rather than
                 // arrow-rs's defaults (`entries`/`keys`/`values`) — when the
@@ -725,6 +745,7 @@ struct ArrowColumn {
     nullable: bool,
     data_type: DataType,
     extension_type_name: String,
+    jsonb_string_encoding: JsonbStringEncoding,
     inner: ColBuilder,
 }
 
@@ -780,9 +801,16 @@ impl ArrowColumn {
         extension_type_name: String,
         item_capacity: usize,
         data_capacity: usize,
+        jsonb_string_encoding: JsonbStringEncoding,
     ) -> Result<Self, anyhow::Error> {
         Ok(Self {
-            inner: builder_for_datatype(&data_type, item_capacity, data_capacity)?,
+            jsonb_string_encoding,
+            inner: builder_for_datatype(
+                &data_type,
+                item_capacity,
+                data_capacity,
+                jsonb_string_encoding,
+            )?,
             field_name,
             nullable,
             data_type,
@@ -936,7 +964,12 @@ impl ArrowColumn {
             (ColBuilder::FixedSizeBinaryBuilder(builder), Datum::Uuid(val)) => {
                 builder.append_value(val.as_bytes())?
             }
-            (ColBuilder::StringBuilder(builder), Datum::String(s)) => builder.append_value(s),
+            (ColBuilder::StringBuilder(builder), Datum::String(s))
+                if self.extension_type_name != "jsonb"
+                    || self.jsonb_string_encoding == JsonbStringEncoding::Raw =>
+            {
+                builder.append_value(s)
+            }
             (ColBuilder::StringBuilder(builder), _) if self.extension_type_name == "jsonb" => {
                 builder.append_value(JsonbRef::from_datum(datum).to_serde_json().to_string())
             }
@@ -1183,5 +1216,57 @@ impl ArrowColumn {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow::array::{Array, StringArray};
+    use mz_repr::adt::jsonb::Jsonb;
+
+    use super::*;
+
+    /// Encodes `values` into a single jsonb column typed as `Utf8`.
+    fn encode_utf8_jsonb(values: &[&str], encoding: JsonbStringEncoding) -> Vec<String> {
+        let desc = RelationDesc::builder()
+            .with_column("j", SqlScalarType::Jsonb.nullable(false))
+            .finish();
+        let schema = desc_to_schema_with_overrides(&desc, |scalar_type| {
+            matches!(scalar_type, SqlScalarType::Jsonb)
+                .then(|| (DataType::Utf8, "jsonb".to_string()))
+        })
+        .expect("jsonb is supported");
+        let mut builder =
+            ArrowBuilder::new_with_schema(Arc::new(schema), values.len(), 1024, encoding)
+                .expect("schema is supported");
+        for value in values {
+            let row = value.parse::<Jsonb>().expect("valid json").into_row();
+            builder.add_row(&row).expect("row matches schema");
+        }
+        let batch = builder.to_record_batch().expect("valid batch");
+        let column = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("jsonb column is Utf8");
+        column.iter().flatten().map(str::to_owned).collect()
+    }
+
+    const JSONB_VALUES: &[&str] = &[r#""hello""#, r#""say \"hi\"""#, r#""123""#, r#"{"k":"v"}"#];
+
+    #[mz_ore::test]
+    fn utf8_jsonb_strings_as_json() {
+        assert_eq!(
+            encode_utf8_jsonb(JSONB_VALUES, JsonbStringEncoding::Json),
+            JSONB_VALUES,
+        );
+    }
+
+    #[mz_ore::test]
+    fn utf8_jsonb_strings_raw() {
+        assert_eq!(
+            encode_utf8_jsonb(JSONB_VALUES, JsonbStringEncoding::Raw),
+            ["hello", r#"say "hi""#, "123", r#"{"k":"v"}"#],
+        );
     }
 }

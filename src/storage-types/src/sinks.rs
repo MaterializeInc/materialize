@@ -43,6 +43,7 @@ pub struct StorageSinkDesc<S, T = mz_repr::Timestamp> {
     pub connection: StorageSinkConnection,
     pub with_snapshot: bool,
     pub version: u64,
+    pub creation_version: SinkCreationVersion,
     pub envelope: SinkEnvelope,
     pub as_of: Antichain<T>,
     pub from_storage_metadata: S,
@@ -79,6 +80,7 @@ impl<S: Debug + PartialEq, T: Debug + PartialEq + PartialOrder> AlterCompatible
             connection,
             envelope,
             version: _,
+            creation_version,
             // The as-of of the descriptions may differ.
             as_of: _,
             from_storage_metadata,
@@ -95,6 +97,10 @@ impl<S: Debug + PartialEq, T: Debug + PartialEq + PartialOrder> AlterCompatible
                 "connection",
             ),
             (envelope == &other.envelope, "envelope"),
+            (
+                creation_version == &other.creation_version,
+                "creation_version",
+            ),
             // This can legally change from true to false once the snapshot has been
             // written out.
             (*with_snapshot || !other.with_snapshot, "with_snapshot"),
@@ -121,6 +127,37 @@ impl<S: Debug + PartialEq, T: Debug + PartialEq + PartialOrder> AlterCompatible
         }
 
         Ok(())
+    }
+}
+
+/// The Materialize release a sink was created on, if it was recorded.
+///
+/// A sink writes into an external object that outlives any one release, so a
+/// change to what the sink writes must not apply to a sink that has already
+/// written the old form. Such changes are gated on this version, through a
+/// predicate defined here.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SinkCreationVersion(Option<i32>);
+
+impl SinkCreationVersion {
+    /// The creation version of a sink created on the release `version_num`, in
+    /// the form of `BuildInfo::version_num`.
+    pub fn new(version_num: i32) -> Self {
+        Self(Some(version_num))
+    }
+
+    /// The recorded release, or `None` for a sink created before releases
+    /// were recorded.
+    pub fn version_num(&self) -> Option<i32> {
+        self.0
+    }
+
+    /// Whether an Iceberg sink writes a jsonb string scalar as JSON text,
+    /// quoted and escaped. Older sinks wrote the bare string contents.
+    pub fn iceberg_jsonb_strings_as_json(&self) -> bool {
+        // The corrected encoding shipped in the release that started recording
+        // creation versions, so every recorded version has it.
+        self.0.is_some()
     }
 }
 

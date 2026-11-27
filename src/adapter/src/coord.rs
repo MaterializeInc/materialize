@@ -3219,6 +3219,7 @@ impl Coordinator {
                                     as_of: Antichain::from_elem(Timestamp::minimum()),
                                     with_snapshot: sink.with_snapshot,
                                     version: sink.version,
+ creation_version: sink.creation_version.clone(),
                                     from_storage_metadata: (),
                                     to_storage_metadata: (),
                                     commit_interval: sink.commit_interval,

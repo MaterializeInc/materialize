@@ -125,7 +125,7 @@ use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
 use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 use iceberg::{Catalog, NamespaceIdent, TableCommit, TableCreation, TableIdent};
 use itertools::Itertools;
-use mz_arrow_util::builder::{ARROW_EXTENSION_NAME_KEY, ArrowBuilder};
+use mz_arrow_util::builder::{ARROW_EXTENSION_NAME_KEY, ArrowBuilder, JsonbStringEncoding};
 use mz_interchange::avro::DiffPair;
 use mz_interchange::envelopes::for_each_diff_pair_async;
 use mz_ore::cast::CastFrom;
@@ -194,6 +194,7 @@ struct WriterContext {
     /// Generates unique file names with a per-worker UUID suffix.
     file_name_generator: DefaultFileNameGenerator,
     writer_properties: WriterProperties,
+    jsonb_string_encoding: JsonbStringEncoding,
 }
 
 /// Envelope-specific logic for writing Iceberg data files.
@@ -366,6 +367,7 @@ impl EnvelopeHandler for UpsertEnvelopeHandler {
             Arc::clone(&self.ctx.arrow_schema),
             DEFAULT_ARRAY_BUILDER_ITEM_CAPACITY,
             DEFAULT_ARRAY_BUILDER_DATA_CAPACITY,
+            self.ctx.jsonb_string_encoding,
         )
         .context("Failed to create builder")?;
 
@@ -450,6 +452,7 @@ impl EnvelopeHandler for AppendEnvelopeHandler {
             Arc::clone(&self.user_schema_for_append),
             DEFAULT_ARRAY_BUILDER_ITEM_CAPACITY,
             DEFAULT_ARRAY_BUILDER_DATA_CAPACITY,
+            self.ctx.jsonb_string_encoding,
         )
         .context("Failed to create builder")?;
 
@@ -1740,6 +1743,7 @@ fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
     from_id: GlobalId,
     key_is_synthetic: bool,
     as_of: Antichain<Timestamp>,
+    jsonb_string_encoding: JsonbStringEncoding,
     connection: IcebergSinkConnection,
     storage_configuration: StorageConfiguration,
     materialize_arrow_schema: Arc<ArrowSchema>,
@@ -1844,6 +1848,7 @@ fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
                     location_generator,
                     file_name_generator,
                     writer_properties,
+                    jsonb_string_encoding,
                 };
                 let handler = H::new(ctx, &connection, &materialize_arrow_schema)?;
                 let mut pk_warner =
@@ -3483,6 +3488,15 @@ impl<'scope> SinkRender<'scope> for IcebergSinkConnection {
             .expect("statistics initialized")
             .clone();
 
+        // A sink that has written bare jsonb strings must keep doing so. Its
+        // retractions and equality deletes are matched against those rows by
+        // value, and would miss them in the JSON encoding.
+        let jsonb_string_encoding = if sink.creation_version.iceberg_jsonb_strings_as_json() {
+            JsonbStringEncoding::Json
+        } else {
+            JsonbStringEncoding::Raw
+        };
+
         let connection_for_minter = self.clone();
         let (batch_descriptions, table_ready, mint_status, mint_button) = mint_batch_descriptions(
             format!("{sink_id}-iceberg-mint"),
@@ -3505,6 +3519,7 @@ impl<'scope> SinkRender<'scope> for IcebergSinkConnection {
                 sink.from,
                 key_is_synthetic,
                 sink.as_of.clone(),
+                jsonb_string_encoding,
                 connection_for_writer,
                 storage_state.storage_configuration.clone(),
                 Arc::new(arrow_schema_with_ids.clone()),
@@ -3520,6 +3535,7 @@ impl<'scope> SinkRender<'scope> for IcebergSinkConnection {
                 sink.from,
                 key_is_synthetic,
                 sink.as_of.clone(),
+                jsonb_string_encoding,
                 connection_for_writer,
                 storage_state.storage_configuration.clone(),
                 Arc::new(arrow_schema_with_ids.clone()),

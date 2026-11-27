@@ -39,17 +39,17 @@ use mz_sql_parser::ast::visit_mut::{VisitMut, visit_expr_mut};
 use mz_sql_parser::ast::{
     AlterSourceAction, AlterSourceAddSubsourceOptionName, AlterSourceStatement, AvroDocOn,
     CastFailureMode, ColumnName, CreateMaterializedViewStatement, CreateSinkConnection,
-    CreateSinkOptionName, CreateSinkStatement, CreateSourceOptionName, CreateSubsourceOption,
-    CreateSubsourceOptionName, CreateTableFromSourceStatement, CsrConfigOption,
-    CsrConfigOptionName, CsrConnection, CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema,
-    DeferredItemName, DocOnIdentifier, DocOnSchema, Expr, Function, FunctionArgs, GlueAvroOption,
-    GlueAvroSeed, Ident, KafkaSourceConfigOption, KafkaSourceConfigOptionName, LoadGenerator,
-    LoadGeneratorOption, LoadGeneratorOptionName, MaterializedViewOption,
-    MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName, PgConfigOption,
-    PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy, RefreshAtOptionValue,
-    RefreshEveryOptionValue, RefreshOptionValue, SourceEnvelope, SqlServerConfigOption,
-    SqlServerConfigOptionName, Statement, TableFromSourceColumns, TableFromSourceOption,
-    TableFromSourceOptionName, UnresolvedItemName,
+    CreateSinkOption, CreateSinkOptionName, CreateSinkStatement, CreateSourceOptionName,
+    CreateSubsourceOption, CreateSubsourceOptionName, CreateTableFromSourceStatement,
+    CsrConfigOption, CsrConfigOptionName, CsrConnection, CsrSeedAvro, CsrSeedProtobuf,
+    CsrSeedProtobufSchema, DeferredItemName, DocOnIdentifier, DocOnSchema, Expr, Function,
+    FunctionArgs, GlueAvroOption, GlueAvroSeed, Ident, KafkaSourceConfigOption,
+    KafkaSourceConfigOptionName, LoadGenerator, LoadGeneratorOption, LoadGeneratorOptionName,
+    MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName,
+    PgConfigOption, PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy,
+    RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue, SourceEnvelope,
+    SqlServerConfigOption, SqlServerConfigOptionName, Statement, TableFromSourceColumns,
+    TableFromSourceOption, TableFromSourceOptionName, UnresolvedItemName,
 };
 use mz_sql_server_util::desc::SqlServerTableDesc;
 use mz_storage_types::configuration::StorageConfiguration;
@@ -526,6 +526,16 @@ async fn purify_create_sink(
             op.name.to_ast_string_simple(),
         )
     }
+
+    // NOTE: This must only happen in purification, which runs once when the
+    // sink is created. Planning also runs on every catalog load, where
+    // stamping would give sinks that predate the option the current version.
+    with_options.push(CreateSinkOption {
+        name: CreateSinkOptionName::CreationVersion,
+        value: Some(WithOptionValue::Value(Value::Number(
+            catalog.config().build_info.version_num().to_string(),
+        ))),
+    });
 
     match &connection {
         CreateSinkConnection::Kafka {

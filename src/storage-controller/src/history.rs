@@ -368,6 +368,7 @@ mod tests {
             }),
             with_snapshot: Default::default(),
             version: Default::default(),
+            creation_version: Default::default(),
             envelope: SinkEnvelope::Upsert,
             as_of: Antichain::from_elem(0.into()),
             from_storage_metadata: CollectionMetadata {

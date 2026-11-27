@@ -3730,19 +3730,24 @@ impl<'a> Parser<'a> {
 
     /// Parse the name of a CREATE SINK optional parameter
     fn parse_create_sink_option_name(&mut self) -> Result<CreateSinkOptionName, ParserError> {
-        let name = match self.expect_one_of_keywords(&[PARTITION, SNAPSHOT, VERSION, COMMIT])? {
-            SNAPSHOT => CreateSinkOptionName::Snapshot,
-            VERSION => CreateSinkOptionName::Version,
-            PARTITION => {
-                self.expect_keyword(STRATEGY)?;
-                CreateSinkOptionName::PartitionStrategy
-            }
-            COMMIT => {
-                self.expect_keyword(INTERVAL)?;
-                CreateSinkOptionName::CommitInterval
-            }
-            _ => unreachable!(),
-        };
+        let name =
+            match self.expect_one_of_keywords(&[PARTITION, SNAPSHOT, VERSION, COMMIT, CREATION])? {
+                SNAPSHOT => CreateSinkOptionName::Snapshot,
+                VERSION => CreateSinkOptionName::Version,
+                PARTITION => {
+                    self.expect_keyword(STRATEGY)?;
+                    CreateSinkOptionName::PartitionStrategy
+                }
+                COMMIT => {
+                    self.expect_keyword(INTERVAL)?;
+                    CreateSinkOptionName::CommitInterval
+                }
+                CREATION => {
+                    self.expect_keyword(VERSION)?;
+                    CreateSinkOptionName::CreationVersion
+                }
+                _ => unreachable!(),
+            };
         Ok(name)
     }
 
