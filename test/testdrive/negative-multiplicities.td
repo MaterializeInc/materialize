@@ -87,6 +87,17 @@ contains:Invalid data in source, saw non-positive accumulation
 # Case-insensitive match for both 'Non' and 'non'
 contains:on-positive accumulation
 
+# Retractions must match every aggregate argument before monotonic validation.
+> INSERT INTO base VALUES (7, 10, 1), (7, 20, -1)
+
+! SELECT MIN(data), MAX(unsigned_data) FROM data WHERE data > 1
+contains:tried to build a monotonic reduction on non-monotonic input
+
+> INSERT INTO base VALUES (7, 20, 1)
+
+> SELECT MIN(data), MAX(unsigned_data) FROM data WHERE data > 1
+7 10
+
 # Window aggregations
 # These are currently commented out, because window functions currently don't check their inputs for negative
 # multiplicities, see https://github.com/MaterializeInc/database-issues/issues/8568
