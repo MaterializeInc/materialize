@@ -327,7 +327,7 @@ def run_responsiveness(
                 if expected != [(1024, 524800)]:
                     raise RuntimeError(f"incorrect read fixture result: {expected}")
                 plan = conn.execute(
-                    sql.SQL("EXPLAIN PHYSICAL PLAN ") + query
+                    sql.SQL("EXPLAIN PHYSICAL PLAN FOR ") + query
                 ).fetchall()
                 if "read_primary_idx" not in str(plan):
                     raise RuntimeError(f"read probe did not use fixture index: {plan}")
