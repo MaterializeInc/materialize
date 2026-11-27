@@ -1087,7 +1087,7 @@ pub fn plan_generic_source_connection(
     })
 }
 
-fn plan_load_generator_source_connection(
+pub(crate) fn plan_load_generator_source_connection(
     scx: &StatementContext<'_>,
     generator: &ast::LoadGenerator,
     options: &Vec<LoadGeneratorOption<Aug>>,
@@ -2121,7 +2121,7 @@ impl LoadGeneratorOptionExtracted {
     }
 }
 
-pub(crate) fn load_generator_ast_to_generator(
+fn load_generator_ast_to_generator(
     scx: &StatementContext,
     loadgen: &ast::LoadGenerator,
     options: &[LoadGeneratorOption<Aug>],
@@ -8325,9 +8325,8 @@ pub fn plan_alter_system_set(
     _: &StatementContext,
     AlterSystemSetStatement { name, to }: AlterSystemSetStatement,
 ) -> Result<Plan, PlanError> {
-    let name = name.to_string();
     Ok(Plan::AlterSystemSet(AlterSystemSetPlan {
-        name,
+        name: name.as_str().to_ascii_lowercase(),
         value: scl::plan_set_variable_to(to)?,
     }))
 }
@@ -8343,8 +8342,9 @@ pub fn plan_alter_system_reset(
     _: &StatementContext,
     AlterSystemResetStatement { name }: AlterSystemResetStatement,
 ) -> Result<Plan, PlanError> {
-    let name = name.to_string();
-    Ok(Plan::AlterSystemReset(AlterSystemResetPlan { name }))
+    Ok(Plan::AlterSystemReset(AlterSystemResetPlan {
+        name: name.as_str().to_ascii_lowercase(),
+    }))
 }
 
 pub fn describe_alter_system_reset_all(

@@ -562,6 +562,13 @@ impl CatalogState {
             }) => {
                 warn!(%name, "unknown system parameter from catalog storage");
             }
+            // A stored value can violate a constraint that was added after it was written.
+            // Panicking on it would crash-loop the environment.
+            Err(Error {
+                kind: ErrorKind::VarError(err @ VarError::InvalidParameterValue { .. }),
+            }) => {
+                warn!(%err, "ignoring invalid system parameter from catalog storage");
+            }
             Err(e) => panic!("unable to update system variable: {e:?}"),
         }
     }

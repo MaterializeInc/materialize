@@ -390,22 +390,18 @@ impl Coordinator {
         {
             seed[i] = *byte;
         }
-        let storage_usage_collection_interval_ms: EpochMillis =
-            EpochMillis::try_from(self.storage_usage_collection_interval.as_millis())
-                .expect("storage usage collection interval must fit into u64");
-        let offset =
-            rngs::SmallRng::from_seed(seed).random_range(0..storage_usage_collection_interval_ms);
+        let period = self.storage_usage_collection_interval_ms;
+        let offset = rngs::SmallRng::from_seed(seed).random_range(0..period);
         let now_ts: EpochMillis = self.peek_local_write_ts().await.into();
 
         // 2) Determine the amount of ms between now and the next collection time.
-        let previous_collection_ts =
-            (now_ts - (now_ts % storage_usage_collection_interval_ms)) + offset;
-        let next_collection_ts = if previous_collection_ts > now_ts {
-            previous_collection_ts
+        let elapsed = now_ts % period;
+        let delay = if offset > elapsed {
+            offset - elapsed
         } else {
-            previous_collection_ts + storage_usage_collection_interval_ms
+            period - (elapsed - offset)
         };
-        let next_collection_interval = Duration::from_millis(next_collection_ts - now_ts);
+        let next_collection_interval = Duration::from_millis(delay);
 
         // 3) Sleep for that amount of time, then initiate another storage usage collection.
         let internal_cmd_tx = self.internal_cmd_tx.clone();

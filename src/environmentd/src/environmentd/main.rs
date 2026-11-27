@@ -395,11 +395,11 @@ pub struct Args {
     /// of threads returned by [`num_cpus::get`].
     #[clap(long, env = "PERSIST_ISOLATED_RUNTIME_THREADS")]
     persist_isolated_runtime_threads: Option<isize>,
-    /// The interval in seconds at which to collect storage usage information.
+    /// The interval at which to collect storage usage information (at least one millisecond).
     #[clap(
         long,
         env = "STORAGE_USAGE_COLLECTION_INTERVAL",
-        value_parser = humantime::parse_duration,
+        value_parser = parse_storage_usage_interval,
         default_value = "3600s"
     )]
     storage_usage_collection_interval_sec: Duration,
@@ -652,6 +652,12 @@ pub struct Args {
 enum OrchestratorKind {
     Kubernetes,
     Process,
+}
+
+fn parse_storage_usage_interval(value: &str) -> anyhow::Result<Duration> {
+    let interval = humantime::parse_duration(value)?;
+    mz_adapter::Config::storage_usage_interval_ms(interval)?;
+    Ok(interval)
 }
 
 // TODO [Alex Hunt] move this to a shared function that can be imported by the

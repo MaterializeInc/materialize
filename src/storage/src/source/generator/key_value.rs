@@ -10,6 +10,7 @@
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::sync::Arc;
+use std::time::Duration;
 
 use differential_dataflow::AsCollection;
 use futures::stream::StreamExt;
@@ -235,7 +236,9 @@ pub fn render<'scope>(
             if !local_partitions.is_empty()
                 && (key_value.tick_interval.is_some() || !key_value.transactional_snapshot)
             {
-                let mut interval = key_value.tick_interval.map(tokio::time::interval);
+                let mut interval = key_value
+                    .tick_interval
+                    .map(|tick| tokio::time::interval(tick.max(Duration::from_micros(1))));
 
                 loop {
                     if local_partitions.iter().all(|si| si.finished_quick()) {

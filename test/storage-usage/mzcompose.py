@@ -212,6 +212,19 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("tests", nargs="*", default=None, help="run specified tests")
     args = parser.parse_args()
 
+    result = c.run(
+        "materialized",
+        "MZ_STORAGE_USAGE_COLLECTION_INTERVAL=500us",
+        "environmentd",
+        entrypoint="env",
+        rm=True,
+        check=False,
+        capture_stderr=True,
+    )
+    assert (
+        result.returncode == 2 and "must be at least 1 millisecond" in result.stderr
+    ), result.stderr
+
     c.up(
         "redpanda",
         "postgres",

@@ -100,6 +100,9 @@ ALTER MATERIALIZED VIEW v SET CLUSTER quickstart
 query error ALTER SINK SET CLUSTER not yet supported, see https://github\.com/MaterializeInc/materialize/discussions/29606 for more details
 ALTER SINK v SET CLUSTER quickstart
 
+statement error TICK INTERVAL must be at least 1 millisecond
+CREATE SOURCE counter IN CLUSTER other_cluster FROM LOAD GENERATOR COUNTER (TICK INTERVAL '0s')
+
 statement ok
 CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (RETAIN HISTORY FOR '5m')
 
@@ -219,6 +222,54 @@ simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET storage_statistics_interval = '0s';
 ----
 db error: ERROR: parameter "storage_statistics_interval" cannot have value "0ns": only supports non-zero durations
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET with_0dt_deployment_ddl_check_interval = '0s';
+----
+db error: ERROR: parameter "with_0dt_deployment_ddl_check_interval" cannot have value "0ns": only supports non-zero durations
+
+# Durations beyond the millisecond range of the catalog are accepted.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET with_0dt_deployment_ddl_check_interval = '18446744073709552 s';
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET with_0dt_deployment_max_wait = '18446744073709552 s';
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET with_0dt_deployment_ddl_check_interval;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET with_0dt_deployment_max_wait;
+----
+COMPLETE 0
+
+# A stored value that violates its constraint is ignored. The largest number of seconds is
+# stored as 0.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET storage_statistics_interval = '18446744073709551615 s';
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET storage_statistics_interval;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET "0dt_deployment_hydration_check_interval" = '0s';
+----
+db error: ERROR: parameter "0dt_deployment_hydration_check_interval" cannot have value "0ns": only supports non-zero durations
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET privatelink_status_update_quota_per_minute = 0;
+----
+db error: ERROR: parameter "privatelink_status_update_quota_per_minute" cannot have value "0": only supports values in range 1..
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET default_timestamp_interval = '-1';

@@ -620,7 +620,12 @@ impl Listeners {
             let catalog = openable_adapter_storage
                 .get_0dt_deployment_ddl_check_interval()
                 .await?;
-            let computed = ld.or(catalog).or(cli_default).unwrap_or(compiled_default);
+            // Preflight reads these values before the catalog validates its system parameters.
+            let computed = [ld, catalog, cli_default]
+                .into_iter()
+                .flatten()
+                .find(|period| !period.is_zero())
+                .unwrap_or(compiled_default);
             info!(
                 ?computed,
                 ?ld,
