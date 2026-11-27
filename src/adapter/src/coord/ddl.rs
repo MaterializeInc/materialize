@@ -905,11 +905,16 @@ impl Coordinator {
             ..
         } = self;
         let conn = active_conns.get(conn_id).expect("connection must exist");
+        let copy_start = Instant::now();
+        let catalog = Arc::make_mut(catalog);
+        phase_seconds
+            .with_label_values(&["catalog_copy"])
+            .observe(copy_start.elapsed().as_secs_f64());
         let TransactionResult {
             builtin_table_updates,
             catalog_updates,
             audit_events,
-        } = Box::pin(Arc::make_mut(catalog).transact_commands(
+        } = Box::pin(catalog.transact_commands(
             Some(&mut controller.storage_collections),
             oracle_write_ts,
             Some(conn),
@@ -1154,7 +1159,11 @@ impl Coordinator {
             cluster_replica_statuses,
             ..
         } = self;
+        let copy_start = Instant::now();
         let catalog = Arc::make_mut(catalog);
+        phase_seconds
+            .with_label_values(&["catalog_copy"])
+            .observe(copy_start.elapsed().as_secs_f64());
         let conn = conn_id.map(|id| active_conns.get(id).expect("connection must exist"));
 
         // Register the session as an ephemeral owner (its uuid <-> connection

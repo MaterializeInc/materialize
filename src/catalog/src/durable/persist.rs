@@ -785,7 +785,12 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
             }
         }
 
+        let histogram = self
+            .metrics
+            .transaction_step_seconds
+            .with_label_values(&["snapshot_build", "durable"]);
         self.with_trace(|trace| {
+            let timer = histogram.start_timer();
             let mut snapshot = Snapshot::empty();
             for (kind, ts, diff) in trace {
                 let diff = *diff;
@@ -893,6 +898,7 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
                     }
                 }
             }
+            timer.observe_duration();
             f(snapshot)
         })
         .await
@@ -1686,6 +1692,11 @@ impl PersistHandle<StateUpdateKind, CatalogStateInner> {
         self.metrics.transactions_started.inc();
         let snapshot = self.snapshot().await?;
         let commit_ts = self.upper;
+        let _timer = self
+            .metrics
+            .transaction_step_seconds
+            .with_label_values(&["transaction_init", "durable"])
+            .start_timer();
         Transaction::new(self, snapshot, commit_ts)
     }
 }

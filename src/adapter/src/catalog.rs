@@ -739,7 +739,14 @@ impl Catalog {
     async fn storage<'a>(
         &'a self,
     ) -> MutexGuard<'a, Box<dyn mz_catalog::durable::DurableCatalogState>> {
-        self.storage.lock().await
+        let start = std::time::Instant::now();
+        let storage = self.storage.lock().await;
+        storage
+            .metrics()
+            .transaction_step_seconds
+            .with_label_values(&["storage_lock_wait", "durable"])
+            .observe(start.elapsed().as_secs_f64());
+        storage
     }
 
     pub async fn current_upper(&self) -> mz_repr::Timestamp {
