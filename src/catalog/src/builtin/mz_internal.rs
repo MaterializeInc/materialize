@@ -1286,6 +1286,14 @@ pub static MZ_CLUSTER_REPLICA_SIZE_INTERNAL: LazyLock<BuiltinTable> = LazyLock::
             .with_column("size", SqlScalarType::String.nullable(false))
             .with_column("swap_enabled", SqlScalarType::Bool.nullable(false))
             .with_column("disk_bytes", SqlScalarType::UInt64.nullable(false))
+            .with_column(
+                "allowed_workloads",
+                SqlScalarType::List {
+                    element_type: Box::new(SqlScalarType::String),
+                    custom_id: None,
+                }
+                .nullable(false),
+            )
             .with_key(vec![0])
             .finish(),
         column_comments: BTreeMap::from_iter([
@@ -1297,6 +1305,10 @@ pub static MZ_CLUSTER_REPLICA_SIZE_INTERNAL: LazyLock<BuiltinTable> = LazyLock::
             (
                 "disk_bytes",
                 "The replica size's disk limit in bytes (0 if explicitly disabled). Used internally to compute the public `disk` column.",
+            ),
+            (
+                "allowed_workloads",
+                "The workload classes that clusters of this size may run, from the size's own setting and its family's entry in `cluster_family_allowed_workloads`.",
             ),
         ]),
         is_retained_metrics_object: true,

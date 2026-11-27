@@ -330,6 +330,7 @@ mz_cluster_replica_resource_usage  metric
 mz_cluster_replica_resource_usage  process_id
 mz_cluster_replica_resource_usage  source
 mz_cluster_replica_resource_usage  value
+mz_cluster_replica_size_internal  allowed_workloads
 mz_cluster_replica_size_internal  disk_bytes
 mz_cluster_replica_size_internal  size
 mz_cluster_replica_size_internal  swap_enabled

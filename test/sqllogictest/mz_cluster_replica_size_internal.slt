@@ -13,11 +13,12 @@ reset-server
 
 # mz_cluster_replica_size_internal is a system-only sidecar to
 # mz_cluster_replica_sizes. `swap_enabled` and `disk_bytes` are inputs to
-# the `disk` column of the mz_clusters / mz_cluster_replicas MVs; they
-# must stay locked down to the system user.
+# the `disk` column of the mz_clusters / mz_cluster_replicas MVs, and
+# `allowed_workloads` reports workload restrictions. They must stay locked
+# down to the system user.
 
 statement error permission denied for TABLE
-SELECT * FROM mz_internal.mz_cluster_replica_size_internal
+SELECT size FROM mz_internal.mz_cluster_replica_size_internal
 
 # The mz_system user can query it.
 
@@ -67,4 +68,5 @@ ORDER BY position;
 size,text
 swap_enabled,boolean
 disk_bytes,uint8
-COMPLETE 3
+allowed_workloads,list
+COMPLETE 4

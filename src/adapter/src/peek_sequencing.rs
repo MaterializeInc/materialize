@@ -692,6 +692,12 @@ impl PeekClient {
             &conn_catalog,
             &plan,
         )?;
+        coord::catalog_serving::check_cluster_workload_restrictions(
+            catalog.state(),
+            target_cluster_id,
+            session,
+            &plan,
+        )?;
 
         rbac::check_plan(
             &conn_catalog,
@@ -1651,6 +1657,7 @@ impl PeekClient {
                             logging,
                             Arc::clone(&catalog),
                             cancellation_epoch,
+                            session.user(),
                         )
                         .await?
                     }
@@ -1668,6 +1675,7 @@ impl PeekClient {
                                 cancellation_epoch,
                                 logging,
                                 false,
+                                session.user(),
                             )
                             .await?;
 

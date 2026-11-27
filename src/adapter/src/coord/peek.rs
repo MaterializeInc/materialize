@@ -23,6 +23,7 @@ use mz_compute_client::controller::PeekNotification;
 use mz_compute_client::protocol::command::PeekTarget;
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::{DataflowDescription, IndexImport};
+use mz_controller::clusters::WorkloadClass;
 use mz_expr::explain::{HumanizedExplain, HumanizerMode, fmt_text_constant_rows};
 use mz_expr::{
     EvalError, Id, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing,
@@ -44,6 +45,7 @@ use tracing::{Instrument, Span};
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveCopyTo};
 use crate::catalog::Catalog;
+use crate::coord::catalog_serving;
 use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::optimize::OptimizerError;
 use crate::peek_client::CoordinatorClient;
@@ -758,6 +760,17 @@ impl crate::coord::Coordinator {
         watch_set: Option<WatchSetCreation>,
     ) -> Result<ExecuteResponse, AdapterError> {
         let issue = || {
+            // Registration checked the workload off the coordinator loop, and a
+            // replica admitted since then cannot see this peek's dataflow.
+            self.ensure_cluster_allows_running_workload(
+                compute_instance,
+                catalog_serving::peek_workload(
+                    self.catalog().state(),
+                    dataflow_plan.desc.import_ids(),
+                ),
+                &conn_id,
+                "run SELECT",
+            )?;
             if let Some(ws) = watch_set {
                 self.install_peek_watch_sets(conn_id, ws)
                     .map_err(AdapterError::concurrent_dependency_drop_from_compute_lookup_error)?;
@@ -859,6 +872,16 @@ impl crate::coord::Coordinator {
                         e: AdapterError| {
             let _ = tx.send(Err(e));
         };
+
+        if let Err(e) = self.ensure_cluster_allows_running_workload(
+            compute_instance,
+            WorkloadClass::ComputeInteractive,
+            &conn_id,
+            "run COPY TO",
+        ) {
+            send_err(tx, e);
+            return;
+        }
 
         // Install watch sets for statement lifecycle logging if enabled.
         // If this fails, we just send the error back. The frontend will handle logging

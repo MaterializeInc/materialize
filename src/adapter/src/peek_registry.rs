@@ -88,6 +88,36 @@ impl PeekRegistry {
         connection.map_or(0, |connection| connection.cancel_all(false))
     }
 
+    /// Returns the connection and dependencies of each peek registered on
+    /// `cluster_id`.
+    pub(crate) fn cluster_peeks(
+        &self,
+        cluster_id: ClusterId,
+    ) -> Vec<(ConnectionId, BTreeSet<GlobalId>)> {
+        let connections: Vec<_> = self
+            .connections
+            .lock()
+            .expect("peek registry lock poisoned")
+            .iter()
+            .map(|(id, connection)| (id.clone(), Arc::clone(connection)))
+            .collect();
+        let mut peeks = Vec::new();
+        for (id, connection) in connections {
+            let state = connection
+                .state
+                .lock()
+                .expect("connection peek lock poisoned");
+            peeks.extend(
+                state
+                    .peeks
+                    .values()
+                    .filter(|peek| peek.cluster_id == cluster_id)
+                    .map(|peek| (id.clone(), peek.depends_on.clone())),
+            );
+        }
+        peeks
+    }
+
     /// Catalog invalidation must be published before taking this snapshot.
     /// Each partition then rejects stale registration or includes it in the
     /// invalidation scan. No catalog or lifecycle callback runs under the index lock.

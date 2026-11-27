@@ -112,6 +112,11 @@ pub struct ReplicaAllocation {
     /// Whether instances of this type can be created.
     #[serde(default)]
     pub disabled: bool,
+    /// The workload classes that clusters with replicas of this size may run.
+    /// `None` allows every class. The adapter enforces this for user clusters
+    /// and non-internal users.
+    #[serde(default, deserialize_with = "deserialize_allowed_workloads")]
+    pub allowed_workloads: Option<BTreeSet<WorkloadClass>>,
     /// Additional node selectors.
     #[serde(default)]
     pub selectors: BTreeMap<String, String>,
@@ -137,6 +142,93 @@ impl ReplicaAllocation {
 
 fn default_true() -> bool {
     true
+}
+
+/// A class of work that a cluster can run, used to restrict what replica
+/// sizes may run.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize
+)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkloadClass {
+    /// Sources, their subsources and tables, and `COPY FROM`.
+    Ingest,
+    /// Sinks.
+    Sink,
+    /// Indexes, materialized views, metric sinks, and `SUBSCRIBE`.
+    ComputeMaintained,
+    /// `SELECT`, `COPY TO`, and the reads of `INSERT`, `UPDATE`, and `DELETE`.
+    ComputeInteractive,
+    /// `SELECT` and `SUBSCRIBE` that read only system objects, including
+    /// per-replica introspection relations, which only the replicas of the
+    /// target cluster can answer.
+    ComputeIntrospection,
+}
+
+impl WorkloadClass {
+    pub const ALL: [WorkloadClass; 5] = [
+        WorkloadClass::Ingest,
+        WorkloadClass::Sink,
+        WorkloadClass::ComputeMaintained,
+        WorkloadClass::ComputeInteractive,
+        WorkloadClass::ComputeIntrospection,
+    ];
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            WorkloadClass::Ingest => "ingest",
+            WorkloadClass::Sink => "sink",
+            WorkloadClass::ComputeMaintained => "compute_maintained",
+            WorkloadClass::ComputeInteractive => "compute_interactive",
+            WorkloadClass::ComputeIntrospection => "compute_introspection",
+        }
+    }
+}
+
+impl WorkloadClass {
+    /// Parses workload class names, skipping names this version does not know.
+    ///
+    /// NOTE: A skipped name allows nothing. A config that misspells a class, or
+    /// names one only a newer version knows, then restricts more instead of
+    /// failing to load or lifting the restriction.
+    pub fn parse_known<'a>(names: impl IntoIterator<Item = &'a str>) -> BTreeSet<WorkloadClass> {
+        names
+            .into_iter()
+            .filter_map(|name| {
+                let class = WorkloadClass::ALL
+                    .into_iter()
+                    .find(|class| class.as_str() == name);
+                if class.is_none() {
+                    warn!(%name, "ignoring unknown workload class");
+                }
+                class
+            })
+            .collect()
+    }
+}
+
+fn deserialize_allowed_workloads<'de, D>(
+    deserializer: D,
+) -> Result<Option<BTreeSet<WorkloadClass>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let names: Option<Vec<String>> = Option::deserialize(deserializer)?;
+    Ok(names.map(|names| WorkloadClass::parse_known(names.iter().map(String::as_str))))
+}
+
+impl fmt::Display for WorkloadClass {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 #[mz_ore::test]
@@ -170,6 +262,7 @@ fn test_replica_allocation_deserialization() {
             credits_per_hour: 16.into(),
             disk_limit: Some(DiskLimit(ByteSize::mib(100))),
             disabled: false,
+            allowed_workloads: None,
             memory_limit: Some(MemoryLimit(ByteSize::gib(10))),
             cpu_limit: Some(CpuLimit::from_millicpus(1000)),
             cpu_request: None,
@@ -207,6 +300,7 @@ fn test_replica_allocation_deserialization() {
             credits_per_hour: 0.into(),
             disk_limit: Some(DiskLimit(ByteSize::mib(0))),
             disabled: true,
+            allowed_workloads: None,
             memory_limit: Some(MemoryLimit(ByteSize::gib(0))),
             cpu_limit: Some(CpuLimit::from_millicpus(0)),
             cpu_request: None,
@@ -227,6 +321,24 @@ fn test_replica_allocation_deserialization() {
     assert_err!(serde_json::from_str::<ReplicaAllocation>(data));
     let data = r#"{"scale": 1, "workers": 1, "credits_per_hour": "0"}"#;
     assert_ok!(serde_json::from_str::<ReplicaAllocation>(data));
+
+    let data = r#"{"scale": 1, "workers": 1, "credits_per_hour": "0", "allowed_workloads": ["ingest", "compute_maintained"]}"#;
+    let replica_allocation: ReplicaAllocation = serde_json::from_str(data)
+        .expect("deserialization from JSON succeeds for ReplicaAllocation");
+    assert_eq!(
+        replica_allocation.allowed_workloads,
+        Some(BTreeSet::from([
+            WorkloadClass::Ingest,
+            WorkloadClass::ComputeMaintained
+        ]))
+    );
+    let data = r#"{"scale": 1, "workers": 1, "credits_per_hour": "0", "allowed_workloads": ["ingest", "select"]}"#;
+    let replica_allocation: ReplicaAllocation = serde_json::from_str(data)
+        .expect("an unknown workload class does not fail deserialization");
+    assert_eq!(
+        replica_allocation.allowed_workloads,
+        Some(BTreeSet::from([WorkloadClass::Ingest]))
+    );
 }
 
 #[mz_ore::test]

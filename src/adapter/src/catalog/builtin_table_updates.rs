@@ -22,7 +22,7 @@ use mz_catalog::builtin::{
 };
 use mz_catalog::memory::error::Error;
 use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Func, Type};
-use mz_controller::clusters::ReplicaAllocation;
+use mz_controller::clusters::{ReplicaAllocation, WorkloadClass};
 use mz_license_keys::ValidatedLicenseKey;
 use mz_orchestrator::{CpuLimit, DiskLimit, MemoryLimit};
 use mz_ore::cast::CastFrom;
@@ -43,6 +43,7 @@ use uuid::Uuid;
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::active_compute_sink::ActiveSubscribe;
 use crate::catalog::CatalogState;
+use crate::catalog::state::{FamilyWorkloads, allocation_allows_workload};
 use crate::coord::ConnMeta;
 
 /// An update to a built-in table.
@@ -474,30 +475,21 @@ impl CatalogState {
         Ok(BuiltinTableUpdate::row(id, row, Diff::ONE))
     }
 
-    pub fn pack_replica_size_update(
+    /// Packs the rows of the replica size tables for one size.
+    ///
+    /// `allowed_workloads` depends on `cluster_family_allowed_workloads`, so
+    /// `family_workloads` must be the value the size's existing rows were
+    /// packed with, or a retraction would not cancel its insertion. See
+    /// [`CatalogState::replica_sizes_family_workloads`].
+    pub(super) fn pack_replica_size_update(
         size: &str,
         alloc: &ReplicaAllocation,
+        family_workloads: &FamilyWorkloads,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        let mut updates = Vec::new();
         // Just invent something when the limits are `None`, which only happens in non-prod
         // environments (tests, process orchestrator, etc.)
         let DiskLimit(ByteSize(disk_bytes)) = (alloc.disk_limit).unwrap_or(DiskLimit::ARBITRARY);
-
-        // The disk column of mz_clusters / mz_cluster_replicas MVs needs
-        // `swap_enabled` and `disk_bytes`; expose them through a parallel
-        // internal table.
-        let internal_row = Row::pack_slice(&[
-            size.into(),
-            Datum::from(alloc.swap_enabled),
-            disk_bytes.into(),
-        ]);
-        updates.push(BuiltinTableUpdate::row(
-            &*MZ_CLUSTER_REPLICA_SIZE_INTERNAL,
-            internal_row,
-            diff,
-        ));
-
         let cpu_limit = alloc.cpu_limit.unwrap_or(CpuLimit::MAX);
         let MemoryLimit(ByteSize(memory_bytes)) = (alloc.memory_limit).unwrap_or(MemoryLimit::MAX);
 
@@ -508,17 +500,56 @@ impl CatalogState {
             cpu_limit.as_nanocpus().into(),
             memory_bytes.into(),
             disk_bytes.into(),
-            (alloc.credits_per_hour).into(),
+            Datum::from(alloc.credits_per_hour),
             alloc.disabled.into(),
         ]);
+        vec![
+            Self::pack_replica_size_internal_row(size, alloc, family_workloads, diff),
+            BuiltinTableUpdate::row(&*MZ_CLUSTER_REPLICA_SIZES, row, diff),
+        ]
+    }
 
-        updates.push(BuiltinTableUpdate::row(
-            &*MZ_CLUSTER_REPLICA_SIZES,
-            row,
-            diff,
-        ));
+    /// Packs the `mz_cluster_replica_size_internal` rows of every size, with
+    /// `allowed_workloads` derived from `family_workloads`.
+    pub fn pack_replica_size_internal_rows(
+        &self,
+        family_workloads: &FamilyWorkloads,
+        diff: Diff,
+    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
+        self.cluster_replica_sizes
+            .0
+            .iter()
+            .map(|(size, alloc)| {
+                Self::pack_replica_size_internal_row(size, alloc, family_workloads, diff)
+            })
+            .collect()
+    }
 
-        updates
+    fn pack_replica_size_internal_row(
+        size: &str,
+        alloc: &ReplicaAllocation,
+        family_workloads: &FamilyWorkloads,
+        diff: Diff,
+    ) -> BuiltinTableUpdate<&'static BuiltinTable> {
+        let DiskLimit(ByteSize(disk_bytes)) = (alloc.disk_limit).unwrap_or(DiskLimit::ARBITRARY);
+
+        // The disk column of mz_clusters / mz_cluster_replicas MVs needs
+        // `swap_enabled` and `disk_bytes`; expose them through a parallel
+        // internal table.
+        let mut row = Row::default();
+        let mut packer = row.packer();
+        packer.extend([
+            size.into(),
+            Datum::from(alloc.swap_enabled),
+            disk_bytes.into(),
+        ]);
+        packer.push_list(
+            WorkloadClass::ALL
+                .iter()
+                .filter(|class| allocation_allows_workload(alloc, **class, family_workloads))
+                .map(|class| Datum::String(class.as_str())),
+        );
+        BuiltinTableUpdate::row(&*MZ_CLUSTER_REPLICA_SIZE_INTERNAL, row, diff)
     }
 
     pub fn pack_subscribe_update(

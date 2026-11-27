@@ -37,6 +37,7 @@ use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::Params;
 use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::metadata::SessionMetadata;
+use mz_sql::session::user::User;
 use mz_sql_parser::ast::{CopyRelation, CopyStatement, SubscribeStatement};
 use mz_storage_types::sources::{SourceData, Timeline};
 use mz_timestamp_oracle::TimestampOracle;
@@ -50,6 +51,7 @@ use uuid::Uuid;
 use crate::catalog::{Catalog, CatalogState};
 use crate::command::{CatalogSnapshot, Command, ExecuteResponse};
 use crate::coord::appends::GroupCommitNotifier;
+use crate::coord::catalog_serving;
 use crate::coord::peek::{FastPathPlan, PeekResponseUnary};
 use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::coord::{Coordinator, ExecuteContextExtra, ExecuteContextGuard, Message};
@@ -174,6 +176,7 @@ impl PeekClient {
         cancellation_epoch: u64,
         logging: &mut ExecutionLogging,
         is_fast_path: bool,
+        user: &User,
     ) -> Result<PeekHandle, AdapterError> {
         let connection = Arc::clone(&self.connection_peeks);
         let uuid = Uuid::new_v4();
@@ -252,6 +255,25 @@ impl PeekClient {
                             })
                         })
                     };
+                    // Sequencing checked the workload against the stale
+                    // catalog, and a replica admitted since then does not
+                    // count this peek. Registration succeeds only against the
+                    // catalog checked here.
+                    let error = error.or_else(|| {
+                        let cluster = catalog.get_cluster(cluster_id);
+                        catalog
+                            .state()
+                            .ensure_cluster_allows_workload(
+                                cluster,
+                                catalog_serving::peek_workload(
+                                    catalog.state(),
+                                    depends_on.iter().copied(),
+                                ),
+                                Some(user),
+                                || "run SELECT".to_string(),
+                            )
+                            .err()
+                    });
                     if let Some(error) = error {
                         peek.lifecycle
                             .complete(PeekNotification::Error(error.to_string()));
@@ -529,6 +551,7 @@ impl PeekClient {
         logging: &mut ExecutionLogging,
         catalog: Arc<Catalog>,
         cancellation_epoch: u64,
+        user: &User,
     ) -> Result<crate::ExecuteResponse, AdapterError> {
         // If the dataflow optimizes to a constant expression, we can immediately return the result.
         if let FastPathPlan::Constant(rows_res, _) = fast_path {
@@ -665,6 +688,7 @@ impl PeekClient {
                 cancellation_epoch,
                 logging,
                 true,
+                user,
             )
             .await?;
 
