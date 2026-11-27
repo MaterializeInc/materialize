@@ -15,7 +15,6 @@ complex, but we can't verify correctness or performance.
 
 import json
 import random
-import time
 from datetime import UTC, datetime
 from threading import Lock, Thread
 from typing import Any
@@ -68,13 +67,9 @@ aggregate_lock = Lock()
 
 
 def run_sqlsmith(c: Composition, cmd: list[str], aggregate: dict[str, Any]) -> None:
-    result = c.run(
-        *cmd,
-        capture=True,
-        check=False,  # We still get back parsable json on failure, so keep going
-    )
+    result = c.run(*cmd, capture=True, check=False)
 
-    if result.returncode not in (0, 1):
+    if result.returncode != 0:
         if result.returncode == 137:
             raise Exception("[SQLsmith] OOMed (return code 137)")
 
@@ -220,13 +215,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     seed = args.seed or random.randint(0, 2**31 - args.num_sqlsmith)
 
-    def kill_sqlsmith_with_delay() -> None:
-        time.sleep(args.runtime)
-        c.kill("sqlsmith", signal="SIGINT")
-
-    killer = Thread(target=kill_sqlsmith_with_delay)
-    killer.start()
-
     threads: list[Thread] = []
     aggregate: dict[str, Any] = {
         "errors": [],
@@ -257,6 +245,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         cmd = [
             "sqlsmith",
             # f"--max-queries={args.queries}",
+            f"--max-runtime={args.runtime}",
             f"--max-joins={args.max_joins}",
             f"--seed={seed + i}",
             "--log-json",
