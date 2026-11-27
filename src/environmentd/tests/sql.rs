@@ -4813,7 +4813,12 @@ async fn test_cancel_linearize_commit_discards_set_local() {
         .enable_feature_flags(&["enable_refresh_every_mvs", "allow_real_time_recency"])
         .await;
     let client = server.connect().await.unwrap();
-    let client_cancel = client.cancel_token();
+    let backend_pid: i32 = client
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .unwrap()
+        .get(0);
+    let client_cancel = server.connect().await.unwrap();
 
     // This test will break in the year 30,000 after Jan 1st. When that happens, increase the year
     // to fix the test.
@@ -4859,7 +4864,12 @@ async fn test_cancel_linearize_commit_discards_set_local() {
         .retry_async_with_state(
             (client_cancel, rx),
             |_, (client_cancel, mut rx)| async move {
-                client_cancel.cancel_query(postgres::NoTls).await.unwrap();
+                // Wire cancellation has no acknowledgment and could arrive during the SHOW
+                // below. SQL cancellation returns after the coordinator handles the request.
+                client_cancel
+                    .query_one("SELECT pg_cancel_backend($1::int4)", &[&backend_pid])
+                    .await
+                    .unwrap();
                 let res = rx.try_recv();
                 ((client_cancel, rx), res)
             },
