@@ -965,6 +965,8 @@ async fn test_non_writer_commits(state_builder: TestCatalogStateBuilder) {
     let _ = writer_state.sync_to_current_updates().await.unwrap();
     let _ = savepoint_state.sync_to_current_updates().await.unwrap();
     let _ = reader_state.sync_to_current_updates().await.unwrap();
+    // Warm the reader before another handle changes the catalog.
+    drop(reader_state.transaction().await.unwrap());
 
     // Commit write with writer.
     let role_name = "joe";
@@ -1033,9 +1035,25 @@ async fn test_non_writer_commits(state_builder: TestCatalogStateBuilder) {
     {
         let updates = reader_state.sync_to_current_updates().await.unwrap();
         assert!(!updates.is_empty());
+        let expected = writer_state.snapshot().await.unwrap();
         let txn = reader_state.transaction().await.unwrap();
+        assert_eq!(txn.current_snapshot(), expected);
         let commit_ts = txn.upper();
         txn.commit(commit_ts).await.unwrap();
+    }
+
+    for value in [Some("initial"), Some("replacement"), None] {
+        let mut txn = writer_state.transaction().await.unwrap();
+        txn.set_setting("reader_refresh_test".into(), value.map(str::to_owned))
+            .unwrap();
+        let _ = txn.get_and_commit_op_updates();
+        let commit_ts = txn.upper();
+        txn.commit(commit_ts).await.unwrap();
+        let expected = writer_state.snapshot().await.unwrap();
+        assert_eq!(
+            reader_state.transaction().await.unwrap().current_snapshot(),
+            expected
+        );
     }
 }
 
