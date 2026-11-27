@@ -20,6 +20,31 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.53.0
+*Released to Materialize Cloud: 2026-12-03* <br>
+*Released to Materialize Self-Managed: 2026-12-04* <br>
+
+### Improvements {#v26.53-improvements}
+- **Faster `COPY FROM STDIN` for CSV**: `COPY FROM STDIN` decodes each wire frame in one copy and scans a whole CSV row per call instead of returning after every input byte, which loaded 1 GiB of CSV with 1 KiB rows 3.3 times faster, in 3.2 seconds instead of 10.7.
+- **Faster prepared-statement execution**: A portal is no longer re-described on every execution, which removed a full planning pass per `SELECT` or DML and cut about 12% of `environmentd` CPU on a query with 50 bound parameters, and a transaction that runs many statements no longer searches portal names from the start, which made 10,000 single-row inserts in one transaction 75% faster.
+- **Faster `last_value` over large peer groups**: `last_value` finds the end of each peer group once rather than walking it again for every row, so a window partition with no `ORDER BY` — where the entire partition is one peer group — is no longer quadratic, and a 20,000-row peer group evaluates 9 times faster.
+- **Sources with long remap histories cost far less to start**: A source's reclock operator stores periodic whole frontiers instead of replaying its entire binding history on every activation, and it releases the buffers it used for that replay, so adding a table to a source whose history has been held back no longer slows every export down as the history grows, and in a 32-export harness the memory retained after the replay fell from 169 MB to 1.6 MB.
+- **Fewer AWS STS requests for IAM-authenticated sources**: PostgreSQL and MySQL connections that authenticate to Amazon RDS and Aurora with an AWS IAM token now reuse the credentials of an `ASSUME ROLE ARN` connection across connection attempts instead of assuming the role again for each one, which took creating and starting a PostgreSQL source from 22 `AssumeRole` calls to 2, and a source reconnect from 8 to 0, so a mass reconnect is much less likely to hit the account's STS rate limit.
+- **New built-in objects hydrate before a zero-downtime cut-over**: During a zero-downtime upgrade, built-in collections that are new in the target version are now given their storage shards while the new version is still read-only, so they and the dataflows that read them hydrate before promotion instead of being rebuilt afterwards.
+- **Faster rehydration on Azure Blob Storage**: Dropping the segments of a fetched blob is cheaper, which in a quick test made rehydration from Azure Blob Storage about 30% faster.
+- **Read-only root filesystems in Self-Managed deployments**: With the security context enabled, the operator now runs `environmentd`, `clusterd`, `balancerd`, and the Console with `readOnlyRootFilesystem: true`, writing only to dedicated temporary volumes, which clears Trivy KSV-0014 for those pods; upgrading the operator rolls the existing `balancerd` and Console deployments, because their pod templates change.
+- **Self-Managed instances can keep their resource ID across a recreate**: A `Materialize` resource recreated during a restore can carry a `materialize.cloud/last-known-resource-id` annotation so the operator reuses the old resource ID, and so the names derived from it, instead of generating a new one; the operator validates the annotation's format and refuses an ID another resource already holds, and a malformed `materialize.cloud/last-known-active-generation` annotation now fails reconciliation with an error rather than panicking the operator.
+
+### Bug Fixes {#v26.53-bug-fixes}
+- Fixed renaming a view or materialized view being rejected when the destination name appears in the view's own query even though the name was free, and fixed a rename rewriting the input names stored in that query, which left `SHOW CREATE VIEW` displaying an input under the wrong name.
+- Fixed `DELETE ... USING` resolving a reference to the target table at the wrong nesting depth, so a predicate can now refer to the intended target row from inside a subquery.
+- Fixed negative Avro `decimal` values whose coefficient needs a wider intermediate representation decoding as their positive magnitude.
+- Fixed chained list slices returning elements from outside a preceding slice when a later slice starts past that slice's end; such a slice now returns an empty list.
+- Fixed `COPY FROM STDIN` in CSV format being unable to read back a one-column `NULL` written by `COPY TO STDOUT`; a blank line is now a record when one column or none is copied, so a stray blank line in a one-column file becomes a row or an error instead of being skipped, `CR` and `LF` are rejected as the CSV quote character for `STDIN`, and a quoted first field following a byte-order mark now loads as an empty string rather than `NULL`.
+- Fixed the MCP developer endpoint's `query_system_catalog` tool matching relation names as text, which let a user schema named `information_schema`, or a quoted name such as `"MZ_CATALOG"`, make an approved query read a user object; the tool now binds every relation it reads to its built-in catalog ID.
+- Fixed a Self-Managed rollout that uses `ImmediatelyPromoteCausingDowntime` or `forcePromote` hanging, answering every promotion attempt with `cannot promote leader while initializing`, when `environmentd` restarted after the skip-catchup request was sent.
+- Fixed `mz-deploy stage` pointing at a cluster that was never created when the project's cluster name is not a bare identifier, and fixed an incremental stage failing when it recreated an index belonging to an unchanged object and the index collided with the production index of the same name.
+
 ## v26.52.0
 *Scheduled for release to Materialize Cloud: 2026-12-03* <br>
 *Released to Materialize Self-Managed: 2026-11-24* <br>
