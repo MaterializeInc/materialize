@@ -40,6 +40,8 @@ pub enum Error {
     InvalidTenantApiTokenUser,
     #[error("tenant access token does not declare a user")]
     MissingTenantApiTokenUser,
+    #[error("access token lacks the permission required to connect")]
+    MissingPermission,
     #[error("request timeout")]
     Timeout(Arc<tokio::time::error::Elapsed>),
     #[error("internal error")]
@@ -48,7 +50,8 @@ pub enum Error {
 
 impl Error {
     /// Whether authentication failed because the client's credentials were rejected: Frontegg
-    /// refused them, or they are malformed or belong to a different user or tenant.
+    /// refused them, they are malformed or belong to a different user or tenant, or the user
+    /// lacks the required permission.
     ///
     /// Every other failure is on the server side. That includes Frontegg throttling (`408`,
     /// `429`) past the client's retries, and a token Frontegg issued for valid credentials that
@@ -64,7 +67,8 @@ impl Error {
             | Error::WrongUser
             | Error::UserNameTooLong
             | Error::InvalidTenantApiTokenUser
-            | Error::MissingTenantApiTokenUser => true,
+            | Error::MissingTenantApiTokenUser
+            | Error::MissingPermission => true,
             Error::InvalidTokenFormat(_)
             | Error::MissingClaims
             | Error::TokenExpired
@@ -160,6 +164,7 @@ mod tests {
         // Checks on what the client sent do not.
         assert!(Error::WrongUser.is_credential_rejection());
         assert!(Error::UserNameTooLong.is_credential_rejection());
+        assert!(Error::MissingPermission.is_credential_rejection());
         // The user a tenant API token declares is set when the client creates it.
         assert!(Error::MissingTenantApiTokenUser.is_credential_rejection());
     }

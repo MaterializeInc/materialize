@@ -75,9 +75,10 @@ pub struct ServiceArgs {
     static_resolver_addr: Option<String>,
     /// Frontegg resolver address template. `{}` is replaced with the user's frontegg tenant id to
     /// get a DNS address. The first IP that address resolves to is the proxy destinations.
-    #[clap(long,
+    #[clap(
+        long,
         value_name = "HOST.{}.NAME:PORT",
-        requires_all = &["frontegg_api_token_url", "frontegg_admin_role"],
+        requires = "frontegg_api_token_url"
     )]
     frontegg_resolver_template: Option<String>,
     /// HTTPS resolver address template. `{}` is replaced with the first subdomain of the HTTPS SNI
@@ -124,13 +125,10 @@ pub struct ServiceArgs {
         requires = "frontegg_resolver_template"
     )]
     frontegg_api_token_url: Option<String>,
-    /// The name of the admin role in Frontegg.
-    #[clap(
-        long,
-        env = "FRONTEGG_ADMIN_ROLE",
-        requires = "frontegg_resolver_template"
-    )]
-    frontegg_admin_role: Option<String>,
+    /// Ignored. Superuser status comes from `mz_frontegg_auth::SUPERUSER_PERMISSION`.
+    // TODO: remove once cloud stops passing it. Until then, removing it fails startup.
+    #[clap(long = "frontegg-admin-role", env = "FRONTEGG_ADMIN_ROLE", hide = true)]
+    _frontegg_admin_role: Option<String>,
     /// An SDK key for LaunchDarkly.
     ///
     /// Setting this will enable synchronization of LaunchDarkly features.
@@ -252,7 +250,6 @@ pub async fn run(
                     },
                     tenant_id: None,
                     now: mz_ore::now::SYSTEM_TIME.clone(),
-                    admin_role: args.frontegg_admin_role.expect("clap enforced"),
                     refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
                     refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
                 },

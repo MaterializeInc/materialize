@@ -38,7 +38,14 @@ pub fn generate_access_token(
 ) -> String {
     let mut permissions = Vec::new();
     roles.iter().for_each(|role| {
-        if let Some(role_permissions) = context.role_permissions.get(role.as_str()) {
+        // Roles assigned through the API are referenced by ID, but permissions are keyed by
+        // role key.
+        let key = context
+            .roles
+            .iter()
+            .find(|r| r.id == *role)
+            .map_or(role.as_str(), |r| r.key.as_str());
+        if let Some(role_permissions) = context.role_permissions.get(key) {
             permissions.extend_from_slice(role_permissions);
         }
     });

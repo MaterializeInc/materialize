@@ -2262,8 +2262,16 @@ async fn test_max_connections_limits() {
     let metrics_registry = MetricsRegistry::new();
 
     let tenant_id = Uuid::new_v4();
-    let regular_user = UserConfig::generate(tenant_id.clone(), "user@_.com", Vec::new());
-    let admin_user = UserConfig::generate(tenant_id.clone(), "admin@_.com", vec!["mzadmin".into()]);
+    let regular_user = UserConfig::generate(
+        tenant_id.clone(),
+        "user@_.com",
+        vec!["MaterializePlatform".into()],
+    );
+    let admin_user = UserConfig::generate(
+        tenant_id.clone(),
+        "admin@_.com",
+        vec!["MaterializePlatformAdmin".into()],
+    );
     let users = BTreeMap::from([
         (regular_user.email.clone(), regular_user.clone()),
         (admin_user.email.clone(), admin_user.clone()),
@@ -2296,7 +2304,6 @@ async fn test_max_connections_limits() {
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
-            admin_role: "mzadmin".to_string(),
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -5576,7 +5583,7 @@ async fn test_cert_reloading() {
         description: None,
         created_at: Utc::now(),
     }];
-    let roles = Vec::new();
+    let roles = vec!["MaterializePlatform".to_string()];
     let users = BTreeMap::from([(
         email.clone(),
         UserConfig {
@@ -5621,7 +5628,6 @@ async fn test_cert_reloading() {
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
-            admin_role: "mzadmin".to_string(),
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },

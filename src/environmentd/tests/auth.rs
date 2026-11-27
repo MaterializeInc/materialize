@@ -43,6 +43,7 @@ use mz_environmentd::{WebSocketAuth, WebSocketResponse};
 use mz_frontegg_auth::{
     Authenticator as FronteggAuthentication, AuthenticatorConfig as FronteggConfig, ClaimMetadata,
     ClaimTokenType, Claims, DEFAULT_REFRESH_DROP_FACTOR, DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
+    REQUIRED_PERMISSION, SUPERUSER_PERMISSION,
 };
 use mz_frontegg_mock::{
     FronteggMockServer, models::ApiToken, models::TenantApiTokenConfig, models::UserConfig,
@@ -488,7 +489,7 @@ async fn test_auth_expiry() {
         description: None,
         created_at: Utc::now(),
     }];
-    let roles = Vec::new();
+    let roles = vec!["MaterializePlatform".to_string()];
     let users = BTreeMap::from([(
         email.clone(),
         UserConfig {
@@ -531,7 +532,6 @@ async fn test_auth_expiry() {
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
-            admin_role: "mzadmin".to_string(),
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -635,7 +635,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 password,
                 tenant_id,
                 initial_api_tokens,
-                roles: Vec::new(),
+                roles: vec!["MaterializePlatform".to_string()],
                 auth_provider: None,
                 verified: None,
                 metadata: None,
@@ -649,7 +649,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 password: system_password,
                 tenant_id,
                 initial_api_tokens: system_initial_api_tokens,
-                roles: Vec::new(),
+                roles: vec!["MaterializePlatform".to_string()],
                 auth_provider: None,
                 verified: None,
                 metadata: None,
@@ -666,7 +666,7 @@ async fn test_auth_base_require_tls_frontegg() {
             },
             TenantApiTokenConfig {
                 tenant_id,
-                roles: vec![],
+                roles: vec!["MaterializePlatform".to_string()],
                 metadata: Some(ClaimMetadata {
                     user: Some("svc".into()),
                 }),
@@ -684,7 +684,7 @@ async fn test_auth_base_require_tls_frontegg() {
             },
             TenantApiTokenConfig {
                 tenant_id,
-                roles: vec![],
+                roles: vec!["MaterializePlatform".to_string()],
                 metadata: Some(ClaimMetadata {
                     user: Some("mz_system".into()),
                 }),
@@ -711,7 +711,7 @@ async fn test_auth_base_require_tls_frontegg() {
         user_id: None,
         tenant_id,
         roles: Vec::new(),
-        permissions: Vec::new(),
+        permissions: vec![REQUIRED_PERMISSION.to_string()],
         token_type: ClaimTokenType::UserToken,
         metadata: None,
         unknown_claims: Default::default(),
@@ -818,7 +818,6 @@ async fn test_auth_base_require_tls_frontegg() {
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now,
-            admin_role: "mzadmin".to_string(),
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -2713,7 +2712,7 @@ async fn test_auth_admin_non_superuser() {
     let admin_frontegg_user = "admin@_.com";
     let created_at = Utc::now();
 
-    let admin_role = "mzadmin";
+    let admin_role = "MaterializePlatformAdmin";
 
     let users = BTreeMap::from([
         (
@@ -2729,7 +2728,7 @@ async fn test_auth_admin_non_superuser() {
                     description: None,
                     created_at,
                 }],
-                roles: Vec::new(),
+                roles: vec!["MaterializePlatform".to_string()],
                 auth_provider: None,
                 verified: None,
                 metadata: None,
@@ -2784,7 +2783,6 @@ async fn test_auth_admin_non_superuser() {
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now,
-            admin_role: admin_role.to_string(),
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -2842,6 +2840,157 @@ async fn test_auth_admin_non_superuser() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+async fn test_auth_required_permission() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+    let metrics_registry = MetricsRegistry::new();
+
+    let tenant_id = Uuid::new_v4();
+    let admin_role = "mzadmin";
+    let member_role = "member";
+    let billing_role = "billing";
+
+    // (user, role, client_id, secret)
+    let accounts = [
+        ("member@_.com", member_role),
+        ("billing@_.com", billing_role),
+        ("admin@_.com", admin_role),
+    ]
+    .map(|(user, role)| (user, role, Uuid::new_v4(), Uuid::new_v4()));
+    let users = accounts
+        .iter()
+        .map(|(user, role, client_id, secret)| {
+            (
+                user.to_string(),
+                UserConfig {
+                    id: Uuid::new_v4(),
+                    email: user.to_string(),
+                    password: Uuid::new_v4().to_string(),
+                    tenant_id,
+                    initial_api_tokens: vec![ApiToken {
+                        client_id: *client_id,
+                        secret: *secret,
+                        description: None,
+                        created_at: Utc::now(),
+                    }],
+                    roles: vec![role.to_string()],
+                    auth_provider: None,
+                    verified: None,
+                    metadata: None,
+                },
+            )
+        })
+        .collect();
+    // The billing role carries an unrelated permission, so its rejection hinges on
+    // `REQUIRED_PERMISSION` specifically.
+    let role_permissions = BTreeMap::from([
+        (
+            admin_role.to_string(),
+            vec![
+                REQUIRED_PERMISSION.to_string(),
+                SUPERUSER_PERMISSION.to_string(),
+            ],
+        ),
+        (
+            member_role.to_string(),
+            vec![REQUIRED_PERMISSION.to_string()],
+        ),
+        (
+            billing_role.to_string(),
+            vec!["materialize.invoice.read".to_string()],
+        ),
+    ]);
+    let encoding_key =
+        EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let decoding_key = DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap();
+    let now = SYSTEM_TIME.clone();
+
+    let frontegg_server = FronteggMockServer::start(
+        None,
+        "frontegg-mock".to_owned(),
+        encoding_key,
+        decoding_key,
+        users,
+        BTreeMap::new(),
+        Some(role_permissions),
+        now.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let frontegg_auth = FronteggAuthentication::new(
+        FronteggConfig {
+            admin_api_token_url: frontegg_server.auth_api_token_url(),
+            decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
+            tenant_id: Some(tenant_id),
+            now,
+            refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
+            refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
+        },
+        mz_frontegg_auth::Client::default(),
+        &metrics_registry,
+    );
+
+    let server = test_util::TestHarness::default()
+        .with_tls(server_cert, server_key)
+        .with_frontegg_auth(&frontegg_auth)
+        .with_metrics_registry(metrics_registry)
+        .start()
+        .await;
+
+    for (user, role, client_id, secret) in accounts {
+        let password = format!("mzp_{client_id}{secret}");
+        let headers = make_header(Authorization::basic(user, &password));
+        let superuser = role == admin_role;
+        let rejected = role == billing_role;
+        run_tests(
+            role,
+            &server,
+            &[
+                TestCase::Pgwire {
+                    user_to_auth_as: user,
+                    user_reported_by_system: user,
+                    password: Some(Cow::Borrowed(&password)),
+                    ssl_mode: SslMode::Require,
+                    options: None,
+                    configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                    assert: if rejected {
+                        Assert::DbErr(Box::new(|err| {
+                            assert_eq!(err.message(), "invalid password");
+                            assert_eq!(*err.code(), SqlState::INVALID_PASSWORD);
+                        }))
+                    } else {
+                        Assert::SuccessSuperuserCheck(superuser)
+                    },
+                },
+                TestCase::Http {
+                    user_to_auth_as: user,
+                    user_reported_by_system: user,
+                    scheme: Scheme::HTTPS,
+                    headers: &headers,
+                    configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                    assert: if rejected {
+                        Assert::Err(Box::new(|code, message| {
+                            assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
+                            assert_eq!(message, "unauthorized");
+                        }))
+                    } else {
+                        Assert::SuccessSuperuserCheck(superuser)
+                    },
+                },
+            ],
+        )
+        .await;
+    }
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
 async fn test_auth_admin_superuser() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -2861,7 +3010,7 @@ async fn test_auth_admin_superuser() {
     let admin_frontegg_user = "admin@_.com";
     let created_at = Utc::now();
 
-    let admin_role = "mzadmin";
+    let admin_role = "MaterializePlatformAdmin";
 
     let users = BTreeMap::from([
         (
@@ -2877,7 +3026,7 @@ async fn test_auth_admin_superuser() {
                     description: None,
                     created_at,
                 }],
-                roles: Vec::new(),
+                roles: vec!["MaterializePlatform".to_string()],
                 auth_provider: None,
                 verified: None,
                 metadata: None,
@@ -2932,7 +3081,6 @@ async fn test_auth_admin_superuser() {
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now,
-            admin_role: admin_role.to_string(),
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -3010,7 +3158,7 @@ async fn test_auth_admin_superuser_revoked() {
     let admin_frontegg_user = "admin@_.com";
     let created_at = Utc::now();
 
-    let admin_role = "mzadmin";
+    let admin_role = "MaterializePlatformAdmin";
 
     let users = BTreeMap::from([
         (
@@ -3026,7 +3174,7 @@ async fn test_auth_admin_superuser_revoked() {
                     description: None,
                     created_at,
                 }],
-                roles: Vec::new(),
+                roles: vec!["MaterializePlatform".to_string()],
                 auth_provider: None,
                 verified: None,
                 metadata: None,
@@ -3081,7 +3229,6 @@ async fn test_auth_admin_superuser_revoked() {
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now,
-            admin_role: admin_role.to_string(),
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -3109,6 +3256,29 @@ async fn test_auth_admin_superuser_revoked() {
         .await
         .unwrap();
 
+    let ws_uri = Uri::builder()
+        .scheme("wss")
+        .authority(&*format!(
+            "{}:{}",
+            Ipv4Addr::LOCALHOST,
+            server.http_local_addr().port()
+        ))
+        .path_and_query("/api/experimental/sql")
+        .build()
+        .unwrap();
+    let ws_stream = make_ws_tls(&ws_uri, |b| Ok(b.set_verify(SslVerifyMode::NONE)));
+    let (mut ws, _resp) =
+        tungstenite::client(ClientRequestBuilder::new(ws_uri.clone()), ws_stream).unwrap();
+    let ws_auth = WebSocketAuth::Basic {
+        user: frontegg_user.to_string(),
+        password: Password(frontegg_password.to_string()),
+        options: BTreeMap::new(),
+    };
+    ws.send(Message::Text(
+        serde_json::to_string(&ws_auth).unwrap().into(),
+    ))
+    .unwrap();
+
     assert_eq!(
         pg_client
             .query_one("SHOW is_superuser", &[])
@@ -3135,7 +3305,10 @@ async fn test_auth_admin_superuser_revoked() {
 
     frontegg_server
         .role_updates_tx
-        .send((frontegg_user.to_string(), Vec::new()))
+        .send((
+            frontegg_user.to_string(),
+            vec!["MaterializePlatform".to_string()],
+        ))
         .unwrap();
     frontegg_server.wait_for_auth(EXPIRES_IN_SECS);
 
@@ -3147,6 +3320,35 @@ async fn test_auth_admin_superuser_revoked() {
             .get::<_, String>(0),
         "off"
     );
+
+    // The WebSocket survives the successful refreshes above.
+    ws.send(Message::Text(r#"{"query": "SHOW is_superuser"}"#.into()))
+        .unwrap();
+    let row = loop {
+        match ws.read().unwrap() {
+            Message::Text(msg) => {
+                if let WebSocketResponse::Row(row) = serde_json::from_str(&msg).unwrap() {
+                    break row;
+                }
+            }
+            msg => panic!("unexpected: {msg}"),
+        }
+    };
+    assert_eq!(row[0].to_string(), "\"off\"");
+
+    // Losing `REQUIRED_PERMISSION` fails the next refresh, which closes the WebSocket.
+    frontegg_server
+        .role_updates_tx
+        .send((frontegg_user.to_string(), Vec::new()))
+        .unwrap();
+    frontegg_server.wait_for_auth(EXPIRES_IN_SECS);
+
+    let close = loop {
+        if let Message::Close(frame) = ws.read().unwrap() {
+            break frame;
+        }
+    };
+    assert_eq!(close.unwrap().reason, "authentication expired");
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
@@ -3180,7 +3382,7 @@ async fn test_auth_deduplication() {
                 description: None,
                 created_at,
             }],
-            roles: Vec::new(),
+            roles: vec!["MaterializePlatform".to_string()],
             auth_provider: None,
             verified: None,
             metadata: None,
@@ -3214,7 +3416,6 @@ async fn test_auth_deduplication() {
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
-            admin_role: "mzadmin".to_string(),
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -3353,7 +3554,7 @@ async fn test_refresh_task_metrics() {
                 description: None,
                 created_at,
             }],
-            roles: Vec::new(),
+            roles: vec!["MaterializePlatform".to_string()],
             auth_provider: None,
             verified: None,
             metadata: None,
@@ -3387,7 +3588,6 @@ async fn test_refresh_task_metrics() {
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
-            admin_role: "mzadmin".to_string(),
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -3481,7 +3681,7 @@ async fn test_superuser_can_alter_cluster() {
     let frontegg_user = "user@_.com";
     let admin_frontegg_user = "admin@_.com";
 
-    let admin_role = "mzadmin";
+    let admin_role = "MaterializePlatformAdmin";
 
     let users = BTreeMap::from([
         (
@@ -3497,7 +3697,7 @@ async fn test_superuser_can_alter_cluster() {
                     description: None,
                     created_at,
                 }],
-                roles: Vec::new(),
+                roles: vec!["MaterializePlatform".to_string()],
                 auth_provider: None,
                 verified: None,
                 metadata: None,
@@ -3552,7 +3752,6 @@ async fn test_superuser_can_alter_cluster() {
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now,
-            admin_role: admin_role.to_string(),
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -3642,7 +3841,7 @@ async fn test_refresh_dropped_session() {
                 description: None,
                 created_at,
             }],
-            roles: Vec::new(),
+            roles: vec!["MaterializePlatform".to_string()],
             auth_provider: None,
             verified: None,
             metadata: None,
@@ -3676,7 +3875,6 @@ async fn test_refresh_dropped_session() {
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
-            admin_role: "mzadmin".to_string(),
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             // Make the refresh window very large so it's easy to test.
             refresh_drop_factor: 1.0,
@@ -3809,7 +4007,7 @@ async fn test_refresh_dropped_session_lru() {
                 description: None,
                 created_at,
             }],
-            roles: Vec::new(),
+            roles: vec!["MaterializePlatform".to_string()],
             auth_provider: None,
             verified: None,
             metadata: None,
@@ -3855,7 +4053,6 @@ async fn test_refresh_dropped_session_lru() {
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
-            admin_role: "mzadmin".to_string(),
             // Make the refresh LRU cache very small, and the window size very large so it's easy
             // to test.
             refresh_drop_lru_size: NonZeroUsize::new(1).expect("known non-zero"),
@@ -4012,7 +4209,7 @@ async fn test_transient_auth_failures() {
                 description: None,
                 created_at,
             }],
-            roles: Vec::new(),
+            roles: vec!["MaterializePlatform".to_string()],
             auth_provider: None,
             verified: None,
             metadata: None,
@@ -4046,7 +4243,6 @@ async fn test_transient_auth_failures() {
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
-            admin_role: "mzadmin".to_string(),
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -4137,7 +4333,7 @@ async fn test_transient_auth_failure_on_refresh() {
                 description: None,
                 created_at,
             }],
-            roles: Vec::new(),
+            roles: vec!["MaterializePlatform".to_string()],
             auth_provider: None,
             verified: None,
             metadata: None,
@@ -4171,7 +4367,6 @@ async fn test_transient_auth_failure_on_refresh() {
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
-            admin_role: "mzadmin".to_string(),
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
@@ -5164,7 +5359,7 @@ async fn test_auth_autoprovision_frontegg_audit_log() {
                 description: None,
                 created_at: Utc::now(),
             }],
-            roles: Vec::new(),
+            roles: vec!["MaterializePlatform".to_string()],
             auth_provider: None,
             verified: None,
             metadata: None,
@@ -5198,7 +5393,6 @@ async fn test_auth_autoprovision_frontegg_audit_log() {
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
-            admin_role: "mzadmin".to_string(),
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
             refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },

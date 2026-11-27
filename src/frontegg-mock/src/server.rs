@@ -11,6 +11,7 @@ use crate::utils::RefreshTokenTarget;
 use axum::routing::{delete, get, post, put};
 use axum::{Router, middleware};
 use jsonwebtoken::{DecodingKey, EncodingKey};
+use mz_frontegg_auth::{REQUIRED_PERMISSION, SUPERUSER_PERMISSION};
 use mz_ore::now::NowFn;
 use mz_ore::retry::Retry;
 use mz_ore::task::JoinHandle;
@@ -113,11 +114,16 @@ impl FronteggMockServer {
                     vec![
                         "materialize.environment.write".to_owned(),
                         "materialize.invoice.read".to_owned(),
+                        REQUIRED_PERMISSION.to_owned(),
+                        SUPERUSER_PERMISSION.to_owned(),
                     ],
                 ),
                 (
                     "MaterializePlatform".to_owned(),
-                    vec!["materialize.environment.read".to_owned()],
+                    vec![
+                        "materialize.environment.read".to_owned(),
+                        REQUIRED_PERMISSION.to_owned(),
+                    ],
                 ),
             ])
         });
