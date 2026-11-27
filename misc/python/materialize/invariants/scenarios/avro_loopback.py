@@ -196,10 +196,14 @@ class AvroLoopback(Scenario):
 
     def _balances(self, client: MzClient, relation: str) -> dict[int, int]:
         client.query("SET cluster = quickstart")
-        return {
-            int(row[0]): int(row[1])
-            for row in client.query(f"SELECT account, balance FROM {relation}")
-        }
+        balances: dict[int, int] = {}
+        for account, balance in client.query(
+            f"SELECT account, balance FROM {relation}"
+        ):
+            if account in balances:
+                raise InvariantViolation(f"{relation} has duplicate account {account}")
+            balances[account] = int(balance)
+        return balances
 
     def converge(self) -> None:
         client = MzClient(self.ctx, "converge")

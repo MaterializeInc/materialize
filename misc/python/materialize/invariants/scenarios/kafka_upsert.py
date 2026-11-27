@@ -80,6 +80,7 @@ class UpsertEvent(Action):
         def on_delivery(err, msg, entry=entry) -> None:
             if err is None:
                 entry["outcome"] = Outcome.COMMITTED
+                self.async_commits += 1
 
         value = None if tombstone else json.dumps({"ver": version}).encode()
         try:

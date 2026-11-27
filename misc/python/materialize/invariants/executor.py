@@ -28,6 +28,7 @@ from collections.abc import Callable
 
 from materialize.invariants.framework import (
     SEED_RANGE,
+    Action,
     Checker,
     InvariantViolation,
     Outcome,
@@ -187,6 +188,7 @@ class Runner:
         self.failure: BaseException | None = None
         self._failure_lock = threading.Lock()
         self.worker_stats: list[Counter[tuple[str, str]]] = []
+        self.worker_actions: list[Action] = []
         self.checkers: list[Checker] = []
         self.disruptor: Disruptor | None = None
         self.agitator: Agitator | None = None
@@ -227,6 +229,7 @@ class Runner:
 
         for i, rng in enumerate(worker_rngs):
             bundle = self.scenario.make_worker(i, rng)
+            self.worker_actions.extend(bundle.actions)
             stats: Counter[tuple[str, str]] = Counter()
             self.worker_stats.append(stats)
             thread = threading.Thread(
@@ -287,6 +290,9 @@ class Runner:
             if self.disruptor:
                 self.disruptor.start()
             self._monitor()
+            # Healing unblocks writes, and convergence replays some checkers.
+            # Only acknowledgments and validations observed during chaos count.
+            end_marks = self._progress()
         finally:
             ctx.log.log("phase", "heal: stopping disruptions")
             if self.disruptor is not None and self.disruptor.ident is not None:
@@ -303,7 +309,7 @@ class Runner:
             self.scenario.converge()
             ctx.log.log("phase", "final check")
             self.scenario.final_check()
-            self._check_vacuity()
+            self._check_vacuity(*end_marks)
         except BaseException as e:
             self.fail(e)
             self._dump_diagnostics()
@@ -319,10 +325,7 @@ class Runner:
         while time.monotonic() < end and not self.ctx.stop.is_set():
             time.sleep(1)
             if self._half_marks is None and time.monotonic() >= half:
-                self._half_marks = (
-                    [checker.validations for checker in self.checkers],
-                    self._committed_total(),
-                )
+                self._half_marks = self._progress()
                 if self.midrun_event is not None:
                     # Started before the swap runs, so the transition itself is
                     # checked: what the new build makes of the old build's
@@ -377,7 +380,7 @@ class Runner:
                 action = rng.choices(bundle.actions, bundle.weights)[0]
                 try:
                     outcome = action.run()
-                    key = outcome.value if outcome is not None else "ok"
+                    key = outcome.value if outcome is not None else "unconfirmed"
                     stats[(action.name, key)] += 1
                     if outcome in (Outcome.UNKNOWN, Outcome.FAILED):
                         ctx.log.log("op", f"{action.name}: {outcome.value}", echo=False)
@@ -425,7 +428,7 @@ class Runner:
             except Exception:
                 pass
 
-    def _report(self, final: bool) -> None:
+    def _outcomes(self) -> Counter[str]:
         ops: Counter[str] = Counter()
         for stats in self.worker_stats:
             # dict(stats) snapshots in one C-level step: the owning worker
@@ -433,6 +436,13 @@ class Runner:
             # Counter would racily raise "dictionary changed size".
             for (_, key), count in dict(stats).items():
                 ops[key] += count
+        acknowledgments = sum(action.async_commits for action in self.worker_actions)
+        if acknowledgments:
+            ops["delivery_ack"] = acknowledgments
+        return ops
+
+    def _report(self, final: bool) -> None:
+        ops = self._outcomes()
         checks = ", ".join(
             f"{c.name}: {c.rounds} rounds/{c.validations} checks/{c.skipped} skipped"
             for c in self.checkers
@@ -462,15 +472,12 @@ class Runner:
                 )
                 self.ctx.log.log("stats", f"validations during disruptions: [{during}]")
 
-    def _committed_total(self) -> int:
-        return sum(
-            count
-            for stats in self.worker_stats
-            for (_, key), count in dict(stats).items()
-            if key in ("ok", Outcome.COMMITTED.value)
-        )
+    def _progress(self) -> tuple[list[int], int]:
+        ops = self._outcomes()
+        committed = ops[Outcome.COMMITTED.value] + ops["delivery_ack"]
+        return [checker.validations for checker in self.checkers], committed
 
-    def _check_vacuity(self) -> None:
+    def _check_vacuity(self, validations: list[int], committed: int) -> None:
         """A run that stopped verifying anything must not pass silently.
 
         Beyond "verified at least once", every checker and the workers must
@@ -478,11 +485,10 @@ class Runner:
         wedges midway would otherwise still pass, and disruptions are capped
         well below a half, so a healthy run always progresses in each.
         """
-        committed = self._committed_total()
         if committed == 0:
             raise InvariantViolation("vacuous run: no worker op ever committed")
-        for checker in self.checkers:
-            if checker.validations == 0:
+        for checker, count in zip(self.checkers, validations, strict=True):
+            if count == 0:
                 raise InvariantViolation(
                     f"vacuous run: checker {checker.name} never verified its"
                     " invariant"
@@ -493,14 +499,16 @@ class Runner:
             half_validations, half_committed = self._half_marks
             # Deferred checkers have no first half to compare against, their
             # coverage is asserted by the vacuity check above.
-            for checker, at_half in zip(self.checkers, half_validations):
+            for checker, at_half, at_end in zip(
+                self.checkers, half_validations, validations, strict=True
+            ):
                 if self._deferred:
                     continue
-                if at_half == 0 or checker.validations <= at_half:
+                if at_half == 0 or at_end <= at_half:
                     raise InvariantViolation(
                         f"stalled run: checker {checker.name} verified"
                         f" {at_half} times in the first half but"
-                        f" {checker.validations - at_half} in the second"
+                        f" {at_end - at_half} in the second"
                     )
             if half_committed == 0 or committed <= half_committed:
                 raise InvariantViolation(

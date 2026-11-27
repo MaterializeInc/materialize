@@ -270,6 +270,8 @@ class Action(ABC):
 
     def __init__(self, rng: random.Random) -> None:
         self.rng = rng
+        # Producers receive acknowledgments in delivery callbacks after run() returns.
+        self.async_commits = 0
 
     @abstractmethod
     def run(self) -> Outcome | None:

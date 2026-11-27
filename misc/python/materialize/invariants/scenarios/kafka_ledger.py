@@ -74,25 +74,32 @@ class ProduceEvent(Action):
 
     name = "produce"
 
-    def __init__(self, rng: random.Random, worker: int, oplog: OpLog, producer) -> None:
+    def __init__(
+        self,
+        rng: random.Random,
+        worker: int,
+        oplog: OpLog,
+        amounts: bytearray,
+        producer,
+    ) -> None:
         super().__init__(rng)
         self.worker = worker
         self.oplog = oplog
+        self.amounts = amounts
         self.producer = producer
-        self.seq = 0
 
     def run(self) -> Outcome | None:
-        self.seq += 1
-        seq = self.seq
+        amount = self.rng.randint(1, 100)
+        self.amounts.append(amount)
+        seq = len(self.amounts)
         worker = self.worker
-        payload = json.dumps(
-            {"worker": worker, "seq": seq, "amount": self.rng.randint(1, 100)}
-        )
+        payload = json.dumps({"worker": worker, "seq": seq, "amount": amount})
         self.oplog.record(worker, seq, Outcome.UNKNOWN)
 
         def on_delivery(err, msg, worker=worker, seq=seq) -> None:
             if err is None:
                 self.oplog.record(worker, seq, Outcome.COMMITTED)
+                self.async_commits += 1
 
         try:
             self.producer.produce(
@@ -214,30 +221,37 @@ class KafkaRtrPeek(Checker):
         self.client = MzClient(ctx, "rtr-peek")
         self.bootstrap = bootstrap
         self.producer = None
-        self.markers = 0
+        self.marker_seq = 0
         self._session_ready = False
 
     def check_once(self) -> None:
         if self.producer is None:
             self.producer = make_producer(self.bootstrap)
-        marker = self.markers + 1
+        self.marker_seq += 1
+        marker = self.marker_seq
+        acknowledged = False
+
+        def on_delivery(err, msg) -> None:
+            nonlocal acknowledged
+            acknowledged = err is None
+
         self.producer.produce(
             TOPIC,
             value=json.dumps({"worker": RTR_MARKER_WORKER, "seq": marker}).encode(),
             key=str(RTR_MARKER_WORKER).encode(),
+            on_delivery=on_delivery,
         )
-        if self.producer.flush(30) != 0:
-            # The marker was not acknowledged, so it creates no lower bound.
-            self.producer = None
-            raise TransientError("RTR marker produce not acknowledged")
-        self.markers = marker
+        self.producer.flush(30)
+        if not acknowledged:
+            raise TransientError(f"RTR marker {marker} was not acknowledged")
         try:
             if not self._session_ready:
                 self.client.query("SET real_time_recency = true")
                 self._session_ready = True
             rows = self.client.query(
                 "SELECT count(*) FROM events"
-                f" WHERE (data->>'worker')::int = {RTR_MARKER_WORKER}"
+                " WHERE (data->>'worker')::int = %s AND (data->>'seq')::bigint = %s",
+                (RTR_MARKER_WORKER, marker),
             )
         except TransientError:
             self._session_ready = False
@@ -248,10 +262,10 @@ class KafkaRtrPeek(Checker):
                 raise TransientError(str(e)) from e
             raise
         count = int(rows[0][0])
-        if count < self.markers:
+        if count != 1:
             raise InvariantViolation(
-                f"real-time recency violated: read issued after broker ack"
-                f" saw {count} markers, expected at least {self.markers}"
+                f"read after broker acknowledgment found {count} copies of"
+                f" RTR marker {marker}, expected one"
             )
         self.validations += 1
 
@@ -318,6 +332,7 @@ class KafkaLedger(Scenario):
     def __init__(self, ctx: ScenarioContext) -> None:
         super().__init__(ctx)
         self.oplog = OpLog()
+        self.amounts = [bytearray() for _ in range(ctx.complexity.workers)]
         self.event_rows = Watermark()
         assert ctx.endpoints.kafka_bootstrap is not None
         self.bootstrap = ctx.endpoints.kafka_bootstrap
@@ -356,7 +371,10 @@ class KafkaLedger(Scenario):
     def make_worker(self, index: int, rng: random.Random) -> WorkerBundle:
         producer = make_producer(self.bootstrap)
         return WorkerBundle(
-            actions=[ProduceEvent(rng, index, self.oplog, producer)], weights=[1]
+            actions=[
+                ProduceEvent(rng, index, self.oplog, self.amounts[index], producer)
+            ],
+            weights=[1],
         )
 
     def checkers(self) -> list[Checker]:
@@ -403,30 +421,28 @@ class KafkaLedger(Scenario):
     def final_check(self) -> None:
         client = MzClient(self.ctx, "final-check")
         client.query("SET cluster = quickstart")
-        for worker in range(self.ctx.complexity.workers):
+        for worker, amounts in enumerate(self.amounts):
             rows = client.query(
-                "SELECT (data->>'seq')::bigint, count(*) FROM events"
-                f" WHERE (data->>'worker')::int = {worker} GROUP BY 1"
+                "SELECT (data->>'seq')::bigint, data->'amount' FROM events"
+                f" WHERE (data->>'worker')::int = {worker}"
             )
-            duplicated = [(int(r[0]), int(r[1])) for r in rows if int(r[1]) != 1]
-            if duplicated:
-                raise InvariantViolation(
-                    f"worker {worker}: events ingested more than once:"
-                    f" {duplicated[:20]}"
-                )
-            present = {int(r[0]) for r in rows}
-            committed = self.oplog.seqs(worker, Outcome.COMMITTED)
             issued = self.oplog.issued(worker)
-            missing = committed - present
+            present: set[int] = set()
+            for seq, amount in rows:
+                if seq not in issued:
+                    raise InvariantViolation(f"worker {worker}: unissued event {seq}")
+                if seq in present:
+                    raise InvariantViolation(f"worker {worker}: duplicate event {seq}")
+                expected = amounts[seq - 1]
+                if type(amount) is not int or amount != expected:
+                    raise InvariantViolation(
+                        f"worker {worker}: event {seq} has amount {amount}, expected {expected}"
+                    )
+                present.add(seq)
+            missing = self.oplog.seqs(worker, Outcome.COMMITTED) - present
             if missing:
                 raise InvariantViolation(
                     f"worker {worker}: acknowledged events lost: {sorted(missing)[:20]}"
-                )
-            phantom = present - issued
-            if phantom:
-                raise InvariantViolation(
-                    f"worker {worker}: events present that were never attempted:"
-                    f" {sorted(phantom)[:20]}"
                 )
         client.reset()
 

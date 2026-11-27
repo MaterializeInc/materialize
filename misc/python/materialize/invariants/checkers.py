@@ -131,14 +131,29 @@ class SubscribeChecker(Checker):
         try:
             if not self._active:
                 self._start_session()
-                self._active = True
-            rows = self.client.query(
-                f"FETCH ALL {self._cursor} WITH (timeout = '1s')",
-                timeout=max(30.0, self.ctx.complexity.query_timeout),
-            )
+            try:
+                rows = self.client.query(
+                    f"FETCH ALL {self._cursor} WITH (timeout = '1s')",
+                    timeout=max(30.0, self.ctx.complexity.query_timeout),
+                )
+            except UnexpectedQueryError as e:
+                # DECLARE prepares the query. The first FETCH chooses its timestamp.
+                if (
+                    self._active
+                    or not self._resumed
+                    or "could not find a valid timestamp for the query" not in str(e)
+                ):
+                    raise
+                self.recycle()
+                raise TransientError(
+                    f"{self.name}: checkpoint expired, taking a fresh snapshot"
+                ) from e
         except TransientError:
             self._active = False
             raise
+        if not self._active and self._resumed:
+            self.resumes += 1
+        self._active = True
         self._process(rows)
 
     def drop_session(self) -> None:
@@ -153,44 +168,24 @@ class SubscribeChecker(Checker):
 
     def _start_session(self) -> None:
         resume_from = self.last_validated_ts if self.durable else None
-        if resume_from is not None:
-            # Reset the per-session fields but keep the carried state: a
-            # transiently failing resume (e.g. envd still restarting) must
-            # not lose it, the next round retries the resume with it.
-            self._pending = []
-            self._last_ts = None
-            self._as_of = None
-            self._last_order_key = None
-            self._resumed = True
-            try:
-                self.client.query(f"SET cluster = {self.cluster}")
-                self.client.query("BEGIN")
-                # AS OF resume_from - 1 with SNAPSHOT false emits exactly the
-                # updates with ts >= resume_from, which is the suffix the
-                # carried state (complete below resume_from) is missing.
-                self.client.query(
-                    f"DECLARE {self._cursor} CURSOR FOR"
-                    f" SUBSCRIBE ({self.inner_query})"
-                    f" WITH (PROGRESS, SNAPSHOT = false) AS OF {resume_from - 1}"
-                )
-                self.resumes += 1
-                return
-            except UnexpectedQueryError as e:
-                # The resume timestamp was compacted away. Fall back to a
-                # fresh snapshot. The failed DECLARE dropped the connection,
-                # so start over from a clean session.
-                self.ctx.log.log(
-                    "check", f"{self.name}: resume failed, fresh snapshot: {e}"
-                )
-                self.last_validated_ts = None
+        state = self._state
         self._reset_session()
+        as_of_clause = self.as_of_clause
+        if resume_from is not None:
+            # A snapshot-free subscription starts strictly after its AS OF.
+            # The carried state is complete strictly below resume_from.
+            self._state = state
+            self._resumed = True
+            as_of_clause = f"AS OF {resume_from - 1}"
         self.client.query(f"SET cluster = {self.cluster}")
         self.client.query("BEGIN")
-        snapshot_clause = "" if self.snapshot else ", SNAPSHOT = false"
+        snapshot_clause = (
+            ", SNAPSHOT = false" if self._resumed or not self.snapshot else ""
+        )
         self.client.query(
             f"DECLARE {self._cursor} CURSOR FOR"
             f" SUBSCRIBE ({self.inner_query}) {self.order_clause}"
-            f" WITH (PROGRESS{snapshot_clause}) {self.as_of_clause}"
+            f" WITH (PROGRESS{snapshot_clause}) {as_of_clause}"
         )
 
     def _process(self, rows: list[tuple]) -> None:
@@ -269,8 +264,7 @@ class SubscribeChecker(Checker):
         for data, count in self._state.items():
             if count < 0:
                 raise InvariantViolation(
-                    f"{self.name}: negative multiplicity {count} for row"
-                    f" {data} at {ts}"
+                    f"{self.name}: negative multiplicity {count} for row {data} at {ts}"
                 )
         try:
             self.validate_state(dict(self._state), ts)
@@ -312,7 +306,7 @@ class SubscribeChecker(Checker):
         self._reset_session()
 
     def close(self) -> None:
-        self.client.reset()
+        self.client.close()
 
 
 class ProgressPeek(PeekChecker):
@@ -347,8 +341,7 @@ class ProgressPeek(PeekChecker):
         value = int(rows[0][0])
         if self.last is not None and value < self.last:
             raise InvariantViolation(
-                f"{self.name}: write frontier moved backwards:"
-                f" {value} < {self.last}"
+                f"{self.name}: write frontier moved backwards: {value} < {self.last}"
             )
         self.last = value
         self.validations += 1

@@ -32,6 +32,8 @@ import time
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
+from botocore import exceptions as s3_errors
+
 from materialize.invariants.checkers import (
     GroupCompletenessPeek,
     PeekChecker,
@@ -646,44 +648,17 @@ def ledger_predicate(rng: random.Random) -> str:
 
 
 class CrossObjectTxn(Action):
-    """Read a compute-maintained MV and write a table, in one transaction.
-
-    Everything else here reads and writes within one side of the system. This
-    crosses it: the SELECT is served by the compute cluster and the INSERT
-    lands in storage, inside a single transaction, which is where write-lock
-    scope and timestamp selection have to agree with each other.
-
-    The invariant is that the value copied is the conserved total, so a read
-    that ever observes a torn or stale state records a wrong number durably.
-    Unlike a peek, which sees a transient inconsistency only if it happens to
-    look at that instant, this keeps the evidence.
-    """
+    """Record the total from a compute-maintained MV in one read-then-write."""
 
     name = "cross-object-txn"
 
-    def __init__(self, rng: random.Random, client: MzClient, scenario) -> None:
+    def __init__(self, rng: random.Random, client: MzClient) -> None:
         super().__init__(rng)
         self.client = client
-        self.scenario = scenario
 
     def run(self) -> Outcome | None:
         self.client.query(f"SET cluster = {self.rng.choice(['quickstart', 'compute'])}")
-        # A read and a write in one transaction, which is only expressible
-        # this way: Materialize rejects both UPDATE and INSERT .. SELECT
-        # inside a transaction block, so the read has to be its own statement
-        # and the write has to carry the value the client saw.
-        try:
-            self.client.query("BEGIN")
-            rows = self.client.query("SELECT total FROM total")
-            self.client.query(f"INSERT INTO cross_probe VALUES ({int(rows[0][0])})")
-            self.client.query("COMMIT")
-        except TransientError:
-            self.client.reset()
-            raise
-        except Exception:
-            self.client.reset()
-            return Outcome.UNKNOWN
-        return Outcome.COMMITTED
+        return self.client.write("INSERT INTO cross_probe SELECT total FROM total")
 
     def close(self) -> None:
         self.client.reset()
@@ -1102,12 +1077,8 @@ class PredicateDifferentialPeek(PeekChecker):
 class SnapshotTxnPeek(PeekChecker):
     """Multi-statement read-only transactions see one consistent snapshot.
 
-    The first SELECT picks the transaction's timestamp and every subsequent
-    statement reads at that same timestamp, so the accounts sum and the
-    ledger sum from separate statements must still add up to the conserved
-    total. Alternates the transaction form with a one-shot COPY TO STDOUT
-    read of the same invariant, and ends transactions with COMMIT or
-    ROLLBACK (equivalent for reads).
+    The ledger count can change between statements outside a transaction.
+    Both reads inside the transaction must see the same count.
     """
 
     def __init__(self, rng, ctx, scenario: "TableBank") -> None:
@@ -1138,10 +1109,12 @@ class SnapshotTxnPeek(PeekChecker):
         self.client.query("SET transaction_isolation = 'strict serializable'")
         try:
             self.client.query("BEGIN")
-            accounts_sum = int(
-                self.client.query("SELECT coalesce(sum(balance), 0) FROM accounts")[0][
-                    0
-                ]
+            accounts_sum, first_count = (
+                int(v)
+                for v in self.client.query(
+                    "SELECT coalesce(sum(balance), 0), (SELECT count(*) FROM ledger)"
+                    " FROM accounts"
+                )[0]
             )
             ledger_sum, count = (
                 int(v)
@@ -1157,6 +1130,10 @@ class SnapshotTxnPeek(PeekChecker):
             except TransientError:
                 pass
         high = ROWS_PER_TRANSFER * oplog.attempted_count()
+        if first_count != count:
+            raise InvariantViolation(
+                f"ledger count changed within one transaction: {first_count} to {count}"
+            )
         if accounts_sum + ledger_sum != self.scenario.total:
             raise InvariantViolation(
                 "read-only transaction saw a torn snapshot:"
@@ -1417,11 +1394,9 @@ class CopyExportPeek(Checker):
             rows: list[tuple[int, int, int]] = []
             for entry in listing.get("Contents", []):
                 if entry["Key"].endswith("INCOMPLETE"):
-                    # The sentinel is deleted on completion, seeing it here
-                    # would mean an incomplete export. The COPY statement
-                    # already returned success, so treat it as not-yet-listed
-                    # rather than failing.
-                    raise TransientError("INCOMPLETE sentinel still present")
+                    raise InvariantViolation(
+                        f"successful export {prefix} is incomplete"
+                    )
                 body = s3.get_object(Bucket="copytos3", Key=entry["Key"])["Body"].read()
                 if fmt == "csv":
                     for line in body.decode().splitlines():
@@ -1444,12 +1419,19 @@ class CopyExportPeek(Checker):
                             )
                         rows.append((int(worker), int(seq), int(amount)))
             return rows
-        except InvariantViolation:
-            raise
-        except Exception as e:
-            # The S3 read-back path is harness-side infrastructure, not the
-            # system under test.
+        except (
+            s3_errors.ConnectionError,
+            s3_errors.HTTPClientError,
+            s3_errors.IncompleteReadError,
+        ) as e:
             raise TransientError(f"export read-back failed: {e}") from e
+        except s3_errors.ClientError as e:
+            status = e.response["ResponseMetadata"]["HTTPStatusCode"]
+            if status in (408, 429) or status >= 500:
+                raise TransientError(f"export read-back failed: {e}") from e
+            raise
+        except (ValueError, KeyError, TypeError) as e:
+            raise InvariantViolation(f"invalid {fmt} export {prefix}: {e}") from e
 
     def close(self) -> None:
         self.client.reset()
@@ -1483,19 +1465,30 @@ class BankTotalSubscribe(SubscribeChecker):
             )
 
 
-class LedgerCountAudit(SubscribeChecker):
-    """Replays the ledger count's dense history: it must never decrease."""
+class BankHistoryAudit(SubscribeChecker):
+    """Verify the conserved total and monotone ledger count throughout history."""
 
-    def __init__(self, rng, ctx) -> None:
-        super().__init__(rng, ctx, "history-audit", "SELECT cnt FROM ledger_agg")
+    def __init__(self, rng, ctx, total: int) -> None:
+        super().__init__(rng, ctx, "history-audit", "SELECT cnt, total FROM ledger_agg")
+        self.total = total
+
+    def _reset_session(self) -> None:
+        super()._reset_session()
         self.last_cnt = -1
+        self.last_validated_ts = None
+        self.validations = 0
 
     def validate_state(self, state: dict[tuple, int], ts: int) -> None:
         if len(state) != 1 or list(state.values()) != [1]:
             raise InvariantViolation(
                 f"ledger count history at {ts}: expected one row, got {state}"
             )
-        cnt = int(list(state)[0][0])
+        cnt, total = next(iter(state))
+        if total != self.total:
+            raise InvariantViolation(
+                f"total in history at {ts}: expected {self.total}, got {total}"
+            )
+        cnt = int(cnt)
         if cnt < self.last_cnt:
             raise InvariantViolation(
                 f"ledger count went backwards in history at {ts}:"
@@ -1555,9 +1548,10 @@ class TableBank(Scenario):
             "CREATE MATERIALIZED VIEW total IN CLUSTER compute"
             f" WITH (RETAIN HISTORY = FOR '600s') AS {TOTAL_DEF}",
             "CREATE INDEX total_idx IN CLUSTER compute ON total (total)",
+            # Keep a stable history of the value even when total is replaced.
             "CREATE MATERIALIZED VIEW ledger_agg IN CLUSTER compute"
             " WITH (RETAIN HISTORY = FOR '600s') AS"
-            " SELECT count(*) AS cnt FROM ledger",
+            " SELECT count(*) AS cnt, (SELECT total FROM total) AS total FROM ledger",
             # Temporal filters: the wide window outlasts any run, the short
             # window drains after quiescing.
             "CREATE MATERIALIZED VIEW recent_wide IN CLUSTER compute AS"
@@ -1609,7 +1603,7 @@ class TableBank(Scenario):
             CopyTransfer(rng, index, client, self.oplog, forward),
             RegistryOp(rng, index, client, self),
             DdlChurn(rng, index, client),
-            CrossObjectTxn(rng, MzClient(self.ctx, f"cross-{index}"), self),
+            CrossObjectTxn(rng, MzClient(self.ctx, f"cross-{index}")),
             # Own client: the read-back flips the session's isolation.
             FarFrontierWrite(rng, index, MzClient(self.ctx, f"far-frontier-{index}")),
         ]
@@ -1665,7 +1659,7 @@ class TableBank(Scenario):
                 rngs[15],
                 self.ctx,
                 "cross-object-total",
-                f"SELECT total FROM cross_probe WHERE total <> {self.total} LIMIT 5",
+                f"SELECT total FROM cross_probe WHERE total IS DISTINCT FROM {self.total} LIMIT 5",
                 history=self.recent_ts,
             ),
             GroupCompletenessPeek(
@@ -1728,12 +1722,15 @@ class TableBank(Scenario):
                     f"worker {worker}: transfers present that never committed:"
                     f" {sorted(phantom)[:20]}"
                 )
-        wrong = client.query(
-            f"SELECT total FROM cross_probe WHERE total <> {self.total} LIMIT 20"
-        )
+        copied, wrong = client.query(
+            f"SELECT count(*), count(*) FILTER (WHERE total IS DISTINCT FROM {self.total})"
+            " FROM cross_probe"
+        )[0]
+        if not copied:
+            raise InvariantViolation("no cross-object transaction recorded the total")
         if wrong:
             raise InvariantViolation(
-                f"a transaction reading the total MV recorded {wrong}, not {self.total}"
+                f"{wrong} cross-object transactions recorded an incorrect total"
             )
         wrong = client.query(
             "SELECT worker, seq, total FROM frontier_probe"
@@ -1762,7 +1759,7 @@ class TableBank(Scenario):
             "temporal filter retracting expired rows",
         )
         client.reset()
-        self._history_audit(client_end_ts=None)
+        self._history_audit()
 
     def _check_registry(self, client: MzClient) -> None:
         """The final row per key must be admissible given its op log.
@@ -1806,7 +1803,7 @@ class TableBank(Scenario):
                     f" admissible ({sorted(str(s) for s in possible)[:20]})"
                 )
 
-    def _history_audit(self, client_end_ts: int | None) -> None:
+    def _history_audit(self) -> None:
         """Replay the entire retained history, validating every boundary.
 
         Live checkers legitimately skip rounds during disruptions, this
@@ -1815,12 +1812,13 @@ class TableBank(Scenario):
         of the whole run.
         """
         client = MzClient(self.ctx, "history-audit-now")
-        end_ts = int(client.query("SELECT mz_now()::text")[0][0])
+        # Both UP TO and progress frontiers exclude the timestamp they name.
+        end_ts = int(client.query("SELECT mz_now()::text FROM ledger_agg")[0][0]) + 1
         client.reset()
         rng = random.Random(self.ctx.rng.randrange(SEED_RANGE))
         # The ledger count has a dense history (unlike the constant total),
         # so its replay meaningfully covers every timestamp of the run.
-        audit = LedgerCountAudit(rng, self.ctx)
+        audit = BankHistoryAudit(rng, self.ctx, self.total)
         # An exact AS OF: AS OF AT LEAST would let the server pick the
         # current timestamp and skip the history. Clamped into the RETAIN
         # HISTORY window for runs longer than the retention.

@@ -239,6 +239,9 @@ class Disruptor(threading.Thread):
         # or bisecting which one causes a failure. A leg or process left with
         # no allowed kind is skipped rather than disrupted some other way.
         self.kind_filter = kind_filter
+        self.allow_kill = bool(self.processes) and (
+            kind_filter is None or "kill" in kind_filter
+        )
         # Last resort for an admin API that no longer answers, see
         # _heal_network_with_retries.
         self.restart_toxiproxy = restart_toxiproxy
@@ -358,7 +361,7 @@ class Disruptor(threading.Thread):
                     # The post-heal window is where crash-recovery bugs have
                     # historically surfaced: deliberately follow some heals
                     # with an immediate process kill.
-                    if self.processes and self.rng.random() < 0.3:
+                    if self.allow_kill and self.rng.random() < 0.3:
                         if self.stop_event.wait(self.rng.uniform(2.0, 5.0)):
                             return
                         self._process_cycle(duration_scale=0.3, kind="kill")
@@ -398,7 +401,7 @@ class Disruptor(threading.Thread):
                 if self.processes and roll < 0.15:
                     # A leg cut overlapping a process kill, the combination
                     # that produced the unbounded-buffering finding.
-                    self._leg_cycle(duration_scale, overlap_kill=True)
+                    self._leg_cycle(duration_scale, overlap_kill=self.allow_kill)
                 elif self.processes and roll < 0.35:
                     self._process_cycle(duration_scale)
                 else:

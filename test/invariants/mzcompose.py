@@ -15,10 +15,8 @@ toxiproxy disrupts the envd<->clusterd, metadata-store, source, and sink
 connections, and strictly again after healing.
 """
 
-import json
 import os
 import random
-import re
 import subprocess
 import threading
 import time
@@ -35,6 +33,7 @@ from materialize.invariants.framework import (
     wait_until,
 )
 from materialize.invariants.mz import MzClient
+from materialize.invariants.persist_audit import audit_persist_history
 from materialize.invariants.scenarios import SCENARIOS
 from materialize.invariants.toxiproxy import (
     DISRUPTION_KINDS,
@@ -48,7 +47,7 @@ from materialize.mzcompose.composition import Composition, WorkflowArgumentParse
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.minio import Minio, minio_blob_uri
+from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.persistcli import Persistcli
 from materialize.mzcompose.services.postgres import Postgres, PostgresMetadata
@@ -472,6 +471,11 @@ class MemorySampler(threading.Thread):
                 self.log.log("mem", " ".join(rows), echo=False)
 
 
+def close_clients(ctx: ScenarioContext) -> None:
+    for client in ctx.clients:
+        client.close()
+
+
 def run_scenario(c: Composition, name: str, args, log: EventLog) -> None:
     scenario_class = SCENARIOS[name]
     complexity = COMPLEXITIES[args.complexity]
@@ -559,6 +563,7 @@ def run_scenario(c: Composition, name: str, args, log: EventLog) -> None:
             log=log,
             seed=args.seed,
         )
+        stack.callback(close_clients, ctx)
         scenario = scenario_class(ctx)
         scenario.setup()
         legs = [] if args.no_disruptions else [LEGS[n] for n in scenario_class.legs]
@@ -601,20 +606,11 @@ def run_scenario(c: Composition, name: str, args, log: EventLog) -> None:
                 # event is still visible. Diagnostics only here, so nothing
                 # can mask or replace the failure being raised.
                 try:
-                    audit_persist_history(c, ctx, log)
+                    audit_persist_history(c, log)
                 except Exception as e:
-                    log.log("audit", f"post-failure state audit did not run: {e}")
+                    log.log("audit", f"post-failure persist audit failed ({e})")
                 raise
-            # After the run, so it sees the whole history the run produced.
-            try:
-                audit_persist_history(c, ctx, log)
-            except InvariantViolation:
-                raise
-            except Exception as e:
-                # The audit is a second opinion on a run whose own invariants
-                # already held. Its plumbing (a sidecar container, a CLI, a
-                # catalog query) failing is not a verdict on the run.
-                log.log("audit", f"persist state audit did not run: {e}")
+            audit_persist_history(c, log)
         finally:
             sampler.stop_event.set()
             scenario.teardown()
@@ -688,129 +684,6 @@ def make_upgrade_swap(
         wait_until(upgraded, 180, "swapped-in build serving its new version")
 
     return swap
-
-
-# Caps on the post-run persist audit: overall, per shard, per shard's output,
-# and on the size of shard it looks at in the first place.
-AUDIT_BUDGET_S = 240.0
-AUDIT_SHARD_TIMEOUT_S = 20
-AUDIT_MAX_BYTES = 50_000_000
-AUDIT_MAX_PARTS = 500
-
-
-def audit_persist_history(c: Composition, ctx: ScenarioContext, log: EventLog) -> None:
-    """Fails the run if a shard's live state history resurrects a blob.
-
-    Every blob key a shard references must be live over one contiguous run of
-    seqnos: it enters state when a batch referencing it is added and leaves
-    when the last one is removed, and nothing may bring it back. A key that is
-    live, gone, and live again means a state transition was applied to a state
-    it was not computed from, which is how a stale merge res or a replayed
-    rollup insert corrupts a shard.
-
-    Persist notices this itself only in narrow circumstances: GC's part check
-    (`gc.rs`) needs the key to land in the same delete batch it is walking, and
-    `ReferencedBlobValidator` is compiled out of the profiles that build our
-    images. This audit sees every resurrection in the live window regardless
-    of whether GC happened to run, so it is worth the one pass per shard.
-    """
-    from materialize.mzcompose.composition import Service as ServiceName
-
-    c.up(ServiceName("persistcli", idle=True))
-
-    def inspect(*args: str) -> str:
-        return c.exec(
-            "persistcli",
-            "persistcli",
-            "inspect",
-            *args,
-            f"--blob-uri={minio_blob_uri()}",
-            capture=True,
-            silent=True,
-        ).stdout
-
-    # Enumerated from blob rather than from mz_storage_shards, which knows
-    # only about storage objects, so this also covers the catalog and txn-wal
-    # shards. Big shards are skipped: `state-diff` prints the whole state
-    # twice per transition, which for the bank tables is gigabytes. Those are
-    # also the shards GC walks constantly under --persist-churn, so its own
-    # part check covers them. What it does not cover is a shard that is
-    # dropped before GC ever gets to it, which is exactly what is left here.
-    counts = json.loads(inspect("blob-count"))
-    shards = sorted(
-        (
-            shard
-            for shard, count in counts.items()
-            if count["batch_part_count"] <= AUDIT_MAX_PARTS
-        ),
-        key=lambda shard: -counts[shard]["batch_part_count"],
-    )
-    # Keys are "<writer>/<part>", and only their identity matters here.
-    key_re = re.compile(r'"([a-z0-9]+/[a-z][0-9a-f-]{36})"')
-    findings = []
-    audited = 0
-    truncated = 0
-    # An environment has more shards than a post-run check should spend
-    # minutes on, and the ones a run churned are as good a sample as any.
-    deadline = time.monotonic() + AUDIT_BUDGET_S
-    for shard in shards:
-        if time.monotonic() > deadline:
-            break
-        try:
-            # Bounded in both time and bytes: state size times version count
-            # has no useful upper bound, and this runs inside a test.
-            out = c.exec(
-                "persistcli",
-                "bash",
-                "-c",
-                f"timeout {AUDIT_SHARD_TIMEOUT_S} persistcli inspect state-diff"
-                f" --shard-id={shard}"
-                " --consensus-uri=postgres://root@postgres-metadata:26257"
-                "?options=--search_path=consensus"
-                f" --blob-uri='{minio_blob_uri()}' 2>/dev/null"
-                f" | head -c {AUDIT_MAX_BYTES}",
-                capture=True,
-                silent=True,
-            ).stdout
-        except Exception as e:
-            # A shard finalized between the query and here, or a persistcli
-            # that cannot reach its stores. Neither says anything about the
-            # invariant, and the audit is not the run's purpose.
-            log.log("audit", f"{shard}: inspect failed ({e})", echo=False)
-            continue
-        # One JSON object per line, each holding the states before and after
-        # one transition, oldest first.
-        states = []
-        for line in out.splitlines():
-            if not line.strip():
-                continue
-            try:
-                transition = json.loads(line)
-            except json.JSONDecodeError:
-                # The byte cap cuts the last line in half. Everything before
-                # it is still a valid prefix of the history, so the shard is
-                # audited, just not to its end.
-                truncated += 1
-                break
-            if not states:
-                states.append(transition["previous"])
-            states.append(transition["new"])
-        live_at: dict[str, list[int]] = {}
-        for index, state in enumerate(states):
-            for key in set(key_re.findall(json.dumps(state))):
-                live_at.setdefault(key, []).append(index)
-        for key, indexes in live_at.items():
-            if indexes != list(range(indexes[0], indexes[-1] + 1)):
-                seqnos = [states[i].get("seqno") for i in indexes]
-                findings.append(f"{shard} resurrects {key}, live at seqnos {seqnos}")
-        audited += 1
-    if findings:
-        raise InvariantViolation("persist state history: " + "; ".join(findings[:5]))
-    log.log(
-        "audit",
-        f"no resurrected blobs across {audited}/{len(shards)} shards"
-        f" ({truncated} truncated at the byte cap)",
-    )
 
 
 # Makes persist take as many state transitions per second as it can: small
@@ -996,7 +869,10 @@ def run_repro(c: Composition, name: str, args, log: EventLog) -> None:
 
     c.down(destroy_volumes=True)
     rng = random.Random(f"{args.seed}-{name}")
-    with c.override(Toxiproxy(seed=rng.randrange(2**63), restart="on-failure")):
+    with ExitStack() as stack:
+        stack.enter_context(
+            c.override(Toxiproxy(seed=rng.randrange(2**63), restart="on-failure"))
+        )
         c.up("toxiproxy")
         toxiproxy = ToxiproxyApi(f"http://127.0.0.1:{c.default_port('toxiproxy')}")
         for leg in LEGS.values():
@@ -1026,6 +902,7 @@ def run_repro(c: Composition, name: str, args, log: EventLog) -> None:
             log=log,
             seed=args.seed,
         )
+        stack.callback(close_clients, ctx)
         scenario = scenario_class(ctx)
         scenario.setup()
         bundles = [

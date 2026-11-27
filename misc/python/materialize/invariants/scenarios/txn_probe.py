@@ -111,9 +111,6 @@ class ReadThenWrite(Action):
         self.seq += 1
         seq = self.seq
         key = self.rng.randrange(COUNTER_KEYS)
-        # Registered before sending: a thread that dies mid-call still counts
-        # as possibly-applied, which keeps the upper bound sound.
-        self.oplog.record(self.worker, seq, Outcome.UNKNOWN)
         if self.rng.random() < 0.5:
             # A read of the same row immediately before writing it, on the
             # same session. NOTE: the increment cannot be moved inside an
@@ -122,6 +119,9 @@ class ReadThenWrite(Action):
             # transaction block: multi-statement transactions are read-only
             # or insert-only.
             self.client.query(f"SELECT n FROM counters WHERE id = {key}")
+        # A disconnected read never sent an increment. Once the write starts,
+        # an interrupted call must still count towards the upper bound.
+        self.oplog.record(self.worker, seq, Outcome.UNKNOWN)
         outcome = self.client.write(f"UPDATE counters SET n = n + 1 WHERE id = {key}")
         self.oplog.record(self.worker, seq, outcome)
         return outcome

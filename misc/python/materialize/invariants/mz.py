@@ -21,8 +21,11 @@ submitted in an explicit transaction). Everything else (cancellation,
 connection loss, timeout) is UNKNOWN.
 """
 
+import socket
 import threading
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 import psycopg
@@ -101,8 +104,7 @@ class _Watchdog(threading.Thread):
         self.client = client
 
     def run(self) -> None:
-        while True:
-            time.sleep(0.5)
+        while not self.client._closed.wait(0.5):
             self.client.maybe_cancel()
 
 
@@ -141,73 +143,137 @@ class MzClient:
         self.log = ctx.log
         self.default_timeout = ctx.complexity.query_timeout
         self._conn: psycopg.Connection | None = None
+        self._socket: socket.socket | None = None
         self._lock = threading.Lock()
         self._deadline: float | None = None
+        self._cancel_sent = False
+        self._closed = threading.Event()
+        self._watchdog = _Watchdog(self)
+        self._watchdog.start()
         ctx.clients.append(self)
-        _Watchdog(self).start()
 
     def _connect(self) -> psycopg.Connection:
-        if self._conn is None or self._conn.closed:
+        with self._lock:
+            if self._closed.is_set():
+                raise ConnectFailed("client closed")
+            if self._conn is not None:
+                if self._conn.closed or self._socket is None:
+                    # Let a multi-statement caller restart from BEGIN.
+                    self._reset_locked()
+                    raise ConnectFailed("session was interrupted")
+                return self._conn
+        try:
+            conn = psycopg.connect(
+                host=self.host,
+                port=self.port,
+                user=self.user,
+                dbname=self.database,
+                connect_timeout=10,
+                autocommit=True,
+            )
+        except Exception as e:
+            raise ConnectFailed(f"connect failed: {e}") from e
+        with self._lock:
+            if self._closed.is_set():
+                conn.close()
+                raise ConnectFailed("client closed")
+            # libpq owns the original descriptor. Keep our own reference so a
+            # timeout can wake a blocked read even if libpq has released its fd.
             try:
-                conn = psycopg.connect(
-                    host=self.host,
-                    port=self.port,
-                    user=self.user,
-                    dbname=self.database,
-                    connect_timeout=10,
-                    autocommit=True,
+                self._socket = socket.fromfd(
+                    conn.fileno(), socket.AF_INET, socket.SOCK_STREAM
                 )
-            except Exception as e:
-                raise ConnectFailed(f"connect failed: {e}") from e
-            with self._lock:
-                self._conn = conn
-        return self._conn
+            except BaseException:
+                conn.close()
+                raise
+            self._conn = conn
+            return conn
+
+    def _reset_locked(self) -> None:
+        if self._socket is not None:
+            self._socket.close()
+            self._socket = None
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None
 
     def reset(self) -> None:
         with self._lock:
-            conn, self._conn = self._conn, None
-        if conn is not None:
+            self._reset_locked()
+
+    def _interrupt_locked(self) -> None:
+        if self._socket is not None:
             try:
-                conn.close()
-            except Exception:
+                self._socket.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                # The peer may already have disconnected.
                 pass
+            self._socket.close()
+            self._socket = None
 
     def hard_close(self) -> None:
-        """Cross-thread escape hatch used by the shutdown ladder."""
-        self.maybe_cancel(force=True)
-        self.reset()
-
-    def maybe_cancel(self, force: bool = False) -> None:
+        """Interrupt the session and let its owner observe the disconnect."""
         with self._lock:
-            conn = self._conn
-            due = force or (
-                self._deadline is not None and time.monotonic() > self._deadline
-            )
-            if due:
-                self._deadline = None
-        if conn is None or not due:
-            return
-        try:
-            conn.cancel_safe(timeout=5.0)
-        except Exception:
-            # Cancellation itself needs a working network path. Cutting the
-            # connection is the fallback that always unblocks the owner.
-            try:
-                conn.close()
-            except Exception:
-                pass
+            self._interrupt_locked()
 
-    def _bounded(self, sql: str, params: Any, timeout: float | None) -> list[tuple]:
-        """Execute with the watchdog armed. Raises psycopg errors verbatim."""
-        conn = self._connect()
+    def close(self) -> None:
+        """Permanently close this client and stop its watchdog."""
         with self._lock:
+            self._closed.set()
+            if self._deadline is None:
+                self._reset_locked()
+            else:
+                # The owner closes libpq after its interrupted call returns.
+                self._interrupt_locked()
+        self._watchdog.join()
+
+    def maybe_cancel(self) -> None:
+        with self._lock:
+            if self._deadline is None or time.monotonic() < self._deadline:
+                return
+            assert self._conn is not None
+            if not self._cancel_sent and psycopg.capabilities.has_cancel_safe():
+                self._cancel_sent = True
+                # Cancellation delivery does not acknowledge that the statement
+                # stopped. Keep its deadline armed until its owner returns.
+                self._deadline = time.monotonic() + 5.0
+                try:
+                    self._conn.cancel_safe(timeout=5.0)
+                    return
+                except Exception:
+                    pass
+            self._interrupt_locked()
+
+    @contextmanager
+    def _operation(
+        self, timeout: float | None, conn: psycopg.Connection | None = None
+    ) -> Iterator[psycopg.Connection]:
+        if conn is None:
+            conn = self._connect()
+        with self._lock:
+            if self._closed.is_set() or self._conn is not conn or self._socket is None:
+                raise ConnectFailed("connection closed before sending the statement")
             self._deadline = time.monotonic() + (timeout or self.default_timeout)
+            self._cancel_sent = False
         try:
-            cur = conn.execute(sql.encode(), params)
-            return cur.fetchall() if cur.description is not None else []
+            yield conn
         finally:
             with self._lock:
                 self._deadline = None
+                if self._closed.is_set():
+                    self._reset_locked()
+
+    def _bounded(
+        self,
+        sql: str,
+        params: Any,
+        timeout: float | None,
+        conn: psycopg.Connection | None = None,
+    ) -> list[tuple]:
+        """Execute with the watchdog armed. Raises psycopg errors verbatim."""
+        with self._operation(timeout, conn) as session:
+            cur = session.execute(sql.encode(), params)
+            return cur.fetchall() if cur.description is not None else []
 
     def query(
         self, sql: str, params: Any = None, timeout: float | None = None
@@ -238,15 +304,18 @@ class MzClient:
 
         Same error classification as query().
         """
-        conn = self._connect()
-        with self._lock:
-            self._deadline = time.monotonic() + (timeout or self.default_timeout)
         try:
             rows = []
-            with conn.cursor() as cur, cur.copy(sql.encode()) as copy:
+            with (
+                self._operation(timeout) as conn,
+                conn.cursor() as cur,
+                cur.copy(sql.encode()) as copy,
+            ):
                 for row in copy.rows():
                     rows.append(tuple("" if c is None else str(c) for c in row))
             return rows
+        except TransientError:
+            raise
         except Exception as e:
             self.reset()
             if isinstance(
@@ -256,9 +325,6 @@ class MzClient:
             if any(snippet in str(e) for snippet in CONCURRENT_DDL_ERROR_SNIPPETS):
                 raise TransientError(f"{type(e).__name__}: {e}") from e
             raise UnexpectedQueryError(f"copy out failed: {sql[:200]}: {e}") from e
-        finally:
-            with self._lock:
-                self._deadline = None
 
     def copy_in(self, sql: str, data: str, timeout: float | None = None) -> Outcome:
         """Run `COPY .. FROM STDIN`, feed `data`, and classify the outcome.
@@ -269,10 +335,11 @@ class MzClient:
         fixed-shape COPYs have a legitimate reason to be rejected.
         """
         try:
-            conn = self._connect()
-            with self._lock:
-                self._deadline = time.monotonic() + (timeout or self.default_timeout)
-            with conn.cursor() as cur, cur.copy(sql.encode()) as copy:
+            with (
+                self._operation(timeout) as conn,
+                conn.cursor() as cur,
+                cur.copy(sql.encode()) as copy,
+            ):
                 copy.write(data)
             return Outcome.COMMITTED
         except TransientError:
@@ -291,9 +358,6 @@ class MzClient:
                 # (psycopg.Error with an error response) stay fatal.
                 return Outcome.UNKNOWN
             raise UnexpectedQueryError(f"copy in rejected: {sql[:200]}: {e}") from e
-        finally:
-            with self._lock:
-                self._deadline = None
 
     def write(
         self, sql: str, params: Any = None, timeout: float | None = None
@@ -344,21 +408,21 @@ class MzClient:
         no effect. Once COMMIT is on the wire, any non-success is UNKNOWN.
         """
         try:
-            self._bounded("BEGIN", None, timeout)
+            conn = self._connect()
+            self._bounded("BEGIN", None, timeout, conn)
             for sql, params in statements:
-                self._bounded(sql, params, timeout)
+                self._bounded(sql, params, timeout, conn)
         except Exception as e:
-            try:
-                self._bounded("ROLLBACK", None, 10.0)
-            except Exception:
-                self.reset()
+            self.reset()
             if isinstance(e, TransientError | QueryCanceled) or _is_connection_error(e):
                 return Outcome.FAILED
-            self.reset()
             raise UnexpectedQueryError(f"txn statement rejected: {e}") from e
         try:
-            self._bounded("COMMIT", None, timeout)
+            self._bounded("COMMIT", None, timeout, conn)
             return Outcome.COMMITTED
+        except ConnectFailed:
+            self.reset()
+            return Outcome.FAILED
         except Exception:
             self.reset()
             return Outcome.UNKNOWN

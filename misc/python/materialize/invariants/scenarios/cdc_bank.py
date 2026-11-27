@@ -237,24 +237,25 @@ class UpstreamSchemaChurn(Action):
             return None
         self.next_at = now + self.rng.uniform(30.0, 60.0)
         self.nonce += 1
-        statements = [f"ALTER TABLE transfers ADD COLUMN extra_{self.nonce} int"]
-        if self.nonce > 1:
-            statements.insert(
-                0, f"ALTER TABLE transfers DROP COLUMN extra_{self.nonce - 1}"
-            )
         try:
             conn = self.scenario.connect_upstream()
             try:
                 cur = conn.cursor()
-                for sql in statements:
-                    cur.execute(sql)
+                # A lost connection can leave either DDL applied. Inspect the
+                # upstream schema to find the columns that still need dropping.
+                cur.execute("SELECT * FROM transfers WHERE 1 = 0")
+                for column in cur.description:
+                    name = column[0]
+                    if (
+                        name.startswith("extra_")
+                        and name.removeprefix("extra_").isdigit()
+                    ):
+                        cur.execute(f"ALTER TABLE transfers DROP COLUMN {name}")
+                cur.execute(f"ALTER TABLE transfers ADD COLUMN extra_{self.nonce} int")
                 conn.commit()
             finally:
                 conn.close()
         except Exception as e:
-            # The previous cycle's ADD may not have applied (its connection
-            # died), making this DROP fail. The next cycle moves on to a
-            # fresh column name either way.
             raise TransientError(f"upstream DDL failed: {e}") from e
         return Outcome.COMMITTED
 
