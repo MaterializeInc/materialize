@@ -182,6 +182,7 @@ export const ClusterTable = ({ clusters }: ClusterTableProps) => {
       },
     },
     meta,
+    getRowId: ({ id }) => id,
   });
 
   return (
