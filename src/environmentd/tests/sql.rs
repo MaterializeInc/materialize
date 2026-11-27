@@ -438,6 +438,59 @@ async fn test_view_commit_survives_disconnect_and_empty_namespace_cleanup() {
     .expect("disconnected view commit or namespace cleanup did not finish");
 }
 
+// The failpoints are process-global. Run this test in its own process.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn test_view_commit_precedes_acl_object_resolution() {
+    use mz_postgres_util::{Sql, batch_execute, query_one};
+
+    let server = test_util::TestHarness::default().start().await;
+    let admin = server.connect().await.unwrap();
+    for sql in [
+        "CREATE ROLE view_owner_before",
+        "CREATE ROLE view_owner_after",
+        "GRANT view_owner_before, view_owner_after TO materialize",
+        "CREATE SCHEMA commit_owned",
+        "ALTER SCHEMA commit_owned OWNER TO view_owner_before",
+    ] {
+        batch_execute(&admin, Sql::new(sql)).await.unwrap();
+    }
+    let writer = server.connect().user("view_owner_before").await.unwrap();
+    let (release, parked) = CatalogVisibilityGate::install("view_commit_after_transaction");
+    let create = task::spawn(|| "owned_candidate", async move {
+        batch_execute(
+            &writer,
+            Sql::new("CREATE VIEW commit_owned.pending AS SELECT 1 AS a"),
+        )
+        .await
+    })
+    .abort_on_drop();
+    tokio::time::timeout(Duration::from_secs(30), async {
+        parked.await.unwrap();
+        let (join_release, joined) = CatalogVisibilityGate::install("view_commit_join");
+        let mut reassign = Box::pin(batch_execute(&admin, Sql::new(
+            "REASSIGN OWNED BY view_owner_before TO view_owner_after"
+        )));
+        assert!(futures::poll!(&mut reassign).is_pending());
+        tokio::select! {
+            joined = joined => joined.unwrap(),
+            result = &mut reassign => panic!("ownership plan completed without joining: {result:?}"),
+        }
+        join_release.release();
+        release.release();
+        create.await.unwrap();
+        reassign.await.unwrap();
+        assert_eq!(
+            query_one(&admin, Sql::new(
+                "SELECT r.name FROM mz_objects o
+                 JOIN mz_schemas s ON s.id = o.schema_id
+                 JOIN mz_roles r ON r.id = o.owner_id
+                 WHERE s.name = 'commit_owned' AND o.name = 'pending'"
+            ), &[]).await.unwrap().get::<_, String>(0),
+            "view_owner_after",
+        );
+    }).await.expect("ownership resolution did not follow view publication");
+}
+
 // This failpoint is process-global. Run this test in its own process (as nextest does).
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
 #[allow(clippy::disallowed_methods)]
