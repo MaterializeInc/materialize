@@ -145,9 +145,10 @@ mod tests {
                 command("CREATE SCHEMA IF NOT EXISTS replay_database.replay_schema"),
                 command("CREATE DATABASE IF NOT EXISTS replay_database"),
             ];
+            let revision = catalog.transient_revision();
             let ts = catalog.current_upper().await;
-            let result = catalog.transact_commands(None, None, ts, None, &mut commands, &mut BTreeMap::new()).await.expect("schema must resolve the database created by the prefix");
-            assert!(!result.builtin_table_updates.is_empty());
+            catalog.transact_commands(None, None, ts, None, &mut commands, &mut BTreeMap::new()).await.expect("schema must resolve the database created by the prefix");
+            assert!(catalog.transient_revision() > revision, "commit publishes a new catalog revision");
             let database = catalog.state().resolve_database("replay_database").expect("committed database exists");
             assert!(database.schemas_by_name.contains_key("replay_schema"), "committed schema exists");
             let CatalogCommand::CreateNamespace(schema) = &commands[2] else { unreachable!("namespace command") };
