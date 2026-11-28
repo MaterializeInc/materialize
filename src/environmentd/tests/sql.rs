@@ -529,12 +529,12 @@ async fn test_temporary_view_disconnect_during_optimization() {
     tokio::time::timeout(Duration::from_secs(30), async {
         let server = test_util::TestHarness::default().start().await;
         let (creator, connection) = server.connect().with_handle().await.unwrap();
-        batch_execute(
-            &creator,
-            Sql::new("SET statement_timeout = 0; CREATE TEMP TABLE temp_t (a int)"),
-        )
-        .await
-        .unwrap();
+        for sql in [
+            "SET statement_timeout = 0",
+            "CREATE TEMP TABLE temp_t (a int)",
+        ] {
+            batch_execute(&creator, Sql::new(sql)).await.unwrap();
+        }
         let adapter = server.inner.adapter_client();
         let catalog = adapter.catalog_snapshot_expensive().await;
         let owner = catalog
