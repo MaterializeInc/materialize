@@ -35,7 +35,7 @@ use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::MzAclItem;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, Datum, Diff, GlobalId, RelationDesc, Row, Timestamp};
+use mz_repr::{CatalogItemId, Datum, GlobalId, RelationDesc, Row, Timestamp};
 use mz_sql::ast::{CreateSinkOption, CreateSinkOptionName};
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogError, CatalogItem as SqlCatalogItem,
@@ -3016,46 +3016,5 @@ impl Coordinator {
         .await;
 
         drop(read_holds);
-    }
-
-    /// Persist already-rendered optimizer notices for a newly created
-    /// non-transient dataflow.
-    ///
-    /// This:
-    /// - packs builtin-table updates for `mz_optimizer_notices` (if enabled),
-    /// - stores the rendered metainfo on the catalog object via
-    ///   `set_dataflow_metainfo`,
-    /// - and returns a future that resolves once the builtin-table append
-    ///   has been observed, or `None` if nothing was appended.
-    fn persist_dataflow_metainfo(
-        &mut self,
-        df_meta: DataflowMetainfo<Arc<OptimizerNotice>>,
-        export_id: GlobalId,
-    ) -> Option<BuiltinTableAppendNotify> {
-        // Attend to optimization notice builtin tables and save the metainfo in the catalog's
-        // in-memory state.
-        if self.catalog().state().system_config().enable_mz_notices()
-            && !df_meta.optimizer_notices.is_empty()
-        {
-            let mut builtin_table_updates = Vec::with_capacity(df_meta.optimizer_notices.len());
-            self.catalog().state().pack_optimizer_notices(
-                &mut builtin_table_updates,
-                df_meta.optimizer_notices.iter(),
-                Diff::ONE,
-            );
-
-            // Save the metainfo.
-            self.catalog_mut().set_dataflow_metainfo(export_id, df_meta);
-
-            Some(
-                self.builtin_table_update()
-                    .execute_catalog(builtin_table_updates),
-            )
-        } else {
-            // Save the metainfo.
-            self.catalog_mut().set_dataflow_metainfo(export_id, df_meta);
-
-            None
-        }
     }
 }

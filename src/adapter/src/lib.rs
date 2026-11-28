@@ -11,7 +11,7 @@
 #![warn(clippy::unwrap_used)]
 #![cfg_attr(nightly_doc_features, feature(doc_cfg))]
 // Without this, rustc overflows its query depth when computing the layout of deeply nested async
-// fn bodies, e.g. `Coordinator::catalog_transact_with_side_effects`.
+// fn bodies.
 #![recursion_limit = "256"]
 
 //! Coordinates client requests with the dataflow layer.

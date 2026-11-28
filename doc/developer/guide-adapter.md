@@ -51,9 +51,6 @@ The migration into the implications framework is incremental and unfinished.
 These older patterns still exist and are legacy. Do not add new side-effect
 logic to them. Extend the implications framework instead.
 
-- `catalog_transact_with_side_effects` runs a sequencer-provided side-effect
-  closure. It carries a `TODO(aljoscha)` to migrate its call sites to
-  `catalog_transact_with_context`.
 - The op-scan plus the block guarded by "No error returns are allowed after this
   point" in `catalog_transact_inner` (for example `update_compute_config` /
   `update_storage_config`) is keyed off the input ops, so it cannot fire for a

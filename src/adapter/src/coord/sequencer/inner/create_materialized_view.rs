@@ -7,11 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::sync::Arc;
+
 use anyhow::anyhow;
 use differential_dataflow::lattice::Lattice;
 use maplit::btreemap;
-use maplit::btreeset;
-use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::memory::objects::{CatalogItem, MaterializedView};
 use mz_expr::{CollectionPlan, ResultSpec};
 use mz_ore::collections::CollectionExt;
@@ -29,7 +29,6 @@ use mz_sql::plan;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql_parser::ast;
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_storage_client::controller::CollectionDescription;
 use std::collections::BTreeMap;
 use timely::progress::Antichain;
 use tracing::Span;
@@ -50,7 +49,6 @@ use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::optimize::dataflows::dataflow_import_id_bundle;
 use crate::optimize::{self, Optimize};
 use crate::session::Session;
-use crate::util::ResultExt;
 use crate::{AdapterNotice, CollectionIdBundle, ExecuteContext, TimestampProvider, catalog};
 
 impl Staged for CreateMaterializedViewStage {
@@ -684,6 +682,60 @@ impl Coordinator {
 
         let local_mir_for_cache = local_mir_plan.expr();
 
+        // Pre-allocate a vector of transient GlobalIds for each notice.
+        let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
+            .map(|(_item_id, global_id)| global_id)
+            .take(global_lir_plan.df_meta().optimizer_notices.len())
+            .collect::<Vec<_>>();
+
+        // Render optimizer notices before the catalog transaction. We wrap
+        // the system-session humanizer with an `ExprHumanizerExt` so that
+        // references to the to-be-created materialized view's own
+        // `global_id` in the persisted notice text resolve to its intended
+        // human-readable name.
+        //
+        // We keep `raw_df_meta` live so that on success we can emit its raw
+        // notices to the user session (rendered against the user's
+        // session-aware humanizer). We deliberately do NOT emit to the user
+        // here, so that if the catalog transaction below fails the user
+        // isn't shown confusing notices about an item that wasn't actually
+        // created.
+        let (mut df_desc, raw_df_meta) = global_lir_plan.unapply();
+        let df_meta = {
+            let system_catalog = self.catalog().for_system_session();
+            let full_name = self.catalog().resolve_full_name(&name, None);
+            let transient_items = btreemap! {
+                global_id => TransientItem::new(
+                    Some(full_name.into_parts()),
+                    Some(column_names.iter().map(|c| c.to_string()).collect()),
+                )
+            };
+            let humanizer = ExprHumanizerExt::new(transient_items, &system_catalog);
+            CatalogState::render_notices_core(
+                &humanizer,
+                (self.catalog().config().now)(),
+                &raw_df_meta,
+                notice_ids,
+                Some(global_id),
+            )
+        };
+
+        self.catalog()
+            .cache_expressions(
+                global_id,
+                Some(local_mir_for_cache),
+                global_mir_plan.df_desc().clone(),
+                df_desc.clone(),
+                df_meta.clone(),
+                optimizer_features,
+            )
+            .await;
+
+        // Keep the input holds alive through committed publication of this finalized plan.
+        df_desc.set_as_of(dataflow_as_of);
+        df_desc.set_initial_as_of(initial_as_of.clone());
+        df_desc.until = until;
+
         let ops = vec![
             catalog::Op::DropObjects {
                 objects: drop_ids
@@ -710,133 +762,16 @@ impl Coordinator {
                     custom_logical_compaction_window: compaction_window,
                     refresh_schedule: refresh_schedule.clone(),
                     initial_as_of: Some(initial_as_of.clone()),
-                    optimized_plan: None,
-                    physical_plan: None,
-                    dataflow_metainfo: None,
+                    optimized_plan: Some(Arc::new(global_mir_plan.df_desc().clone())),
+                    physical_plan: Some(Arc::new(df_desc)),
+                    dataflow_metainfo: Some(df_meta),
                 }),
                 owner_id: *ctx.session().current_role_id(),
             },
         ];
 
-        // Pre-allocate a vector of transient GlobalIds for each notice.
-        let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
-            .map(|(_item_id, global_id)| global_id)
-            .take(global_lir_plan.df_meta().optimizer_notices.len())
-            .collect::<Vec<_>>();
-
-        // Render optimizer notices before the catalog transaction. We wrap
-        // the system-session humanizer with an `ExprHumanizerExt` so that
-        // references to the to-be-created materialized view's own
-        // `global_id` in the persisted notice text resolve to its intended
-        // human-readable name.
-        //
-        // We keep `raw_df_meta` live so that on success we can emit its raw
-        // notices to the user session (rendered against the user's
-        // session-aware humanizer). We deliberately do NOT emit to the user
-        // here, so that if the catalog transaction below fails the user
-        // isn't shown confusing notices about an item that wasn't actually
-        // created.
-        let output_desc = global_lir_plan.desc().clone();
-        let (mut df_desc, raw_df_meta) = global_lir_plan.unapply();
-        let df_meta = {
-            let system_catalog = self.catalog().for_system_session();
-            let full_name = self.catalog().resolve_full_name(&name, None);
-            let transient_items = btreemap! {
-                global_id => TransientItem::new(
-                    Some(full_name.into_parts()),
-                    Some(column_names.iter().map(|c| c.to_string()).collect()),
-                )
-            };
-            let humanizer = ExprHumanizerExt::new(transient_items, &system_catalog);
-            CatalogState::render_notices_core(
-                &humanizer,
-                (self.catalog().config().now)(),
-                &raw_df_meta,
-                notice_ids,
-                Some(global_id),
-            )
-        };
-
-        // Populate the durable expression cache before the catalog
-        // transaction and await the write. This way any other envd (or a
-        // subsequent bootstrap here) will observe the cached plans +
-        // rendered notices as soon as the item becomes visible.
-        self.catalog()
-            .cache_expressions(
-                global_id,
-                Some(local_mir_for_cache),
-                global_mir_plan.df_desc().clone(),
-                df_desc.clone(),
-                df_meta.clone(),
-                optimizer_features,
-            )
-            .await;
-
         let transact_result = self
-            .catalog_transact_with_side_effects(Some(ctx), ops, move |coord, _ctx| {
-                Box::pin(async move {
-                    // Save plan structures.
-                    coord
-                        .catalog_mut()
-                        .set_optimized_plan(global_id, global_mir_plan.df_desc().clone());
-                    coord
-                        .catalog_mut()
-                        .set_physical_plan(global_id, df_desc.clone());
-
-                    let notice_builtin_updates_fut =
-                        coord.persist_dataflow_metainfo(df_meta, global_id);
-
-                    df_desc.set_as_of(dataflow_as_of.clone());
-                    df_desc.set_initial_as_of(initial_as_of);
-                    df_desc.until = until;
-
-                    let storage_metadata = coord.catalog.state().storage_metadata();
-
-                    let mut collection_desc =
-                        CollectionDescription::for_other(output_desc, Some(storage_as_of));
-                    let mut allow_writes = true;
-
-                    // If this MV is intended to replace another one, we need to start it in
-                    // read-only mode, targeting the shard of the replacement target.
-                    if let Some(target_id) = replacement_target {
-                        let target_gid = coord.catalog.get_entry(&target_id).latest_global_id();
-                        collection_desc.primary = Some(target_gid);
-                        allow_writes = false;
-                    }
-
-                    // Announce the creation of the materialized view source.
-                    coord
-                        .controller
-                        .storage
-                        .create_collections(
-                            storage_metadata,
-                            None,
-                            vec![(global_id, collection_desc)],
-                        )
-                        .await
-                        .unwrap_or_terminate("cannot fail to append");
-
-                    coord
-                        .initialize_storage_read_policies(
-                            btreeset![item_id],
-                            compaction_window.unwrap_or(CompactionWindow::Default),
-                        )
-                        .await;
-
-                    coord
-                        .ship_dataflow_and_notice_builtin_table_updates(
-                            df_desc,
-                            cluster_id,
-                            notice_builtin_updates_fut,
-                            target_replica,
-                        )
-                        .await;
-
-                    if allow_writes {
-                        coord.allow_writes(cluster_id, global_id);
-                    }
-                })
-            })
+            .catalog_transact_with_context(None, Some(ctx), ops)
             .await;
 
         match transact_result {

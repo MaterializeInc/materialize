@@ -253,6 +253,7 @@ impl Coordinator {
         let mut indexes_to_drop = vec![];
         let mut indexes_to_create = vec![];
         let mut metric_sinks_to_create = vec![];
+        let mut materialized_views_to_create = vec![];
         let mut compute_sinks_to_drop = vec![];
         let mut view_gids_to_drop = vec![];
         let mut secrets_to_drop = vec![];
@@ -472,7 +473,9 @@ impl Coordinator {
                     dropped_item_names.insert(metric_sink.global_id, full_name);
                 }
                 CatalogImplication::MaterializedView(CatalogImplicationKind::Added(mv)) => {
-                    tracing::debug!(?mv, "not handling AddMaterializedView in here yet");
+                    if mv.physical_plan.is_some() {
+                        materialized_views_to_create.push((catalog_id, mv));
+                    }
                 }
                 CatalogImplication::MaterializedView(CatalogImplicationKind::Altered {
                     prev: prev_mv,
@@ -1211,6 +1214,47 @@ impl Coordinator {
             "coord::apply_catalog_implications_inner::finalize"
         ))
         .await;
+
+        // Drop replaced objects before installing the new materialized view's resources.
+        for (item_id, mv) in materialized_views_to_create {
+            let global_id = mv.global_id_writes();
+            let plan = mv
+                .physical_plan
+                .as_ref()
+                .expect("prepared materialized view plan");
+            // SQL's scalar AS OF omits empty frontiers; the prepared plan retains them.
+            let mut collection = CollectionDescription::for_other(
+                mv.desc.latest(),
+                plan.initial_storage_as_of.clone(),
+            );
+            if let Some(target_id) = mv.replacement_target {
+                collection.primary = Some(self.catalog().get_entry(&target_id).latest_global_id());
+            }
+            self.controller
+                .storage
+                .create_collections(
+                    self.catalog.state().storage_metadata(),
+                    None,
+                    vec![(global_id, collection)],
+                )
+                .await
+                .unwrap_or_terminate("cannot fail to create materialized view collection");
+            self.initialize_storage_read_policies(
+                maplit::btreeset![item_id],
+                mv.custom_logical_compaction_window.unwrap_or_default(),
+            )
+            .await;
+            self.ship_dataflow_and_notice_builtin_table_updates(
+                (**plan).clone(),
+                mv.cluster_id,
+                None,
+                mv.target_replica,
+            )
+            .await;
+            if mv.replacement_target.is_none() {
+                self.allow_writes(mv.cluster_id, global_id);
+            }
+        }
 
         Ok(())
     }
