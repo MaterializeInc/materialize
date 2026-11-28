@@ -15,7 +15,6 @@
 //! blocking optimizer work can continue beyond the recorded interval.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -942,124 +941,6 @@ impl Coordinator {
         result
     }
 
-    /// Same as [`Self::catalog_transact_with_context`] but takes a [`Session`]
-    /// and runs builtin table updates concurrently with any side effects (e.g.
-    /// creating collections).
-    // TODO(aljoscha): Remove this method once all call-sites have been migrated
-    // to the newer catalog_transact_with_context. The latter is what allows us
-    // to apply catalog implications that we derive from catalog chanages either
-    // when initially applying the ops to the catalog _or_ when following
-    // catalog changes from another process.
-    #[instrument(name = "coord::catalog_transact_with_side_effects")]
-    pub(crate) async fn catalog_transact_with_side_effects<F>(
-        &mut self,
-        mut ctx: Option<&mut ExecuteContext>,
-        ops: Vec<catalog::Op>,
-        side_effect: F,
-    ) -> Result<(), AdapterError>
-    where
-        F: for<'a> FnOnce(
-                &'a mut Coordinator,
-                Option<&'a mut ExecuteContext>,
-            ) -> Pin<Box<dyn Future<Output = ()> + 'a>>
-            + 'static,
-    {
-        if ctx
-            .as_ref()
-            .is_some_and(|ctx| ctx.session().transaction().is_ddl())
-        {
-            return Err(AdapterError::Unsupported(
-                "raw operations in a DDL command transaction",
-            ));
-        }
-        let start = Instant::now();
-
-        // Keep catalog work out of the inline state of callers such as ordinary
-        // transaction completion and the coordinator's command dispatcher.
-        let (table_updates, catalog_updates) = Box::pin(
-            self.catalog_transact_inner(ctx.as_ref().map(|ctx| ctx.session().conn_id()), ops),
-        )
-        .await?;
-
-        // We can't run this concurrently with the explicit side effects,
-        // because both want to borrow self mutably.
-        let apply_implications_res =
-            Box::pin(self.apply_catalog_implications(ctx.as_deref_mut(), catalog_updates)).await;
-
-        // We would get into an inconsistent state if we updated the catalog but
-        // then failed to apply commands/updates to the controller. Easiest
-        // thing to do is panic and let restart/bootstrap handle it.
-        apply_implications_res.expect("cannot fail to apply catalog update implications");
-
-        // NOTE: `check_consistency` only runs with soft assertions enabled, so
-        // this phase reads about zero in production. We time it because a local
-        // rig debugging a transact stall commonly has them on, where the check is
-        // O(catalog size) and would otherwise appear as an unexplained remainder
-        // against the wrapper metric. The observation stays outside the macro,
-        // anything inside it compiles out exactly where soft assertions are off.
-        let consistency_start = Instant::now();
-
-        // Note: It's important that we keep the function call inside macro, this way we only run
-        // the consistency checks if soft assertions are enabled.
-        mz_ore::soft_assert_eq_no_log!(
-            self.check_consistency(),
-            Ok(()),
-            "coordinator inconsistency detected"
-        );
-
-        self.metrics
-            .catalog_transact_phase_seconds
-            .with_label_values(&["consistency_check"])
-            .observe(consistency_start.elapsed().as_secs_f64());
-
-        let side_effects_seconds = self
-            .metrics
-            .catalog_transact_phase_seconds
-            .with_label_values(&["side_effects"]);
-        // Distinct from `table_updates_wait` in `catalog_transact_with_context`.
-        // Here the group commit has already been running concurrently with
-        // `apply_catalog_implications` above, so this wrapper is first polled
-        // late and only records the residual wait.
-        let table_updates_wait = self
-            .metrics
-            .catalog_transact_phase_seconds
-            .with_label_values(&["table_updates_residual_wait"]);
-        let defer_visibility = ctx
-            .as_ref()
-            .is_some_and(|ctx| ctx.finish_ddl_on_coordinator);
-        let table_updates = (!defer_visibility).then_some(table_updates);
-        let side_effects_fut = side_effect(self, ctx);
-
-        // Run our side effects concurrently with the table updates.
-        let ((), ()) = futures::future::join(
-            side_effects_fut
-                .wall_time()
-                .observe(side_effects_seconds)
-                .instrument(info_span!(
-                    "coord::catalog_transact_with_side_effects::side_effects_fut"
-                )),
-            async move {
-                if let Some(table_updates) = table_updates {
-                    table_updates
-                        .wall_time()
-                        .observe(table_updates_wait)
-                        .instrument(info_span!(
-                            "coord::catalog_transact_with_side_effects::table_updates"
-                        ))
-                        .await;
-                }
-            },
-        )
-        .await;
-
-        self.metrics
-            .catalog_transact_seconds
-            .with_label_values(&["catalog_transact_with_side_effects"])
-            .observe(start.elapsed().as_secs_f64());
-
-        Ok(())
-    }
-
     /// Same as [`Self::catalog_transact_inner`] but takes an execution context
     /// or connection ID and runs builtin table updates concurrently with any
     /// catalog implications that are generated as part of applying the given
@@ -1490,12 +1371,10 @@ impl Coordinator {
         // let restart/bootstrap handle it.
         combined_apply_res.expect("cannot fail to apply catalog implications");
 
-        // See the note in `catalog_transact_with_side_effects` on why this is
-        // timed outside the macro and reads about zero in production.
+        // Consistency checks can scan the catalog but compile out without soft
+        // assertions. Keep the timer outside the macro to record both cases.
         let consistency_start = Instant::now();
 
-        // Note: It's important that we keep the function call inside macro, this way we only run
-        // the consistency checks if soft assertions are enabled.
         mz_ore::soft_assert_eq_no_log!(
             self.check_consistency(),
             Ok(()),
