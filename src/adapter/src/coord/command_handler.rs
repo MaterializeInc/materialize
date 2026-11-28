@@ -1566,6 +1566,10 @@ impl Coordinator {
                 .await;
             return;
         }
+        if matches!(&*stmt, Statement::CreateView(view) if !view.temporary) {
+            self.sequence_create_view_command(ctx, stmt, params).await;
+            return;
+        }
         if matches!(&*stmt, Statement::AlterConnection(stmt)
             if !stmt.actions.iter().any(|action|
                 matches!(action, AlterConnectionAction::RotateKeys)))
@@ -1812,6 +1816,8 @@ impl Coordinator {
         // CONNECTION ROTATE KEYS`). But the whole point of this is to prevent things from being
         // planned in the first place, so we accept the abstraction leak.
         match stmt {
+            // Semantic replay validates the current names, dependencies and permissions.
+            Statement::CreateView(view) if !view.temporary => false,
             // Secrets have a small and understood set of dependencies, and their off-thread work
             // interacts with k8s.
             Statement::AlterSecret(_) => false,

@@ -459,6 +459,7 @@ pub struct TransactionResult {
 
 #[derive(Debug)]
 pub(crate) enum CommandWork {
+    View(super::command::view::ViewPreparation),
     Connection(super::command::connection::ConnectionPreparation),
     ConnectionSecret(super::command::connection::ConnectionSecret),
     Prepare(mz_sql::pure::SourcePreparationRequest),
@@ -467,6 +468,7 @@ pub(crate) enum CommandWork {
 
 #[derive(Debug)]
 pub(crate) enum CommandResponse {
+    View(super::command::view::ViewPreparationResponse),
     Source(mz_sql::pure::SourcePreparationResponse),
     Connection(super::command::connection::ConnectionPreparationResponse),
     ConnectionSecret(super::command::connection::ConnectionSecretResponse),
@@ -1158,13 +1160,7 @@ impl Catalog {
             return Ok(None);
         }
 
-        let optimizer_features = OptimizerFeatures::from(state.system_config());
-        let cached_exprs = match &operations {
-            TransactionOperations::Raw(ops) => {
-                Self::extract_expressions_from_ops(ops, &optimizer_features)
-            }
-            TransactionOperations::Commands { .. } => BTreeMap::new(),
-        };
+        let mut cached_exprs = BTreeMap::new();
 
         let mut storage_collections_to_create = BTreeSet::new();
         let mut storage_collections_to_drop = BTreeSet::new();
@@ -1226,7 +1222,14 @@ impl Catalog {
                 };
                 execution = remaining;
             }
-            let mut pending_ops: std::collections::VecDeque<_> = execution.take_ops().into();
+            let ops = execution.take_ops();
+            // Commands accept prepared expressions against this candidate's configuration.
+            // Both application passes need them because durable items contain SQL, not MIR.
+            cached_exprs.extend(Self::extract_expressions_from_ops(
+                &ops,
+                &OptimizerFeatures::from(preliminary_state.system_config()),
+            ));
+            let mut pending_ops: std::collections::VecDeque<_> = ops.into();
             while let Some(op) = pending_ops.pop_front() {
                 if let Op::RenameCommand(command) = op {
                     let compiled = command.execute(&preliminary_state)?;

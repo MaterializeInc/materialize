@@ -65,6 +65,7 @@ pub struct PendingDdlCommit {
     context: DdlCommitContext,
     commands: Vec<catalog::command::CatalogCommand>,
     responses: BTreeMap<usize, catalog::CommandResponse>,
+    cancellation: Option<tokio::sync::watch::Receiver<bool>>,
 }
 
 #[derive(Debug)]
@@ -92,6 +93,7 @@ impl PendingDdlCommit {
             context: DdlCommitContext::Transaction(txn),
             commands,
             responses: BTreeMap::new(),
+            cancellation: None,
         }
     }
 
@@ -104,6 +106,7 @@ impl PendingDdlCommit {
             context: DdlCommitContext::Statement { ctx, response },
             commands,
             responses: BTreeMap::new(),
+            cancellation: None,
         }
     }
 }
@@ -227,6 +230,87 @@ impl Coordinator {
             )],
         ))
         .await;
+    }
+
+    #[instrument]
+    pub(super) async fn sequence_create_view_command(
+        &mut self,
+        mut ctx: ExecuteContext,
+        statement: Arc<mz_sql::ast::Statement<mz_sql::ast::Raw>>,
+        params: mz_sql::plan::Params,
+    ) {
+        ctx.finish_ddl_on_coordinator = true;
+        let mut command =
+            catalog::command::view::ViewStatement::new(statement, params, ctx.session().meta());
+        let compiled = match command.compile_create(self.catalog().state()) {
+            Ok(compiled) => compiled,
+            Err(error) => return ctx.retire(Err(error)),
+        };
+        if let Err(error) = self.prepare_command_execution(
+            &mut ctx,
+            &mz_sql::plan::Plan::CreateView(compiled.plan.clone()),
+        ) {
+            return ctx.retire(Err(error));
+        }
+        let id = match self.allocate_user_id().await {
+            Ok(id) => id,
+            Err(error) => return ctx.retire(Err(error)),
+        };
+        command.allocate_create(id);
+        let request = command.preparation(self.catalog().state(), &compiled);
+        let conn_id = ctx.session().conn_id().clone();
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        if let Some((_, previous)) = self
+            .connection_cancel_watches
+            .insert(conn_id, (tx, rx.clone()))
+        {
+            if *previous.borrow() {
+                return ctx.retire(Err(AdapterError::Canceled));
+            }
+        }
+        let mut pending = PendingDdlCommit::statement(
+            ctx,
+            crate::ExecuteResponse::CreatedView,
+            vec![catalog::command::CatalogCommand::CreateView(Arc::new(
+                command,
+            ))],
+        );
+        pending.cancellation = Some(rx);
+        self.prepare_view_command(pending, 0, request);
+    }
+
+    fn prepare_view_command(
+        &self,
+        mut pending: PendingDdlCommit,
+        index: usize,
+        request: catalog::command::view::ViewPreparation,
+    ) {
+        let future = request.execute(self.catalog(), self.optimizer_metrics());
+        let tx = self.internal_cmd_tx.clone();
+        let otel_ctx = OpenTelemetryContext::obtain();
+        task::spawn(
+            || "ddl_view_preparation",
+            async move {
+                let mut cancellation = pending
+                    .cancellation
+                    .clone()
+                    .expect("view preparation is cancelable");
+                tokio::select! {
+                    response = async {
+                        let response = future.await;
+                        catalog_preparation_test_pause("catalog_view_preparation_ready").await;
+                        response
+                    } => {
+                        pending.responses.insert(index, catalog::CommandResponse::View(response));
+                    }
+                    _ = cancellation.wait_for(|canceled| *canceled) => {}
+                }
+                if let Err(error) = tx.send(Message::DdlCommandsReady { pending, otel_ctx }) {
+                    warn!("internal_cmd_rx dropped before view preparation completed: {error:?}");
+                }
+            }
+            .instrument(tracing::Span::current()),
+        );
     }
 
     pub(super) async fn sequence_alter_connection_command(
@@ -394,6 +478,14 @@ impl Coordinator {
 
     fn emit_command_notices(&self, session: &Session, command: &catalog::command::CatalogCommand) {
         session.add_notices(command.notices().iter().cloned().map(Into::into));
+        if let catalog::command::CatalogCommand::CreateView(command) = command {
+            if let Some(name) = command.skipped_name() {
+                session.add_notice(crate::AdapterNotice::ObjectAlreadyExists {
+                    name: name.to_owned(),
+                    ty: "view",
+                });
+            }
+        }
         if let catalog::command::CatalogCommand::CreateConnection(command) = command {
             if let Some(name) = command.skipped_name() {
                 session.add_notice(crate::AdapterNotice::ObjectAlreadyExists {
@@ -729,6 +821,16 @@ impl Coordinator {
     }
 
     pub(super) async fn sequence_ddl_commit(&mut self, mut pending: PendingDdlCommit) {
+        // Cancellation can abandon preparation, but must not interrupt publication
+        // after this handler starts durable commit.
+        if pending
+            .cancellation
+            .as_ref()
+            .is_some_and(|rx| *rx.borrow() || rx.has_changed().is_err())
+        {
+            self.finish_ddl_commit(pending, Err(AdapterError::Canceled));
+            return;
+        }
         // Command replay must respect the plans other DDLs hold across off-thread work.
         // Never await this lock on the coordinator, which its owner needs to finish.
         let guard = self
@@ -771,6 +873,11 @@ impl Coordinator {
                 Ok(()) => break Ok(()),
                 Err(catalog::CommandExecutionError::Error(error)) => break Err(error),
                 Err(catalog::CommandExecutionError::Pending { index, work }) => match work {
+                    catalog::CommandWork::View(request) => {
+                        self.release_ddl_lock(guard);
+                        self.prepare_view_command(pending, index, request);
+                        return;
+                    }
                     catalog::CommandWork::Allocate(keys) => {
                         let ids = match self.allocate_user_ids(u64::cast_from(keys.len())).await {
                             Ok(ids) => ids,
@@ -784,7 +891,8 @@ impl Coordinator {
                             | catalog::command::CatalogCommand::CatalogResult(_)
                             | catalog::command::CatalogCommand::Description(_)
                             | catalog::command::CatalogCommand::AlterConnection(_)
-                            | catalog::command::CatalogCommand::CreateConnection(_) => {
+                            | catalog::command::CatalogCommand::CreateConnection(_)
+                            | catalog::command::CatalogCommand::CreateView(_) => {
                                 unreachable!("this command does not allocate IDs");
                             }
                         }

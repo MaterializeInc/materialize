@@ -27,6 +27,7 @@
 pub(crate) mod connection;
 pub(crate) mod source;
 pub(crate) mod source_statement;
+pub(crate) mod view;
 
 use std::sync::Arc;
 
@@ -50,6 +51,7 @@ pub enum CatalogCommand {
     Description(Arc<DescriptionCommand>),
     AlterConnection(Arc<connection::ConnectionStatement>),
     CreateConnection(Arc<connection::ConnectionStatement>),
+    CreateView(Arc<view::ViewStatement>),
     Source(Arc<source_statement::SourceCommand>),
 }
 
@@ -64,6 +66,33 @@ impl CatalogCommand {
         response: Option<CommandResponse>,
     ) -> Result<CommandExecution<'_>, CommandExecutionError> {
         match self {
+            Self::CreateView(command) => {
+                let command = Arc::make_mut(command);
+                let response = match response {
+                    Some(CommandResponse::View(response)) => Some(response),
+                    None => None,
+                    Some(_) => unreachable!("response belongs to its command"),
+                };
+                match command.resolve(state, response)? {
+                    view::ViewResolution::Prepare(request) => Err(CommandExecutionError::Pending {
+                        index,
+                        work: CommandWork::View(request),
+                    }),
+                    view::ViewResolution::Ready {
+                        ops,
+                        name,
+                        if_not_exists,
+                    } => {
+                        let id = command.item_id();
+                        let outcome = if_not_exists.then_some(ExecutionOutcome::CreateView {
+                            command,
+                            id,
+                            name,
+                        });
+                        Ok(CommandExecution { ops, outcome })
+                    }
+                }
+            }
             Self::Rename(command) => Ok(CommandExecution::raw(command.execute(state)?)),
             Self::Description(command) => {
                 command.execute(state)?;
@@ -79,7 +108,7 @@ impl CatalogCommand {
                 let (preparation, secret) = match response {
                     Some(CommandResponse::Connection(response)) => (Some(response), None),
                     Some(CommandResponse::ConnectionSecret(response)) => (None, Some(response)),
-                    Some(CommandResponse::Source(_)) => {
+                    Some(CommandResponse::Source(_) | CommandResponse::View(_)) => {
                         unreachable!("response belongs to its command")
                     }
                     None => (None, None),
@@ -134,7 +163,11 @@ impl CatalogCommand {
                 let command = Arc::make_mut(command);
                 let response = match response {
                     Some(CommandResponse::Connection(response)) => Some(response),
-                    Some(CommandResponse::Source(_) | CommandResponse::ConnectionSecret(_)) => {
+                    Some(
+                        CommandResponse::Source(_)
+                        | CommandResponse::ConnectionSecret(_)
+                        | CommandResponse::View(_),
+                    ) => {
                         unreachable!("response belongs to its command")
                     }
                     None => None,
@@ -181,7 +214,11 @@ impl CatalogCommand {
                     Some(CommandResponse::Source(response)) => {
                         command.statement.finish(state, response)?
                     }
-                    Some(CommandResponse::Connection(_) | CommandResponse::ConnectionSecret(_)) => {
+                    Some(
+                        CommandResponse::Connection(_)
+                        | CommandResponse::ConnectionSecret(_)
+                        | CommandResponse::View(_),
+                    ) => {
                         unreachable!("response belongs to its command")
                     }
                     None => command.statement.resolve(state)?,
@@ -212,6 +249,7 @@ impl CatalogCommand {
             Self::Description(_) => &[],
             Self::AlterConnection(command) | Self::CreateConnection(command) => command.notices(),
             Self::Source(command) => command.notices(),
+            Self::CreateView(command) => command.notices(),
         }
     }
 }
@@ -227,6 +265,11 @@ pub(super) struct CommandExecution<'a> {
 }
 
 enum ExecutionOutcome<'a> {
+    CreateView {
+        command: &'a mut view::ViewStatement,
+        id: mz_repr::CatalogItemId,
+        name: String,
+    },
     Source(&'a mut SourceCommand, Box<SourceCompilation>),
     CreateConnection {
         command: &'a mut connection::ConnectionStatement,
@@ -246,6 +289,7 @@ impl CommandExecution<'_> {
                 .needs_collision_probe(compiled)
                 .then_some(self.ops.as_slice()),
             Some(ExecutionOutcome::CreateConnection { .. }) => Some(self.ops.as_slice()),
+            Some(ExecutionOutcome::CreateView { .. }) => Some(self.ops.as_slice()),
             None => None,
         }
     }
@@ -256,6 +300,19 @@ impl CommandExecution<'_> {
         result: Result<(), AdapterError>,
     ) -> Result<Option<Self>, AdapterError> {
         let skipped = match self.outcome.as_mut().expect("collision probe requested") {
+            ExecutionOutcome::CreateView { command, id, name } => match result {
+                Ok(()) => false,
+                Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                    kind:
+                        mz_catalog::memory::error::ErrorKind::Sql(
+                            mz_sql::catalog::CatalogError::ItemAlreadyExists(attempted_id, _),
+                        ),
+                })) if attempted_id == *id => {
+                    command.set_skipped_name(name.clone());
+                    true
+                }
+                Err(error) => return Err(error),
+            },
             ExecutionOutcome::Source(command, compiled) => {
                 let (_, outcome) = compiled.classify_result(result)?;
                 command.check_outcome(outcome)?;

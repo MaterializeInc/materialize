@@ -117,6 +117,294 @@ impl Drop for CatalogVisibilityGate {
     }
 }
 
+// The optimizer failpoint is process-global. Run each replay test in its own
+// process, as nextest does. The gate blocks only the spawn_blocking optimizer.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn test_create_view_replay_replace_renamed_target() {
+    use mz_postgres_util::{Sql, batch_execute, query_one};
+
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let server = test_util::TestHarness::default().start().await;
+        let creator = server.connect().await.unwrap();
+        let ddl = server.connect().await.unwrap();
+        batch_execute(&ddl, Sql::new("CREATE VIEW v AS SELECT 1 AS a"))
+            .await
+            .unwrap();
+
+        let (release, parked) = CatalogVisibilityGate::install("catalog_view_optimize_ready");
+        let create = task::spawn(|| "replace view replay", async move {
+            batch_execute(
+                &creator,
+                Sql::new("CREATE OR REPLACE VIEW v AS SELECT 2 AS a"),
+            )
+            .await
+        })
+        .abort_on_drop();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            parked.await.unwrap();
+            batch_execute(&ddl, Sql::new("ALTER VIEW v RENAME TO w"))
+                .await
+                .unwrap();
+            assert!(!create.is_finished());
+        })
+        .await
+        .expect("rename must commit while view optimization is blocked");
+        release.release();
+        create.await.unwrap();
+
+        let row = query_one(&ddl, Sql::new("SELECT v.a, w.a FROM v, w"), &[])
+            .await
+            .unwrap();
+        assert_eq!(row.get::<_, i32>(0), 2);
+        assert_eq!(row.get::<_, i32>(1), 1);
+    })
+    .await
+    .expect("view replacement replay timed out");
+}
+
+// This failpoint is process-global. Run this test in its own process (as nextest does).
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn test_create_view_replay_recreated_dependency() {
+    use mz_postgres_util::{Sql, batch_execute, query_one};
+
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let server = test_util::TestHarness::default().start().await;
+        let creator = server.connect().await.unwrap();
+        let ddl = server.connect().await.unwrap();
+        for sql in ["CREATE TABLE t (a int)", "INSERT INTO t VALUES (1)"] {
+            batch_execute(&ddl, Sql::new(sql)).await.unwrap();
+        }
+
+        let (release, parked) = CatalogVisibilityGate::install("catalog_view_optimize_ready");
+        let create = task::spawn(|| "view dependency replay", async move {
+            batch_execute(&creator, Sql::new("CREATE VIEW v AS SELECT * FROM t")).await
+        })
+        .abort_on_drop();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            parked.await.unwrap();
+            for sql in [
+                "ALTER TABLE t RENAME TO old_t",
+                "CREATE TABLE t (a text, b int)",
+                "INSERT INTO t VALUES ('current', 42)",
+            ] {
+                batch_execute(&ddl, Sql::new(sql)).await.unwrap();
+            }
+            assert!(!create.is_finished());
+        })
+        .await
+        .expect("dependency replacement must commit while view optimization is blocked");
+        release.release();
+        create.await.unwrap();
+
+        // RESTRICT also detects a stale dependency on the still-live old ID.
+        batch_execute(&ddl, Sql::new("DROP TABLE old_t RESTRICT"))
+            .await
+            .unwrap();
+        let row = query_one(&ddl, Sql::new("SELECT * FROM v"), &[])
+            .await
+            .unwrap();
+        assert_eq!(row.len(), 2);
+        assert_eq!(row.columns()[0].name(), "a");
+        assert_eq!(row.columns()[1].name(), "b");
+        assert_eq!(row.get::<_, String>(0), "current");
+        assert_eq!(row.get::<_, i32>(1), 42);
+    })
+    .await
+    .expect("view dependency replay timed out");
+}
+
+// This failpoint is process-global. Run this test in its own process (as nextest does).
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn test_create_view_cancel_during_optimization() {
+    use mz_postgres_util::{PostgresError, Sql, batch_execute, query_one};
+
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let server = test_util::TestHarness::default().start().await;
+        let creator = server.connect().await.unwrap();
+        let cancel = server.connect().await.unwrap();
+        let pid: i32 = query_one(&creator, Sql::new("SELECT pg_backend_pid()"), &[])
+            .await
+            .unwrap()
+            .get(0);
+
+        let (release, parked) = CatalogVisibilityGate::install("catalog_view_optimize_ready");
+        let create = task::spawn(|| "cancel view optimization", async move {
+            let result = batch_execute(&creator, Sql::new("CREATE VIEW v AS SELECT 1 AS a")).await;
+            (creator, result)
+        })
+        .abort_on_drop();
+        let creator = tokio::time::timeout(Duration::from_secs(5), async {
+            parked.await.unwrap();
+            // SQL cancellation acknowledges handling of the request. A wire
+            // cancel could arrive late and cancel the subsequent DDL instead.
+            assert!(
+                query_one(
+                    &cancel,
+                    Sql::new("SELECT pg_cancel_backend($1::int4)"),
+                    &[&pid],
+                )
+                .await
+                .unwrap()
+                .get::<_, bool>(0)
+            );
+            let (creator, result) = create.await;
+            let PostgresError::Postgres(error) = result.unwrap_err() else {
+                panic!("expected a PostgreSQL cancellation error");
+            };
+            assert_eq!(error.unwrap_db_error().code(), &SqlState::QUERY_CANCELED);
+            creator
+        })
+        .await
+        .expect("cancellation must complete before releasing the optimizer");
+        release.release();
+
+        assert_eq!(
+            query_one(
+                &cancel,
+                Sql::new("SELECT count(*) FROM mz_views WHERE name = 'v'"),
+                &[],
+            )
+            .await
+            .unwrap()
+            .get::<_, i64>(0),
+            0
+        );
+        // Reuse both the session and the name without OR REPLACE or IF NOT EXISTS.
+        batch_execute(&creator, Sql::new("CREATE VIEW v AS SELECT 2 AS a"))
+            .await
+            .unwrap();
+        assert_eq!(
+            query_one(&creator, Sql::new("SELECT a FROM v"), &[])
+                .await
+                .unwrap()
+                .get::<_, i32>(0),
+            2
+        );
+    })
+    .await
+    .expect("view optimization cancellation timed out");
+}
+
+// This failpoint is process-global. Run this test in its own process (as nextest does).
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn test_create_view_replay_revoked_privilege() {
+    use mz_postgres_util::{PostgresError, Sql, batch_execute, query_one};
+
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let server = test_util::TestHarness::default()
+            .with_system_parameter_default("enable_rbac_checks".into(), "true".into())
+            .start()
+            .await;
+        let ddl = server.connect().internal().await.unwrap();
+        for sql in [
+            "CREATE ROLE view_creator",
+            "CREATE SCHEMA view_schema",
+            "GRANT USAGE ON DATABASE materialize TO view_creator",
+            "GRANT USAGE, CREATE ON SCHEMA view_schema TO view_creator",
+        ] {
+            batch_execute(&ddl, Sql::new(sql)).await.unwrap();
+        }
+        let creator = server.connect().user("view_creator").await.unwrap();
+        let (release, parked) = CatalogVisibilityGate::install("catalog_view_optimize_ready");
+        let create = task::spawn(|| "view privilege replay", async move {
+            batch_execute(&creator, Sql::new("CREATE VIEW view_schema.v AS SELECT 1")).await
+        })
+        .abort_on_drop();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            parked.await.unwrap();
+            batch_execute(
+                &ddl,
+                Sql::new("REVOKE CREATE ON SCHEMA view_schema FROM view_creator"),
+            )
+            .await
+            .unwrap();
+            assert!(!create.is_finished());
+        })
+        .await
+        .expect("revocation must commit while view optimization is blocked");
+        release.release();
+        let PostgresError::Postgres(error) = create.await.unwrap_err() else {
+            panic!("expected a PostgreSQL privilege error");
+        };
+        assert_eq!(
+            error.unwrap_db_error().code(),
+            &SqlState::INSUFFICIENT_PRIVILEGE
+        );
+        assert_eq!(
+            query_one(
+                &ddl,
+                Sql::new("SELECT count(*) FROM mz_views WHERE name = 'v'"),
+                &[],
+            )
+            .await
+            .unwrap()
+            .get::<_, i64>(0),
+            0
+        );
+    })
+    .await
+    .expect("view privilege replay timed out");
+}
+
+// These failpoints are process-global. Run this test in its own process (as nextest does).
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn test_create_view_reuses_prepared_expression() {
+    use std::sync::atomic::AtomicUsize;
+
+    use mz_postgres_util::{Sql, batch_execute, query_one};
+
+    struct RemoveHooks;
+    impl Drop for RemoveHooks {
+        fn drop(&mut self) {
+            fail::remove("catalog_view_optimize_ready");
+            fail::remove("catalog_view_reoptimization");
+        }
+    }
+
+    let server = test_util::TestHarness::default().start().await;
+    let client = server.connect().await.unwrap();
+    let _hooks = RemoveHooks;
+    let prepared = Arc::new(AtomicUsize::new(0));
+    let fallback = Arc::new(AtomicUsize::new(0));
+    for (name, count) in [
+        ("catalog_view_optimize_ready", Arc::clone(&prepared)),
+        ("catalog_view_reoptimization", Arc::clone(&fallback)),
+    ] {
+        fail::cfg_callback(name, move || {
+            count.fetch_add(1, Ordering::SeqCst);
+        })
+        .unwrap();
+    }
+    tokio::time::timeout(Duration::from_secs(30), async {
+        for sql in [
+            "CREATE VIEW reused AS SELECT 1 AS a",
+            "CREATE OR REPLACE VIEW reused AS SELECT 2 AS a",
+            "CREATE VIEW IF NOT EXISTS reused AS SELECT 3 AS a",
+            "CREATE VIEW IF NOT EXISTS new_view AS SELECT 4 AS a",
+        ] {
+            prepared.store(0, Ordering::SeqCst);
+            batch_execute(&client, Sql::new(sql)).await.unwrap();
+            assert_eq!(prepared.load(Ordering::SeqCst), 1, "{sql}");
+            assert_eq!(
+                fallback.load(Ordering::SeqCst),
+                0,
+                "catalog application must reuse the accepted expression: {sql}"
+            );
+        }
+        let row = query_one(
+            &client,
+            Sql::new("SELECT reused.a, new_view.a FROM reused, new_view"),
+            &[],
+        )
+        .await
+        .unwrap();
+        assert_eq!(row.get::<_, i32>(0), 2);
+        assert_eq!(row.get::<_, i32>(1), 4);
+    })
+    .await
+    .expect("prepared view expression reuse timed out");
+}
+
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 async fn test_timeline_holds_across_catalog_changes() {
     use mz_postgres_util::{Sql, batch_execute, query_one};

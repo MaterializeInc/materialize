@@ -726,15 +726,9 @@ impl Coordinator {
         uses_ambiguous_columns: bool,
         depends_on: &BTreeSet<GlobalId>,
     ) -> Result<(), AdapterError> {
-        if uses_ambiguous_columns
-            && depends_on
-                .iter()
-                .any(|id| id.is_system() && self.catalog().get_entry_by_global_id(id).is_relation())
-        {
-            Err(AdapterError::AmbiguousSystemColumnReference)
-        } else {
-            Ok(())
-        }
+        self.catalog()
+            .state()
+            .validate_system_column_references(uses_ambiguous_columns, depends_on)
     }
 
     #[instrument]
