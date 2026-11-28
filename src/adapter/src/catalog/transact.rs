@@ -1094,7 +1094,7 @@ impl Catalog {
         }
 
         let mut cached_exprs = BTreeMap::new();
-        let mut prepared_indexes = BTreeMap::new();
+        let mut prepared_dataflows = BTreeMap::new();
 
         let mut storage_collections_to_create = BTreeSet::new();
         let mut storage_collections_to_drop = BTreeSet::new();
@@ -1162,17 +1162,21 @@ impl Catalog {
             }
             let ops = execution.take_ops();
             for op in &ops {
-                if let Op::CreateItem {
-                    id,
-                    item: CatalogItem::Index(index),
-                    ..
-                } = op
-                {
-                    if index.optimized_plan.is_some()
-                        && index.physical_plan.is_some()
-                        && index.dataflow_metainfo.is_some()
-                    {
-                        prepared_indexes.insert(*id, index.clone());
+                if let Op::CreateItem { id, item, .. } = op {
+                    if let (Some(mir), Some(lir), Some(metainfo)) = (
+                        item.optimized_plan(),
+                        item.physical_plan(),
+                        item.dataflow_metainfo(),
+                    ) {
+                        prepared_dataflows.insert(
+                            *id,
+                            (
+                                item.latest_global_id(),
+                                Arc::clone(mir),
+                                Arc::clone(lir),
+                                metainfo.clone(),
+                            ),
+                        );
                     }
                 }
             }
@@ -1303,7 +1307,7 @@ impl Catalog {
             parsed_catalog_updates.extend(op_catalog_updates);
         }
 
-        // Durable SQL reconstructs index definitions without their prepared plans.
+        // Durable SQL reconstructs definitions without their prepared physical plans.
         // Install only surviving additions, before the committed diff drives publication.
         for update in parsed_catalog_updates.iter_mut() {
             if update.diff != mz_catalog::memory::objects::StateDiff::Addition {
@@ -1317,20 +1321,13 @@ impl Catalog {
             else {
                 continue;
             };
-            let Some(index) = prepared_indexes.remove(&durable_item.id) else {
+            let Some((global_id, mir, lir, metainfo)) = prepared_dataflows.remove(&durable_item.id)
+            else {
                 continue;
             };
-            let global_id = index.global_id;
             let state = state.to_mut();
-            state.set_optimized_plan(
-                global_id,
-                (*index.optimized_plan.expect("prepared MIR")).clone(),
-            );
-            state.set_physical_plan(
-                global_id,
-                (*index.physical_plan.expect("prepared LIR")).clone(),
-            );
-            let metainfo = index.dataflow_metainfo.expect("prepared notices");
+            state.set_optimized_plan(global_id, (*mir).clone());
+            state.set_physical_plan(global_id, (*lir).clone());
             if state.system_config().enable_mz_notices() {
                 state.pack_optimizer_notices(
                     builtin_table_updates,

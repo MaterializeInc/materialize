@@ -252,6 +252,7 @@ impl Coordinator {
         let mut storage_sink_gids_to_drop = vec![];
         let mut indexes_to_drop = vec![];
         let mut indexes_to_create = vec![];
+        let mut metric_sinks_to_create = vec![];
         let mut compute_sinks_to_drop = vec![];
         let mut view_gids_to_drop = vec![];
         let mut secrets_to_drop = vec![];
@@ -453,8 +454,10 @@ impl Coordinator {
                     indexes_to_drop.push((index.cluster_id, index.global_id()));
                     dropped_item_names.insert(index.global_id(), full_name);
                 }
-                CatalogImplication::MetricSink(CatalogImplicationKind::Added(_metric_sink)) => {
-                    // TODO: Move metric-sink publication out of `create_metric_sink_finish`.
+                CatalogImplication::MetricSink(CatalogImplicationKind::Added(metric_sink)) => {
+                    if metric_sink.physical_plan.is_some() {
+                        metric_sinks_to_create.push(metric_sink);
+                    }
                 }
                 CatalogImplication::MetricSink(CatalogImplicationKind::Altered { .. }) => {
                     // Nothing to do: owner, privilege, and rename changes are catalog-only.
@@ -839,6 +842,14 @@ impl Coordinator {
                     .unwrap_or_default()
                     .into(),
             );
+        }
+
+        for sink in metric_sinks_to_create {
+            let plan = sink.physical_plan.expect("prepared metric sink plan");
+            let inputs =
+                crate::optimize::dataflows::dataflow_import_id_bundle(&plan, sink.cluster_id);
+            self.ship_new_dataflow(&inputs, (*plan).clone(), sink.cluster_id, None)
+                .await;
         }
 
         // Create VPC endpoints for AWS PrivateLink connections
