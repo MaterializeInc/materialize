@@ -20,3 +20,11 @@ rows:
         the `PUBLIC` role; may also have additional privileges via grants or
         default privileges. See [Access control
         control](/security/cloud/access-control/#roles-and-privileges).
+
+  - Organization role: "**Billing Admin**"
+    Description: |-
+      - **Console access**: Has access to billing and usage only (e.g., manage
+        payment methods and view invoices). Has no access to regions or
+        environments, and cannot create app passwords.
+
+      Intended for users who manage billing, not for service accounts.
