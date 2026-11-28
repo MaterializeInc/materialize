@@ -146,7 +146,7 @@ mod tests {
                 command("CREATE DATABASE IF NOT EXISTS replay_database"),
             ];
             let ts = catalog.current_upper().await;
-            let result = catalog.transact_commands(None, ts, None, &mut commands, &mut BTreeMap::new()).await.expect("schema must resolve the database created by the prefix");
+            let result = catalog.transact_commands(None, None, ts, None, &mut commands, &mut BTreeMap::new()).await.expect("schema must resolve the database created by the prefix");
             assert!(!result.catalog_updates.is_empty());
             let CatalogCommand::CreateNamespace(schema) = &commands[2] else { unreachable!("namespace command") };
             assert!(matches!(schema.skipped_notice(), Some(AdapterNotice::SchemaAlreadyExists { name }) if name == "replay_schema"));
@@ -164,7 +164,7 @@ mod tests {
             ];
             let ts = catalog.current_upper().await;
             let result = catalog
-                .transact_commands(None, ts, None, &mut commands, &mut BTreeMap::new())
+                .transact_commands(None, None, ts, None, &mut commands, &mut BTreeMap::new())
                 .await;
             assert!(result.is_err());
             assert!(catalog.state().resolve_database("aborted_database").is_err(), "failed schema creation must roll back the prefix");

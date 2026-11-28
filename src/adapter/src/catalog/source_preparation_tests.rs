@@ -411,7 +411,7 @@ async fn source_command_preserves_only_observed_outcomes() {
         loop {
             let ts = catalog.current_upper().await;
             match catalog
-                .transact_commands(None, ts, None, &mut commands, &mut responses)
+                .transact_commands(None, None, ts, None, &mut commands, &mut responses)
                 .await
             {
                 Ok(_) => {
@@ -424,7 +424,8 @@ async fn source_command_preserves_only_observed_outcomes() {
                 Err(CommandExecutionError::Pending { index, work }) => match work {
                     CommandWork::Connection(_)
                     | CommandWork::ConnectionSecret(_)
-                    | CommandWork::View(_) => {
+                    | CommandWork::View(_)
+                    | CommandWork::Index(_) => {
                         unreachable!("source command")
                     }
                     CommandWork::Prepare(request) => {

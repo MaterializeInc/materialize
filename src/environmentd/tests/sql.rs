@@ -738,6 +738,386 @@ async fn test_create_view_reuses_prepared_expression() {
     .expect("prepared view expression reuse timed out");
 }
 
+struct IndexPreparationCount(Arc<std::sync::atomic::AtomicUsize>);
+
+impl IndexPreparationCount {
+    fn install() -> Self {
+        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        fail::cfg_callback("catalog_index_optimize_ready", {
+            let count = Arc::clone(&count);
+            move || {
+                count.fetch_add(1, Ordering::SeqCst);
+                // Releasing the gate must leave the counter installed for retries.
+                let _ = fail::eval("test_index_preparation_gate", |_| ());
+            }
+        })
+        .unwrap();
+        Self(count)
+    }
+
+    fn get(&self) -> usize {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+
+impl Drop for IndexPreparationCount {
+    fn drop(&mut self) {
+        fail::remove("catalog_index_optimize_ready");
+    }
+}
+
+// These failpoints are process-global. Run this test in its own process (as nextest does).
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn test_create_index_replay_dropped_import() {
+    use mz_postgres_util::{Sql, batch_execute, query_one};
+
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let server = test_util::TestHarness::default().start().await;
+        let creator = server.connect().await.unwrap();
+        let ddl = server.connect().await.unwrap();
+        for sql in [
+            "CREATE TABLE t (a int)",
+            "INSERT INTO t VALUES (42)",
+            "CREATE INDEX oldreader ON t (a)",
+            "CREATE INDEX newindex ON t (a)",
+        ] {
+            batch_execute(&ddl, Sql::new(sql)).await.unwrap();
+        }
+        let adapter = server.inner.adapter_client();
+        let catalog = adapter.catalog_snapshot_expensive().await;
+        let old_id = catalog
+            .entries()
+            .find(|entry| entry.name().item == "oldreader")
+            .unwrap()
+            .latest_global_id();
+        let index = catalog
+            .entries()
+            .find(|entry| entry.name().item == "newindex")
+            .unwrap();
+        assert!(
+            index
+                .item()
+                .physical_plan()
+                .unwrap()
+                .index_imports
+                .contains_key(&old_id)
+        );
+        drop(catalog);
+        batch_execute(&ddl, Sql::new("DROP INDEX newindex"))
+            .await
+            .unwrap();
+
+        let prepared = IndexPreparationCount::install();
+        let (release, parked) = CatalogVisibilityGate::install("test_index_preparation_gate");
+        let create = task::spawn(|| "index import replay", async move {
+            batch_execute(&creator, Sql::new("CREATE INDEX newindex ON t (a)")).await
+        })
+        .abort_on_drop();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            parked.await.unwrap();
+            batch_execute(&ddl, Sql::new("DROP INDEX oldreader"))
+                .await
+                .unwrap();
+            assert!(!create.is_finished());
+        })
+        .await
+        .expect("import drop must commit while index optimization is blocked");
+        release.release();
+        create.await.unwrap();
+        assert_eq!(
+            prepared.get(),
+            2,
+            "a dropped import requires fresh preparation"
+        );
+
+        let catalog = adapter.catalog_snapshot_expensive().await;
+        let index = catalog
+            .entries()
+            .find(|entry| entry.name().item == "newindex")
+            .unwrap();
+        let new_id = index.latest_global_id().to_string();
+        let cluster_id = index.item().cluster_id().unwrap().to_string();
+        assert!(
+            index
+                .item()
+                .physical_plan()
+                .unwrap()
+                .index_imports
+                .is_empty()
+        );
+        drop(catalog);
+
+        // Controller state is synchronous with publication, unlike compute introspection.
+        let state: serde_json::Value = reqwest::Client::new()
+            .get(format!(
+                "http://{}/api/coordinator/dump",
+                server.internal_http_local_addr()
+            ))
+            .header("x-materialize-user", "mz_system")
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let collection = state["controller"]["compute"]["instances"][&cluster_id]["collections"]
+            [&new_id]
+            .as_str()
+            .expect("published index must have a controller collection");
+        assert_contains!(collection, "compute_dependencies: {}");
+        assert_eq!(
+            query_one(&ddl, Sql::new("SELECT a FROM t"), &[])
+                .await
+                .unwrap()
+                .get::<_, i32>(0),
+            42
+        );
+    })
+    .await
+    .expect("index import replay timed out");
+}
+
+// These failpoints are process-global. Run this test in its own process (as nextest does).
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn test_create_index_reuses_preparation_after_unrelated_ddl() {
+    use mz_postgres_util::{Sql, batch_execute, query_one};
+
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let server = test_util::TestHarness::default().start().await;
+        let creator = server.connect().await.unwrap();
+        let ddl = server.connect().await.unwrap();
+        batch_execute(&ddl, Sql::new("CREATE TABLE t (a int)"))
+            .await
+            .unwrap();
+        let prepared = IndexPreparationCount::install();
+        let (release, parked) = CatalogVisibilityGate::install("test_index_preparation_gate");
+        let create = task::spawn(|| "index preparation reuse", async move {
+            batch_execute(&creator, Sql::new("CREATE INDEX newindex ON t (a)")).await
+        })
+        .abort_on_drop();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            parked.await.unwrap();
+            for sql in [
+                "CREATE VIEW unrelated AS SELECT 1 AS a",
+                "ALTER VIEW unrelated RENAME TO renamed",
+            ] {
+                batch_execute(&ddl, Sql::new(sql)).await.unwrap();
+            }
+            assert!(!create.is_finished());
+        })
+        .await
+        .expect("unrelated DDL must commit while index optimization is blocked");
+        release.release();
+        create.await.unwrap();
+        assert_eq!(
+            prepared.get(),
+            1,
+            "unrelated DDL must not invalidate preparation"
+        );
+        assert_eq!(
+            query_one(
+                &ddl,
+                Sql::new("SELECT count(*) FROM mz_indexes WHERE name = 'newindex'"),
+                &[],
+            )
+            .await
+            .unwrap()
+            .get::<_, i64>(0),
+            1
+        );
+    })
+    .await
+    .expect("index preparation reuse timed out");
+}
+
+// These failpoints are process-global. Run this test in its own process (as nextest does).
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn test_create_index_replay_refreshes_renamed_index_notice() {
+    use std::sync::atomic::AtomicUsize;
+
+    use mz_postgres_util::{Sql, batch_execute, query_one};
+
+    struct RemoveHooks;
+    impl Drop for RemoveHooks {
+        fn drop(&mut self) {
+            fail::remove("catalog_index_expression_cached");
+        }
+    }
+
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let server = test_util::TestHarness::default()
+            .with_system_parameter_default("enable_mz_notices".into(), "true".into())
+            .with_system_parameter_default("enable_expression_cache".into(), "true".into())
+            .start()
+            .await;
+        let ddl = server.connect().await.unwrap();
+        for sql in ["CREATE TABLE t (a int)", "CREATE INDEX old_idx ON t (a)"] {
+            batch_execute(&ddl, Sql::new(sql)).await.unwrap();
+        }
+        let notices = Arc::new(Mutex::new(Vec::new()));
+        let creator = server
+            .connect()
+            .notice_callback({
+                let notices = Arc::clone(&notices);
+                move |notice| {
+                    notices.lock().unwrap().push(notice.message().to_string());
+                }
+            })
+            .await
+            .unwrap();
+        let _hooks = RemoveHooks;
+        let cached = Arc::new(AtomicUsize::new(0));
+        fail::cfg_callback("catalog_index_expression_cached", {
+            let cached = Arc::clone(&cached);
+            move || {
+                cached.fetch_add(1, Ordering::SeqCst);
+            }
+        })
+        .unwrap();
+        let prepared = IndexPreparationCount::install();
+        let (release, parked) = CatalogVisibilityGate::install("test_index_preparation_gate");
+        let create = task::spawn(|| "index notice replay", async move {
+            batch_execute(&creator, Sql::new("CREATE INDEX new_idx ON t (a)")).await
+        })
+        .abort_on_drop();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            parked.await.unwrap();
+            batch_execute(&ddl, Sql::new("ALTER INDEX old_idx RENAME TO renamed_idx"))
+                .await
+                .unwrap();
+            assert!(!create.is_finished());
+        })
+        .await
+        .expect("index rename must commit while index optimization is blocked");
+        release.release();
+        create.await.unwrap();
+        assert_eq!(
+            prepared.get(),
+            1,
+            "renaming an index must reuse preparation"
+        );
+        assert_eq!(
+            cached.load(Ordering::SeqCst),
+            2,
+            "the stale attempt and refreshed notice must both be cached before responding"
+        );
+
+        let catalog = server
+            .inner
+            .adapter_client()
+            .catalog_snapshot_expensive()
+            .await;
+        let global_id = catalog
+            .entries()
+            .find(|entry| entry.name().item == "new_idx")
+            .unwrap()
+            .latest_global_id()
+            .to_string();
+        drop(catalog);
+        let message: String = query_one(
+            &ddl,
+            Sql::new("SELECT message FROM mz_internal.mz_optimizer_notices WHERE object_id = $1"),
+            &[&global_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+        assert_contains!(message, "renamed_idx");
+        assert!(!message.contains("old_idx"), "{message}");
+        let notices = notices.lock().unwrap();
+        assert!(
+            notices
+                .iter()
+                .any(|message| message.contains("renamed_idx")),
+            "{notices:?}"
+        );
+        assert!(
+            notices.iter().all(|message| !message.contains("old_idx")),
+            "{notices:?}"
+        );
+    })
+    .await
+    .expect("index notice replay timed out");
+}
+
+// This failpoint is process-global. Run this test in its own process (as nextest does).
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn test_create_index_cancel_during_optimization() {
+    use mz_postgres_util::{PostgresError, Sql, batch_execute, query_one};
+
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let server = test_util::TestHarness::default().start().await;
+        let creator = server.connect().await.unwrap();
+        let cancel = server.connect().await.unwrap();
+        batch_execute(&creator, Sql::new("CREATE TABLE t (a int)"))
+            .await
+            .unwrap();
+        let pid: i32 = query_one(&creator, Sql::new("SELECT pg_backend_pid()"), &[])
+            .await
+            .unwrap()
+            .get(0);
+
+        let (release, parked) = CatalogVisibilityGate::install("catalog_index_optimize_ready");
+        let create = task::spawn(|| "cancel index optimization", async move {
+            let result = batch_execute(&creator, Sql::new("CREATE INDEX newindex ON t (a)")).await;
+            (creator, result)
+        })
+        .abort_on_drop();
+        let creator = tokio::time::timeout(Duration::from_secs(5), async {
+            parked.await.unwrap();
+            assert!(
+                query_one(
+                    &cancel,
+                    Sql::new("SELECT pg_cancel_backend($1::int4)"),
+                    &[&pid],
+                )
+                .await
+                .unwrap()
+                .get::<_, bool>(0)
+            );
+            let (creator, result) = create.await;
+            let PostgresError::Postgres(error) = result.unwrap_err() else {
+                panic!("expected a PostgreSQL cancellation error");
+            };
+            assert_eq!(error.unwrap_db_error().code(), &SqlState::QUERY_CANCELED);
+            creator
+        })
+        .await
+        .expect("cancellation must complete before releasing the optimizer");
+        release.release();
+
+        assert_eq!(
+            query_one(
+                &cancel,
+                Sql::new("SELECT count(*) FROM mz_indexes WHERE name = 'newindex'"),
+                &[],
+            )
+            .await
+            .unwrap()
+            .get::<_, i64>(0),
+            0
+        );
+        batch_execute(&creator, Sql::new("CREATE INDEX newindex ON t (a)"))
+            .await
+            .unwrap();
+        assert_eq!(
+            query_one(
+                &creator,
+                Sql::new("SELECT count(*) FROM mz_indexes WHERE name = 'newindex'"),
+                &[],
+            )
+            .await
+            .unwrap()
+            .get::<_, i64>(0),
+            1
+        );
+    })
+    .await
+    .expect("index optimization cancellation timed out");
+}
+
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
 async fn test_index_publication_and_notice_visibility() {
     use mz_postgres_util::{PostgresError, Sql, batch_execute, query_one};
