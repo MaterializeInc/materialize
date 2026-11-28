@@ -425,7 +425,7 @@ async fn source_command_preserves_only_observed_outcomes() {
                     CommandWork::Connection(_)
                     | CommandWork::ConnectionSecret(_)
                     | CommandWork::View(_)
-                    | CommandWork::Index(_) => {
+                    | CommandWork::Compute(_) => {
                         unreachable!("source command")
                     }
                     CommandWork::Prepare(request) => {

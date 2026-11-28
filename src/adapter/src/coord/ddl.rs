@@ -444,22 +444,28 @@ impl Coordinator {
     }
 
     #[instrument]
-    pub(super) async fn sequence_create_index_command(
+    pub(super) async fn sequence_create_compute_command(
         &mut self,
         mut ctx: ExecuteContext,
         statement: Arc<mz_sql::ast::Statement<mz_sql::ast::Raw>>,
         params: mz_sql::plan::Params,
     ) {
         ctx.finish_ddl_on_coordinator = true;
-        let mut command =
-            catalog::command::index::IndexStatement::new(statement, params, ctx.session().meta());
+        let mut command = catalog::command::compute::ComputeStatement::new(
+            statement,
+            params,
+            ctx.session().meta(),
+        );
         let compiled = match command.compile_create(self.catalog().state()) {
             Ok(compiled) => compiled,
             Err(error) => return ctx.retire(Err(error)),
         };
-        if let Err(error) = self
-            .prepare_command_execution(&mut ctx, &mz_sql::plan::Plan::CreateIndex(compiled.plan))
-        {
+        let response = match &compiled.plan {
+            mz_sql::plan::Plan::CreateIndex(_) => crate::ExecuteResponse::CreatedIndex,
+            mz_sql::plan::Plan::CreateMetricSink(_) => crate::ExecuteResponse::CreatedMetricSink,
+            _ => unreachable!("validated compute statement"),
+        };
+        if let Err(error) = self.prepare_command_execution(&mut ctx, &compiled.plan) {
             return ctx.retire(Err(error));
         }
         let ids = match self.allocate_user_id().await {
@@ -478,8 +484,8 @@ impl Coordinator {
         }
         let mut pending = PendingDdlCommit::statement(
             ctx,
-            crate::ExecuteResponse::CreatedIndex,
-            vec![catalog::command::CatalogCommand::CreateIndex(Arc::new(
+            response,
+            vec![catalog::command::CatalogCommand::CreateCompute(Arc::new(
                 command,
             ))],
         );
@@ -487,20 +493,14 @@ impl Coordinator {
         self.sequence_ddl_commit(pending).await;
     }
 
-    fn prepare_index_command(
+    fn prepare_compute_command(
         &self,
         mut pending: PendingDdlCommit,
         index: usize,
-        request: catalog::command::index::IndexWork,
+        request: catalog::command::compute::ComputeWork,
     ) {
         let repeated = !pending.preparations_started.insert(index);
-        let phase = if request.is_metadata_refresh() {
-            "index_notice_refresh"
-        } else if repeated {
-            "index_repreparation"
-        } else {
-            "index_preparation"
-        };
+        let (phase, canceled_phase) = request.phases(repeated);
         let duration = self
             .metrics
             .catalog_transact_phase_seconds
@@ -508,7 +508,7 @@ impl Coordinator {
         let canceled = self
             .metrics
             .catalog_transact_phase_seconds
-            .with_label_values(&["index_preparation_canceled"]);
+            .with_label_values(&[canceled_phase]);
         let started = Instant::now();
         let future = request.execute(
             self.catalog(),
@@ -518,15 +518,17 @@ impl Coordinator {
         let tx = self.internal_cmd_tx.clone();
         let otel_ctx = OpenTelemetryContext::obtain();
         task::spawn(
-            || "ddl_index_preparation",
+            || "ddl_compute_preparation",
             async move {
                 let mut cancellation = pending
                     .cancellation
                     .clone()
-                    .expect("index preparation is cancelable");
+                    .expect("compute preparation is cancelable");
                 tokio::select! {
                     response = future => {
-                        pending.responses.insert(index, catalog::CommandResponse::Index(response));
+                        pending.responses.insert(
+                            index, catalog::CommandResponse::Compute(response),
+                        );
                     }
                     _ = cancellation.wait_for(|canceled| *canceled) => {
                         canceled.observe(started.elapsed().as_secs_f64());
@@ -534,7 +536,9 @@ impl Coordinator {
                 }
                 duration.observe(started.elapsed().as_secs_f64());
                 if let Err(error) = tx.send(Message::DdlCommandsReady { pending, otel_ctx }) {
-                    warn!("internal_cmd_rx dropped before index preparation completed: {error:?}");
+                    warn!(
+                        "internal_cmd_rx dropped before compute preparation completed: {error:?}"
+                    );
                 }
             }
             .instrument(tracing::Span::current()),
@@ -760,11 +764,11 @@ impl Coordinator {
         if let catalog::command::CatalogCommand::DropObjects(command) = command {
             session.add_notices(command.adapter_notices().iter().cloned());
         }
-        if let catalog::command::CatalogCommand::CreateIndex(command) = command {
+        if let catalog::command::CatalogCommand::CreateCompute(command) = command {
             if let Some(name) = command.skipped_name() {
                 session.add_notice(crate::AdapterNotice::ObjectAlreadyExists {
                     name: name.to_owned(),
-                    ty: "index",
+                    ty: command.object_type(),
                 });
             } else {
                 crate::coord::sequencer::emit_optimizer_notices(
@@ -1182,9 +1186,9 @@ impl Coordinator {
                 Ok(()) => break Ok(()),
                 Err(catalog::CommandExecutionError::Error(error)) => break Err(error),
                 Err(catalog::CommandExecutionError::Pending { index, work }) => match work {
-                    catalog::CommandWork::Index(request) => {
+                    catalog::CommandWork::Compute(request) => {
                         self.release_ddl_lock(guard);
-                        self.prepare_index_command(pending, index, *request);
+                        self.prepare_compute_command(pending, index, *request);
                         return;
                     }
                     catalog::CommandWork::View(request) => {
@@ -1208,7 +1212,7 @@ impl Coordinator {
                             | catalog::command::CatalogCommand::CreateConnection(_)
                             | catalog::command::CatalogCommand::CreateView(_)
                             | catalog::command::CatalogCommand::CreateTable(_)
-                            | catalog::command::CatalogCommand::CreateIndex(_)
+                            | catalog::command::CatalogCommand::CreateCompute(_)
                             | catalog::command::CatalogCommand::DropObjects(_)
                             | catalog::command::CatalogCommand::CreateNamespace(_)
                             | catalog::command::CatalogCommand::Metadata(_) => {

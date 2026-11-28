@@ -24,11 +24,11 @@
 //! uses a pinned publication command instead of retrying its external mutation. Catalog
 //! rollback cannot undo either secret writes or changes in external services.
 
+pub(crate) mod compute;
 pub(crate) mod connection;
 pub(crate) mod drop;
 #[cfg(test)]
 mod drop_tests;
-pub(crate) mod index;
 pub(crate) mod metadata;
 pub(crate) mod namespace;
 pub(crate) mod source;
@@ -61,7 +61,7 @@ pub enum CatalogCommand {
     CreateConnection(Arc<connection::ConnectionStatement>),
     CreateView(Arc<view::ViewStatement>),
     CreateTable(Arc<table::TableStatement>),
-    CreateIndex(Arc<index::IndexStatement>),
+    CreateCompute(Arc<compute::ComputeStatement>),
     CreateNamespace(Arc<namespace::NamespaceStatement>),
     Metadata(Arc<metadata::MetadataStatement>),
     Source(Arc<source_statement::SourceCommand>),
@@ -94,14 +94,16 @@ impl CatalogCommand {
                 );
                 Ok(Arc::make_mut(command).compile(state, compute)?)
             }
-            Self::CreateIndex(command) => {
+            Self::CreateCompute(command) => {
                 let response = match response {
-                    Some(CommandResponse::Index(response)) => Some(response),
+                    Some(CommandResponse::Compute(response)) => Some(response),
                     None => None,
                     Some(_) => unreachable!("response belongs to its command"),
                 };
                 let compute = compute.ok_or_else(|| {
-                    AdapterError::Internal("index command requires live compute membership".into())
+                    AdapterError::Internal(
+                        "compute command requires live compute membership".into(),
+                    )
                 })?;
                 Arc::make_mut(command).compile(state, compute, index, response)
             }
@@ -172,7 +174,7 @@ impl CatalogCommand {
                     Some(
                         CommandResponse::Source(_)
                         | CommandResponse::View(_)
-                        | CommandResponse::Index(_),
+                        | CommandResponse::Compute(_),
                     ) => {
                         unreachable!("response belongs to its command")
                     }
@@ -228,7 +230,7 @@ impl CatalogCommand {
                         CommandResponse::Source(_)
                         | CommandResponse::ConnectionSecret(_)
                         | CommandResponse::View(_)
-                        | CommandResponse::Index(_),
+                        | CommandResponse::Compute(_),
                     ) => {
                         unreachable!("response belongs to its command")
                     }
@@ -280,7 +282,7 @@ impl CatalogCommand {
                         CommandResponse::Connection(_)
                         | CommandResponse::ConnectionSecret(_)
                         | CommandResponse::View(_)
-                        | CommandResponse::Index(_),
+                        | CommandResponse::Compute(_),
                     ) => {
                         unreachable!("response belongs to its command")
                     }
@@ -314,7 +316,7 @@ impl CatalogCommand {
             Self::Source(command) => command.notices(),
             Self::CreateView(command) => command.notices(),
             Self::CreateTable(command) => command.notices(),
-            Self::CreateIndex(command) => command.notices(),
+            Self::CreateCompute(command) => command.notices(),
             Self::DropObjects(command) => command.notices(),
             Self::CreateNamespace(command) => command.notices(),
             Self::Metadata(command) => command.notices(),

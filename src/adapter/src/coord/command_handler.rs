@@ -1582,8 +1582,12 @@ impl Coordinator {
             self.sequence_drop_objects_command(ctx, stmt, params).await;
             return;
         }
-        if matches!(&*stmt, Statement::CreateIndex(_)) {
-            self.sequence_create_index_command(ctx, stmt, params).await;
+        if matches!(
+            &*stmt,
+            Statement::CreateIndex(_) | Statement::CreateMetricSink(_)
+        ) {
+            self.sequence_create_compute_command(ctx, stmt, params)
+                .await;
             return;
         }
         if matches!(&*stmt, Statement::CreateView(_)) {
@@ -1844,6 +1848,7 @@ impl Coordinator {
             // Semantic replay validates the current names, dependencies and permissions.
             Statement::CreateView(_)
             | Statement::CreateIndex(_)
+            | Statement::CreateMetricSink(_)
             | Statement::CreateTable(_)
             | Statement::CreateDatabase(_)
             | Statement::CreateSchema(_) => false,
