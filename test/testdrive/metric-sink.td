@@ -75,6 +75,8 @@ contains:metric sink source column "value" is not of the required type
 
 > CREATE METRIC SINK s IN CLUSTER quickstart FROM v WITH (PREFIX = 'mz_metric_sink_e2e_')
 
+> CREATE METRIC SINK IF NOT EXISTS s IN CLUSTER quickstart FROM v WITH (PREFIX = 'mz_metric_sink_e2e_')
+
 # One family, two series: one per distinct label set.
 > SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
   WHERE metric_name = 'mz_metric_sink_e2e_mz_metric_sink_test_value'
