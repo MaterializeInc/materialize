@@ -800,10 +800,10 @@ async fn test_relation_drop_preserves_notices_on_failure() {
     let PostgresError::Postgres(error) = error else {
         panic!("expected a PostgreSQL dependency error");
     };
-    assert_eq!(
-        error.unwrap_db_error().code(),
-        &SqlState::DEPENDENT_OBJECTS_STILL_EXIST
-    );
+    let error = error.unwrap_db_error();
+    assert_eq!(error.code(), &SqlState::INTERNAL_ERROR);
+    assert_contains!(error.message(), "cannot drop table");
+    assert_contains!(error.message(), "still depended upon by view");
     assert_eq!(
         notices
             .lock()
