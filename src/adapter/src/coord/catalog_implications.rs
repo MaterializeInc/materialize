@@ -251,6 +251,7 @@ impl Coordinator {
         let mut replication_slots_to_drop: Vec<(PostgresConnection, String)> = vec![];
         let mut storage_sink_gids_to_drop = vec![];
         let mut indexes_to_drop = vec![];
+        let mut indexes_to_create = vec![];
         let mut compute_sinks_to_drop = vec![];
         let mut view_gids_to_drop = vec![];
         let mut secrets_to_drop = vec![];
@@ -427,7 +428,9 @@ impl Coordinator {
                     dropped_item_names.insert(sink.global_id(), full_name);
                 }
                 CatalogImplication::Index(CatalogImplicationKind::Added(index)) => {
-                    tracing::debug!(?index, "not handling AddIndex in here yet");
+                    if index.physical_plan.is_some() {
+                        indexes_to_create.push((catalog_id, index));
+                    }
                 }
                 CatalogImplication::Index(CatalogImplicationKind::Altered {
                     prev: prev_index,
@@ -451,9 +454,7 @@ impl Coordinator {
                     dropped_item_names.insert(index.global_id(), full_name);
                 }
                 CatalogImplication::MetricSink(CatalogImplicationKind::Added(_metric_sink)) => {
-                    // Nothing to do, mirroring `Index`: shipping the dataflow at create time is
-                    // the sequencer's job (`create_metric_sink_finish`), and re-rendering it after
-                    // a restart happens during bootstrap (`bootstrap_dataflow_plans`).
+                    // TODO: Move metric-sink publication out of `create_metric_sink_finish`.
                 }
                 CatalogImplication::MetricSink(CatalogImplicationKind::Altered { .. }) => {
                     // Nothing to do: owner, privilege, and rename changes are catalog-only.
@@ -813,6 +814,22 @@ impl Coordinator {
         // policy that might make the since advance.
         self.initialize_storage_collections(storage_policies_to_initialize)
             .await?;
+
+        for (item_id, index) in indexes_to_create {
+            let plan = index.physical_plan.expect("prepared index plan");
+            let inputs =
+                crate::optimize::dataflows::dataflow_import_id_bundle(&plan, index.cluster_id);
+            self.ship_new_dataflow(&inputs, (*plan).clone(), index.cluster_id, None)
+                .await;
+            self.update_compute_read_policy(
+                index.cluster_id,
+                item_id,
+                index
+                    .custom_logical_compaction_window
+                    .unwrap_or_default()
+                    .into(),
+            );
+        }
 
         // Create VPC endpoints for AWS PrivateLink connections
         if !vpc_endpoints_to_create.is_empty() {

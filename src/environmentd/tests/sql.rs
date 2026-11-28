@@ -738,6 +738,88 @@ async fn test_create_view_reuses_prepared_expression() {
     .expect("prepared view expression reuse timed out");
 }
 
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn test_index_publication_and_notice_visibility() {
+    use mz_postgres_util::{PostgresError, Sql, batch_execute, query_one};
+
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let server = test_util::TestHarness::default()
+            .with_system_parameter_default("enable_mz_notices".into(), "true".into())
+            .start()
+            .await;
+        let client = server.connect().await.unwrap();
+        for sql in [
+            "CREATE TABLE notice_table (a int)",
+            "CREATE INDEX notice_index ON notice_table (a)",
+            "CREATE INDEX duplicate_notice_index ON notice_table (a)",
+        ] {
+            batch_execute(&client, Sql::new(sql)).await.unwrap();
+        }
+        let catalog = server
+            .inner
+            .adapter_client()
+            .catalog_snapshot_expensive()
+            .await;
+        let index = catalog
+            .entries()
+            .find(|entry| entry.name().item == "duplicate_notice_index")
+            .unwrap();
+        let global_id = index.latest_global_id().to_string();
+        assert!(index.item().optimized_plan().is_some());
+        assert!(index.item().physical_plan().is_some());
+        assert!(index.item().dataflow_metainfo().is_some());
+        drop(catalog);
+        let notice_query =
+            "SELECT count(*) FROM mz_internal.mz_optimizer_notices WHERE object_id = $1";
+        assert_eq!(
+            query_one(&client, Sql::new(notice_query), &[&global_id])
+                .await
+                .unwrap()
+                .get::<_, i64>(0),
+            1
+        );
+        let PostgresError::Postgres(error) =
+            batch_execute(&client, Sql::new("DROP INDEX notice_index"))
+                .await
+                .unwrap_err()
+        else {
+            panic!("expected an installed index reader to prevent the drop");
+        };
+        assert_eq!(
+            error.unwrap_db_error().code(),
+            &SqlState::DEPENDENT_OBJECTS_STILL_EXIST
+        );
+        batch_execute(
+            &client,
+            Sql::new("CREATE INDEX IF NOT EXISTS duplicate_notice_index ON notice_table (a)"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            query_one(&client, Sql::new(notice_query), &[&global_id])
+                .await
+                .unwrap()
+                .get::<_, i64>(0),
+            1
+        );
+        batch_execute(&client, Sql::new("DROP INDEX duplicate_notice_index"))
+            .await
+            .unwrap();
+        assert_eq!(
+            query_one(&client, Sql::new(notice_query), &[&global_id])
+                .await
+                .unwrap()
+                .get::<_, i64>(0),
+            0
+        );
+        batch_execute(&client, Sql::new("DROP INDEX notice_index"))
+            .await
+            .unwrap();
+    })
+    .await
+    .expect("index publication test timed out");
+}
+
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 async fn test_timeline_holds_across_catalog_changes() {
     use mz_postgres_util::{Sql, batch_execute, query_one};

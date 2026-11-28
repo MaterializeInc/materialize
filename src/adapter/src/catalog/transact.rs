@@ -85,7 +85,9 @@ use crate::catalog::{
 };
 use crate::config::{ScopedParameters, ScopedParametersScope};
 use crate::coord::ConnMeta;
-use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdate;
+use crate::coord::catalog_implications::parsed_state_updates::{
+    ParsedStateUpdate, ParsedStateUpdateKind,
+};
 use crate::util::ResultExt;
 
 /// A manually injected audit event.
@@ -1087,6 +1089,7 @@ impl Catalog {
         }
 
         let mut cached_exprs = BTreeMap::new();
+        let mut prepared_indexes = BTreeMap::new();
 
         let mut storage_collections_to_create = BTreeSet::new();
         let mut storage_collections_to_drop = BTreeSet::new();
@@ -1148,6 +1151,21 @@ impl Catalog {
                 execution = remaining;
             }
             let ops = execution.take_ops();
+            for op in &ops {
+                if let Op::CreateItem {
+                    id,
+                    item: CatalogItem::Index(index),
+                    ..
+                } = op
+                {
+                    if index.optimized_plan.is_some()
+                        && index.physical_plan.is_some()
+                        && index.dataflow_metainfo.is_some()
+                    {
+                        prepared_indexes.insert(*id, index.clone());
+                    }
+                }
+            }
             let temporary_ids = preliminary_state
                 .temporary_ids(&ops)
                 .map_err(AdapterError::from)?;
@@ -1273,6 +1291,45 @@ impl Catalog {
                 .resolve_builtin_table_updates(op_builtin_table_updates);
             builtin_table_updates.extend(op_builtin_table_updates);
             parsed_catalog_updates.extend(op_catalog_updates);
+        }
+
+        // Durable SQL reconstructs index definitions without their prepared plans.
+        // Install only surviving additions, before the committed diff drives publication.
+        for update in parsed_catalog_updates.iter_mut() {
+            if update.diff != mz_catalog::memory::objects::StateDiff::Addition {
+                continue;
+            }
+            let ParsedStateUpdateKind::Item {
+                durable_item,
+                parsed_item,
+                ..
+            } = &mut update.kind
+            else {
+                continue;
+            };
+            let Some(index) = prepared_indexes.remove(&durable_item.id) else {
+                continue;
+            };
+            let global_id = index.global_id;
+            let state = state.to_mut();
+            state.set_optimized_plan(
+                global_id,
+                (*index.optimized_plan.expect("prepared MIR")).clone(),
+            );
+            state.set_physical_plan(
+                global_id,
+                (*index.physical_plan.expect("prepared LIR")).clone(),
+            );
+            let metainfo = index.dataflow_metainfo.expect("prepared notices");
+            if state.system_config().enable_mz_notices() {
+                state.pack_optimizer_notices(
+                    builtin_table_updates,
+                    metainfo.optimizer_notices.iter(),
+                    mz_repr::Diff::ONE,
+                );
+            }
+            state.set_dataflow_metainfo(global_id, metainfo);
+            *parsed_item = state.get_entry(&durable_item.id).item().clone();
         }
 
         match state {
