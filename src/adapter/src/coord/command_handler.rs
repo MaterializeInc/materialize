@@ -1574,7 +1574,7 @@ impl Coordinator {
                 .await;
             return;
         }
-        if matches!(&*stmt, Statement::CreateRole(_) | Statement::Comment(_)) {
+        if catalog::command::metadata::MetadataStatement::supports_statement(&stmt) {
             self.sequence_metadata_command(ctx, stmt, params).await;
             return;
         }
@@ -1846,9 +1846,10 @@ impl Coordinator {
             | Statement::CreateIndex(_)
             | Statement::CreateTable(_)
             | Statement::CreateDatabase(_)
-            | Statement::CreateSchema(_)
-            | Statement::CreateRole(_)
-            | Statement::Comment(_) => false,
+            | Statement::CreateSchema(_) => false,
+            stmt if catalog::command::metadata::MetadataStatement::supports_statement(stmt) => {
+                false
+            }
             // Secrets have a small and understood set of dependencies, and their off-thread work
             // interacts with k8s.
             Statement::AlterSecret(_) => false,

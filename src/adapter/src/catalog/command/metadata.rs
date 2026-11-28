@@ -14,7 +14,7 @@ use std::sync::Arc;
 use mz_adapter_types::dyncfgs::ENABLE_PASSWORD_AUTH;
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::RoleAttributesRaw;
-use mz_sql::plan::{Params, Plan, PlanNotice};
+use mz_sql::plan::{NetworkPolicyRule, Params, Plan, PlanNotice};
 use mz_sql::session::metadata::SessionMetadata;
 
 use crate::AdapterError;
@@ -32,6 +32,18 @@ pub struct MetadataStatement {
 }
 
 impl MetadataStatement {
+    pub(crate) fn supports_statement(statement: &Statement<Raw>) -> bool {
+        matches!(
+            statement,
+            Statement::CreateRole(_)
+                | Statement::Comment(_)
+                | Statement::CreateQueryPolicy(_)
+                | Statement::AlterQueryPolicy(_)
+                | Statement::CreateNetworkPolicy(_)
+                | Statement::AlterNetworkPolicy(_)
+        )
+    }
+
     pub(crate) fn new(
         statement: Arc<Statement<Raw>>,
         params: Params,
@@ -52,7 +64,12 @@ impl MetadataStatement {
         let (plan, _, notices) =
             super::plan_command(state, &self.statement, &self.params, &self.session)?;
         match plan {
-            Plan::CreateRole(_) | Plan::Comment(_) => Ok((plan, notices)),
+            Plan::CreateRole(_)
+            | Plan::Comment(_)
+            | Plan::CreateQueryPolicy(_)
+            | Plan::AlterQueryPolicy(_)
+            | Plan::CreateNetworkPolicy(_)
+            | Plan::AlterNetworkPolicy(_) => Ok((plan, notices)),
             _ => Err(AdapterError::Unsupported("non-metadata statement intent")),
         }
     }
@@ -75,6 +92,33 @@ impl MetadataStatement {
                 sub_component: plan.sub_component,
                 comment: plan.comment,
             },
+            Plan::CreateQueryPolicy(plan) => Op::CreateQueryPolicy {
+                name: plan.name,
+                mode: plan.mode,
+                rules: plan.rules,
+                owner_id: *self.session.current_role_id(),
+            },
+            Plan::AlterQueryPolicy(plan) => Op::AlterQueryPolicy {
+                id: plan.id,
+                mode: plan.mode,
+                rules: plan.rules,
+            },
+            Plan::CreateNetworkPolicy(plan) => Op::CreateNetworkPolicy {
+                name: plan.name,
+                rules: plan.rules,
+                owner_id: *self.session.current_role_id(),
+            },
+            Plan::AlterNetworkPolicy(plan) => {
+                if state.system_config().default_network_policy_name() == plan.name {
+                    validate_network_policy_change(&self.session, &plan.rules)?;
+                }
+                Op::AlterNetworkPolicy {
+                    id: plan.id,
+                    name: plan.name,
+                    rules: plan.rules,
+                    owner_id: *self.session.current_role_id(),
+                }
+            }
             _ => unreachable!("metadata plan validated"),
         };
         let ops = vec![op];
@@ -105,6 +149,23 @@ pub(crate) fn validate_role_attributes(
         }
     }
     Ok(())
+}
+
+/// Rejects rules that would lock out the invoking non-internal session.
+pub(crate) fn validate_network_policy_change(
+    session: &SessionMeta,
+    rules: &Vec<NetworkPolicyRule>,
+) -> Result<(), AdapterError> {
+    if session.user().is_internal() {
+        return Ok(());
+    }
+    let ip = session
+        .client_ip()
+        .ok_or(AdapterError::NetworkPolicyDenied(
+            crate::coord::NetworkPolicyError::MissingIp,
+        ))?;
+    crate::coord::validate_ip_with_policy_rules(ip, rules)
+        .map_err(|_| AdapterError::PlanError(mz_sql::plan::PlanError::NetworkPolicyLockoutError))
 }
 
 #[cfg(test)]
@@ -247,3 +308,6 @@ mod tests {
         .await;
     }
 }
+
+#[cfg(test)]
+mod policy_tests;

@@ -46,7 +46,7 @@ use mz_sql::names::{
     ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, ResolvedItemName,
     SchemaSpecifier, SystemObjectId,
 };
-use mz_sql::plan::{AlterMaterializedViewApplyReplacementPlan, NetworkPolicyRule};
+use mz_sql::plan::AlterMaterializedViewApplyReplacementPlan;
 use mz_storage_types::sinks::StorageSinkDesc;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_sql::plan::{
@@ -82,9 +82,8 @@ use crate::coord::appends::{BuiltinTableAppendNotify, PendingWriteTxn, UserWrite
 use crate::coord::sequencer::emit_optimizer_notices;
 use crate::coord::{
     AlterMaterializedViewReadyContext, AlterSinkReadyContext, Coordinator, DeferredDdl,
-    ExecuteContext, Message, NetworkPolicyError, PendingReadTxn, PendingTxn, PendingTxnResponse,
-    PlanValidity, StageResult, Staged, StagedContext, WatchSetResponse,
-    validate_ip_with_policy_rules,
+    ExecuteContext, Message, PendingReadTxn, PendingTxn, PendingTxnResponse, PlanValidity,
+    StageResult, Staged, StagedContext, WatchSetResponse,
 };
 use crate::error::AdapterError;
 use crate::notice::{AdapterNotice, DroppedInUseIndex, InFlightIndexReaders};
@@ -533,7 +532,7 @@ impl Coordinator {
             self.catalog().system_config().default_network_policy_name();
         // Check if the way we're alerting the policy is still valid for the current connection.
         if current_network_policy_name == name {
-            self.validate_alter_network_policy(session, &rules)?;
+            catalog::command::metadata::validate_network_policy_change(&session.meta(), &rules)?;
         }
 
         let op = catalog::Op::AlterNetworkPolicy {
@@ -2331,34 +2330,10 @@ impl Coordinator {
                 },
             )));
         };
-        self.validate_alter_network_policy(session, &network_policy.rules)
-    }
-
-    /// Validates that a set of [`NetworkPolicyRule`]s is valid for the current [`Session`].
-    ///
-    /// This helps prevent users from modifying network policies in a way that would lock out their
-    /// current connection.
-    fn validate_alter_network_policy(
-        &self,
-        session: &Session,
-        policy_rules: &Vec<NetworkPolicyRule>,
-    ) -> Result<(), AdapterError> {
-        // If the user is not an internal user attempt to protect them from
-        // blocking themselves.
-        if session.user().is_internal() {
-            return Ok(());
-        }
-        if let Some(ip) = session.meta().client_ip() {
-            validate_ip_with_policy_rules(ip, policy_rules)
-                .map_err(|_| AdapterError::PlanError(plan::PlanError::NetworkPolicyLockoutError))?;
-        } else {
-            // Sessions without IPs are only temporarily constructed for default values
-            // they should not be permitted here.
-            return Err(AdapterError::NetworkPolicyDenied(
-                NetworkPolicyError::MissingIp,
-            ));
-        }
-        Ok(())
+        catalog::command::metadata::validate_network_policy_change(
+            &session.meta(),
+            &network_policy.rules,
+        )
     }
 
     #[instrument]

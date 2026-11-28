@@ -378,6 +378,16 @@ impl Coordinator {
         let response = match plan {
             mz_sql::plan::Plan::CreateRole(_) => crate::ExecuteResponse::CreatedRole,
             mz_sql::plan::Plan::Comment(_) => crate::ExecuteResponse::Comment,
+            mz_sql::plan::Plan::CreateQueryPolicy(_) => crate::ExecuteResponse::CreatedQueryPolicy,
+            mz_sql::plan::Plan::AlterQueryPolicy(_) => {
+                crate::ExecuteResponse::AlteredObject(mz_sql::catalog::ObjectType::QueryPolicy)
+            }
+            mz_sql::plan::Plan::CreateNetworkPolicy(_) => {
+                crate::ExecuteResponse::CreatedNetworkPolicy
+            }
+            mz_sql::plan::Plan::AlterNetworkPolicy(_) => {
+                crate::ExecuteResponse::AlteredObject(mz_sql::catalog::ObjectType::NetworkPolicy)
+            }
             _ => unreachable!("metadata plan validated"),
         };
         self.sequence_ddl_commit(PendingDdlCommit::statement(
