@@ -766,6 +766,121 @@ impl Drop for IndexPreparationCount {
     }
 }
 
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn test_relation_drop_preserves_notices_on_failure() {
+    use mz_postgres_util::{PostgresError, Sql, batch_execute};
+
+    let server = test_util::TestHarness::default().start().await;
+    let notices = Arc::new(Mutex::new(Vec::new()));
+    let client = server
+        .connect()
+        .notice_callback({
+            let notices = Arc::clone(&notices);
+            move |notice| {
+                notices
+                    .lock()
+                    .expect("notice lock")
+                    .push(notice.message().to_string())
+            }
+        })
+        .await
+        .expect("connect drop client");
+    for sql in ["CREATE TABLE t (a int)", "CREATE VIEW v AS SELECT * FROM t"] {
+        batch_execute(&client, Sql::new(sql))
+            .await
+            .expect("create dependency graph");
+    }
+    notices.lock().expect("notice lock").clear();
+    let error = batch_execute(
+        &client,
+        Sql::new("DROP TABLE IF EXISTS missing_table, t RESTRICT"),
+    )
+    .await
+    .expect_err("the dependent view must prevent DROP");
+    let PostgresError::Postgres(error) = error else {
+        panic!("expected a PostgreSQL dependency error");
+    };
+    let error = error.unwrap_db_error();
+    assert_eq!(error.code(), &SqlState::INTERNAL_ERROR);
+    assert_contains!(error.message(), "cannot drop table");
+    assert_contains!(error.message(), "still depended upon by view");
+    assert_eq!(
+        notices
+            .lock()
+            .expect("notice lock")
+            .iter()
+            .filter(|notice| notice.contains("missing_table") && notice.contains("does not exist"))
+            .count(),
+        1,
+        "a final planning error must deliver its missing-object notice exactly once"
+    );
+    batch_execute(&client, Sql::new("SELECT * FROM v"))
+        .await
+        .expect("failed DROP preserves dependency graph");
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn test_relation_drop_retains_subscribe_reader_category() {
+    use mz_postgres_util::{Sql, batch_execute, query_one};
+
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let server = test_util::TestHarness::default().start().await;
+        let subscriber = server.connect().await.expect("connect subscriber");
+        let notices = Arc::new(Mutex::new(Vec::new()));
+        let ddl = server
+            .connect()
+            .notice_callback({
+                let notices = Arc::clone(&notices);
+                move |notice| {
+                    notices
+                        .lock()
+                        .expect("notice lock")
+                        .push(notice.message().to_string())
+                }
+            })
+            .await
+            .expect("connect drop client");
+        for sql in [
+            "CREATE TABLE t (a int)",
+            "CREATE INDEX i ON t (a)",
+            "INSERT INTO t VALUES (1)",
+        ] {
+            batch_execute(&ddl, Sql::new(sql))
+                .await
+                .expect("create indexed input");
+        }
+        batch_execute(
+            &subscriber,
+            Sql::new("BEGIN; DECLARE c CURSOR FOR SUBSCRIBE t"),
+        )
+        .await
+        .expect("declare subscribe cursor");
+        query_one(&subscriber, Sql::new("FETCH 1 c"), &[])
+            .await
+            .expect("snapshot row confirms the transient reader is installed");
+        notices.lock().expect("notice lock").clear();
+        batch_execute(&ddl, Sql::new("DROP TABLE t CASCADE"))
+            .await
+            .expect("drop input and its index");
+        let notices = notices.lock().expect("notice lock");
+        assert_eq!(
+            notices
+                .iter()
+                .filter(|notice| notice.contains("transient dataflows"))
+                .count(),
+            1
+        );
+        let readers = notices
+            .iter()
+            .find(|notice| notice.contains("transient dataflows"))
+            .expect("dropping the active input reports its index reader");
+        assert_contains!(readers, "1 in-progress SUBSCRIBE statement");
+        assert!(!readers.contains("SELECT statement"), "{readers}");
+    })
+    .await
+    .expect("subscribe reader classification timed out");
+}
+
 // These failpoints are process-global. Run this test in its own process (as nextest does).
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
 async fn test_create_index_replay_dropped_import() {

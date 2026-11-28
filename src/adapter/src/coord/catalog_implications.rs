@@ -889,6 +889,8 @@ impl Coordinator {
             .iter()
             .copied()
             .chain(indexes_to_drop.iter().map(|(_, gid)| *gid))
+            .chain(sources_to_drop.iter().map(|(_, gid)| *gid))
+            .chain(compute_sinks_to_drop.iter().map(|(_, gid)| *gid))
             .collect();
         if !expression_cache_invalidations.is_empty() {
             let _completion = self.catalog().update_expression_cache(
