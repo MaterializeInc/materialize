@@ -269,18 +269,25 @@ mod tests {
             session.initialize_role_metadata(mz_sql::session::user::MZ_SYSTEM_ROLE_ID);
             session
                 .start_transaction(mz_ore::now::to_datetime(1000), None, None)
-                .unwrap();
+                .expect("start invoking transaction");
             let raw = mz_sql_parser::parser::parse_statements(
                 "CREATE VIEW materialize.public.prepared_view AS SELECT 1 AS a",
             )
-            .unwrap()
+            .expect("parse view statement")
             .remove(0)
             .ast;
             let mut command = ViewStatement::new(Arc::new(raw), Params::empty(), session.meta());
             let ts = catalog.current_upper().await;
-            let ids = catalog.allocate_user_ids(1, ts).await.unwrap().remove(0);
+            let ids = catalog
+                .allocate_user_ids(1, ts)
+                .await
+                .expect("allocate view IDs")
+                .remove(0);
             command.allocate_create(ids);
-            let ViewResolution::Prepare(original) = command.resolve(&state, None).unwrap() else {
+            let ViewResolution::Prepare(original) = command
+                .resolve(&state, None)
+                .expect("resolve initial preparation")
+            else {
                 panic!("first execution must request preparation");
             };
             let original_flag = state.system_config().enable_new_outer_join_lowering();
@@ -290,7 +297,7 @@ mod tests {
                     "enable_new_outer_join_lowering",
                     VarInput::Flat(if original_flag { "false" } else { "true" }),
                 )
-                .unwrap();
+                .expect("change optimizer configuration");
             let ViewResolution::Prepare(current) = command
                 .resolve(
                     &state,
@@ -316,7 +323,7 @@ mod tests {
 
             let optimized = crate::optimize::view::Optimizer::new(current.config.clone(), None)
                 .optimize(current.expr.clone())
-                .unwrap();
+                .expect("optimize current view");
             assert!(matches!(
                 command
                     .resolve(
@@ -326,17 +333,19 @@ mod tests {
                             result: Ok(optimized.clone()),
                         })
                     )
-                    .unwrap(),
+                    .expect("accept current preparation"),
                 ViewResolution::Ready { .. }
             ));
 
             state
                 .system_config_mut()
                 .set("max_tables", VarInput::Flat("999"))
-                .unwrap();
+                .expect("change unrelated limit");
             assert!(
                 matches!(
-                    command.resolve(&state, None).unwrap(),
+                    command
+                        .resolve(&state, None)
+                        .expect("reuse current preparation"),
                     ViewResolution::Ready { .. }
                 ),
                 "unrelated configuration changes must reuse preparation"
@@ -348,7 +357,7 @@ mod tests {
                     "enable_new_outer_join_lowering",
                     VarInput::Flat(if original_flag { "true" } else { "false" }),
                 )
-                .unwrap();
+                .expect("restore optimizer configuration");
             assert!(
                 matches!(
                     command
@@ -359,7 +368,7 @@ mod tests {
                                 result: Ok(optimized),
                             })
                         )
-                        .unwrap(),
+                        .expect("reject obsolete success"),
                     ViewResolution::Prepare(_)
                 ),
                 "neither a late success nor retained preparation may bypass current inputs"

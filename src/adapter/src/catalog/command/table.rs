@@ -143,19 +143,26 @@ mod tests {
             session.initialize_role_metadata(mz_sql::session::user::MZ_SYSTEM_ROLE_ID);
             session
                 .start_transaction(mz_ore::now::to_datetime(1000), None, None)
-                .unwrap();
+                .expect("start invoking transaction");
             let raw = mz_sql_parser::parser::parse_statements(
                 "CREATE TABLE IF NOT EXISTS materialize.public.replayed_table (a int DEFAULT 7)",
             )
-            .unwrap()
+            .expect("parse table statement")
             .remove(0)
             .ast;
             let mut command = TableStatement::new(Arc::new(raw), Params::empty(), session.meta());
-            let original = command.compile_create(catalog.state()).unwrap().plan.name;
+            let original = command
+                .compile_create(catalog.state())
+                .expect("plan initial table")
+                .plan
+                .name;
             let ts = catalog.current_upper().await;
-            let mut allocated = catalog.allocate_user_ids(2, ts).await.unwrap();
-            let contender_ids = allocated.pop().unwrap();
-            let ids = allocated.pop().unwrap();
+            let mut allocated = catalog
+                .allocate_user_ids(2, ts)
+                .await
+                .expect("allocate both table IDs");
+            let contender_ids = allocated.pop().expect("contender IDs were allocated");
+            let ids = allocated.pop().expect("first table IDs were allocated");
             let mut contender = command.clone();
             contender.allocate_create(contender_ids);
             command.allocate_create(ids);
@@ -181,14 +188,14 @@ mod tests {
                     ],
                 )
                 .await
-                .unwrap();
+                .expect("replace destination schema");
 
             let mut commands = [CatalogCommand::CreateTable(Arc::new(command))];
             let ts = catalog.current_upper().await;
             let created = catalog
                 .transact_commands(None, ts, None, &mut commands, &mut BTreeMap::new())
                 .await
-                .unwrap();
+                .expect("commit table in current schema");
             assert!(!created.catalog_updates.is_empty());
             let entry = catalog.get_entry(&ids.0);
             assert_ne!(
@@ -203,7 +210,7 @@ mod tests {
             limited
                 .system_config_mut()
                 .set("max_tables", mz_sql::session::vars::VarInput::Flat("0"))
-                .unwrap();
+                .expect("exhaust table quota");
             assert!(
                 matches!(
                     contender.compile(&limited),
@@ -216,7 +223,7 @@ mod tests {
             let skipped = catalog
                 .transact_commands(None, ts, None, &mut commands, &mut BTreeMap::new())
                 .await
-                .unwrap();
+                .expect("skip current name collision");
             assert!(
                 skipped.catalog_updates.is_empty(),
                 "IF NOT EXISTS must not publish a new object"
