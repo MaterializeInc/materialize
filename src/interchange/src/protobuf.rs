@@ -29,6 +29,7 @@ impl DecodedDescriptors {
     /// Builds a `DecodedDescriptors` from an encoded `FileDescriptorSet` and
     /// the fully qualified name of a message inside that file descriptor set.
     pub fn from_bytes(bytes: &[u8], message_name: String) -> Result<Self, anyhow::Error> {
+        check_nesting_depth(bytes, MAX_DESCRIPTOR_DEPTH)?;
         let fds = DescriptorPool::decode(bytes).context("decoding file descriptor set")?;
         let message_descriptor = fds.get_message_by_name(&message_name).ok_or_else(|| {
             anyhow!(
@@ -59,6 +60,107 @@ impl DecodedDescriptors {
     pub fn columns(&self) -> &[(ColumnName, SqlColumnType)] {
         &self.columns
     }
+}
+
+/// The deepest message nesting accepted in an encoded `FileDescriptorSet`.
+///
+/// The workspace disables prost's recursion limit, so decoding recurses once
+/// per level. Debug builds decode about twice this depth on a 2 MiB stack.
+/// protoc caps message declarations at 32 levels but not option values, so
+/// only option values nested hundreds deep hit this. Stored sources are
+/// planned again on restart, so lowering it can reject descriptors that
+/// already decode.
+const MAX_DESCRIPTOR_DEPTH: usize = 256;
+
+/// Rejects encoded protobuf whose message nesting may exceed `max_depth`.
+///
+/// Without a schema, a nested message and a byte string look the same on the
+/// wire, so every length-delimited field that parses as fields counts as a
+/// level, as does every group. That over-estimates the depth any decoder
+/// reaches. Malformed input is left for the decoder to report.
+fn check_nesting_depth(bytes: &[u8], max_depth: usize) -> Result<(), anyhow::Error> {
+    // End offset and open group count of each enclosing message.
+    let mut stack = vec![(bytes.len(), 0usize)];
+    let mut depth = 1;
+    let mut pos = 0;
+    while let Some(&(end, _)) = stack.last() {
+        if pos >= end {
+            let (_, groups) = stack.pop().expect("stack is non-empty");
+            depth -= 1 + groups;
+            pos = end;
+            continue;
+        }
+        let top = stack.last_mut().expect("stack is non-empty");
+        match read_field(&bytes[..end], pos) {
+            Some((next, WireField::Scalar)) => pos = next,
+            Some((next, WireField::LengthDelimited { end })) => {
+                stack.push((end, 0));
+                depth += 1;
+                pos = next;
+            }
+            Some((next, WireField::StartGroup)) => {
+                top.1 += 1;
+                depth += 1;
+                pos = next;
+            }
+            Some((next, WireField::EndGroup)) if top.1 > 0 => {
+                top.1 -= 1;
+                depth -= 1;
+                pos = next;
+            }
+            // Not a message, so the rest of this field is opaque bytes.
+            Some((_, WireField::EndGroup)) | None => pos = end,
+        }
+        if depth > max_depth {
+            bail!("protobuf descriptors nest deeper than {max_depth} levels");
+        }
+    }
+    Ok(())
+}
+
+enum WireField {
+    Scalar,
+    LengthDelimited { end: usize },
+    StartGroup,
+    EndGroup,
+}
+
+/// Reads the field key at `pos` and skips a scalar value, returning the offset
+/// of whatever follows.
+fn read_field(buf: &[u8], pos: usize) -> Option<(usize, WireField)> {
+    let (key, pos) = read_varint(buf, pos)?;
+    if key >> 3 == 0 {
+        return None;
+    }
+    let skip = |len: usize| pos.checked_add(len).filter(|&next| next <= buf.len());
+    match key & 7 {
+        0 => Some((read_varint(buf, pos)?.1, WireField::Scalar)),
+        1 => Some((skip(8)?, WireField::Scalar)),
+        2 => {
+            let (len, start) = read_varint(buf, pos)?;
+            let end = start
+                .checked_add(usize::try_from(len).ok()?)
+                .filter(|&end| end <= buf.len())?;
+            Some((start, WireField::LengthDelimited { end }))
+        }
+        3 => Some((pos, WireField::StartGroup)),
+        4 => Some((pos, WireField::EndGroup)),
+        5 => Some((skip(4)?, WireField::Scalar)),
+        _ => None,
+    }
+}
+
+fn read_varint(buf: &[u8], mut pos: usize) -> Option<(u64, usize)> {
+    let mut value = 0;
+    for shift in (0..64).step_by(7) {
+        let byte = *buf.get(pos)?;
+        pos += 1;
+        value |= u64::from(byte & 0x7f) << shift;
+        if byte & 0x80 == 0 {
+            return Some((value, pos));
+        }
+    }
+    None
 }
 
 /// Decodes a particular Protobuf message from its wire format.
@@ -237,4 +339,70 @@ fn pack_value(
         ),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use prost_reflect::prost::Message;
+    use prost_reflect::prost_types::{DescriptorProto, FileDescriptorProto, FileDescriptorSet};
+
+    use super::*;
+
+    /// Wraps `inner` in `levels` messages, each holding the next in field 1.
+    fn nest(levels: usize, inner: Vec<u8>) -> Vec<u8> {
+        (0..levels).fold(inner, |inner, _| {
+            let mut outer = vec![0x0a];
+            prost_reflect::prost::encoding::encode_varint(
+                u64::try_from(inner.len()).expect("fits"),
+                &mut outer,
+            );
+            outer.extend(inner);
+            outer
+        })
+    }
+
+    #[mz_ore::test]
+    fn nesting_depth_limit() {
+        assert!(check_nesting_depth(&nest(9, vec![]), 10).is_ok());
+        assert!(check_nesting_depth(&nest(10, vec![]), 10).is_err());
+
+        // Groups count too: field 1 start group (0x0b) and end group (0x0c).
+        let groups = [vec![0x0b; 10], vec![0x0c; 10]].concat();
+        assert!(check_nesting_depth(&groups, 10).is_err());
+        assert!(check_nesting_depth(&groups, 11).is_ok());
+
+        // Byte strings that don't parse as fields are opaque.
+        assert!(check_nesting_depth(&nest(1, vec![0xff; 4]), 2).is_ok());
+    }
+
+    #[mz_ore::test]
+    fn deeply_nested_descriptors() {
+        let descriptors = |levels: usize| {
+            let message =
+                (0..levels).fold(DescriptorProto::default(), |inner, _| DescriptorProto {
+                    name: Some("M".into()),
+                    nested_type: vec![inner],
+                    ..Default::default()
+                });
+            FileDescriptorSet {
+                file: vec![FileDescriptorProto {
+                    name: Some("p.proto".into()),
+                    message_type: vec![message],
+                    ..Default::default()
+                }],
+            }
+            .encode_to_vec()
+        };
+
+        // Decodes on the default test thread stack just under the limit.
+        let bytes = descriptors(MAX_DESCRIPTOR_DEPTH - 8);
+        DecodedDescriptors::from_bytes(&bytes, ".M".into()).unwrap();
+
+        let bytes = descriptors(MAX_DESCRIPTOR_DEPTH);
+        let err = DecodedDescriptors::from_bytes(&bytes, ".M".into()).unwrap_err();
+        assert!(
+            err.to_string().contains("nest deeper"),
+            "unexpected error: {err}"
+        );
+    }
 }
