@@ -280,6 +280,10 @@ impl PreparedIndex {
 }
 
 impl IndexWork {
+    pub(crate) fn is_metadata_refresh(&self) -> bool {
+        self.prepared.is_some()
+    }
+
     pub(crate) fn execute(
         self,
         catalog: &Catalog,

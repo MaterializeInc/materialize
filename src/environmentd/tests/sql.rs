@@ -738,6 +738,32 @@ async fn test_create_view_reuses_prepared_expression() {
     .expect("prepared view expression reuse timed out");
 }
 
+fn ddl_phase_count(server: &test_util::TestServer, phase: &str) -> u64 {
+    server
+        .metrics_registry
+        .gather()
+        .iter()
+        .filter(|family| family.name() == "mz_catalog_transact_phase_seconds")
+        .flat_map(|family| family.get_metric())
+        .filter(|metric| {
+            metric
+                .get_label()
+                .iter()
+                .any(|label| label.name() == "phase" && label.value() == phase)
+        })
+        .map(|metric| metric.get_histogram().get_sample_count())
+        .sum()
+}
+
+fn index_preparation_counts(server: &test_util::TestServer) -> [u64; 3] {
+    [
+        "index_preparation",
+        "index_repreparation",
+        "index_notice_refresh",
+    ]
+    .map(|phase| ddl_phase_count(server, phase))
+}
+
 struct IndexPreparationCount(Arc<std::sync::atomic::AtomicUsize>);
 
 impl IndexPreparationCount {
@@ -922,6 +948,7 @@ async fn test_create_index_replay_dropped_import() {
             .await
             .unwrap();
 
+        let before = index_preparation_counts(&server);
         let prepared = IndexPreparationCount::install();
         let (release, parked) = CatalogVisibilityGate::install("test_index_preparation_gate");
         let create = task::spawn(|| "index import replay", async move {
@@ -939,6 +966,10 @@ async fn test_create_index_replay_dropped_import() {
         .expect("import drop must commit while index optimization is blocked");
         release.release();
         create.await.unwrap();
+        assert_eq!(
+            index_preparation_counts(&server),
+            [before[0] + 1, before[1] + 1, before[2]]
+        );
         assert_eq!(
             prepared.get(),
             2,
@@ -1006,6 +1037,7 @@ async fn test_create_index_reuses_preparation_after_unrelated_ddl() {
         batch_execute(&ddl, Sql::new("CREATE TABLE t (a int)"))
             .await
             .unwrap();
+        let before = index_preparation_counts(&server);
         let prepared = IndexPreparationCount::install();
         let (release, parked) = CatalogVisibilityGate::install("test_index_preparation_gate");
         let create = task::spawn(|| "index preparation reuse", async move {
@@ -1026,6 +1058,10 @@ async fn test_create_index_reuses_preparation_after_unrelated_ddl() {
         .expect("unrelated DDL must commit while index optimization is blocked");
         release.release();
         create.await.unwrap();
+        assert_eq!(
+            index_preparation_counts(&server),
+            [before[0] + 1, before[1], before[2]]
+        );
         assert_eq!(
             prepared.get(),
             1,
@@ -1092,6 +1128,7 @@ async fn test_create_index_replay_refreshes_renamed_index_notice() {
             }
         })
         .unwrap();
+        let before = index_preparation_counts(&server);
         let prepared = IndexPreparationCount::install();
         let (release, parked) = CatalogVisibilityGate::install("test_index_preparation_gate");
         let create = task::spawn(|| "index notice replay", async move {
@@ -1109,6 +1146,10 @@ async fn test_create_index_replay_refreshes_renamed_index_notice() {
         .expect("index rename must commit while index optimization is blocked");
         release.release();
         create.await.unwrap();
+        assert_eq!(
+            index_preparation_counts(&server),
+            [before[0] + 1, before[1], before[2] + 1]
+        );
         assert_eq!(
             prepared.get(),
             1,
@@ -1202,6 +1243,8 @@ async fn test_create_index_cancel_during_optimization() {
         })
         .await
         .expect("cancellation must complete before releasing the optimizer");
+        assert_eq!(ddl_phase_count(&server, "index_preparation"), 1);
+        assert_eq!(ddl_phase_count(&server, "index_preparation_canceled"), 1);
         release.release();
 
         assert_eq!(
