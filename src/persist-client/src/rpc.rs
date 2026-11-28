@@ -107,25 +107,40 @@ pub(crate) const PUBSUB_CONNECT_MAX_BACKOFF: Config<Duration> = Config::new(
 );
 
 /// Size of channel used to buffer send messages to PubSub service.
+///
+/// When the connection task falls more than this many messages behind, the oldest ones are dropped
+/// and the task sends every subscription again. A process pushes one diff per shard it appends to,
+/// and the appends of one tick finish within milliseconds of each other, so the channel has to
+/// hold such a burst.
+///
+/// NOTE: The channel is created in `GrpcPubSubClient::connect`. `clusterd` calls that at startup,
+/// before it has synced any configuration, so there only the default takes effect.
 pub(crate) const PUBSUB_CLIENT_SENDER_CHANNEL_SIZE: Config<usize> = Config::new(
     "persist_pubsub_client_sender_channel_size",
-    25,
+    1024,
     "Size of channel used to buffer send messages to PubSub service.",
     ParameterScope::Environment,
 );
 
 /// Size of channel used to buffer received messages from PubSub service.
+///
+/// The server also sends to its own process through a channel of this size, and drops a diff when
+/// that channel is full. It has to hold the burst described at
+/// [`PUBSUB_CLIENT_SENDER_CHANNEL_SIZE`].
 pub(crate) const PUBSUB_CLIENT_RECEIVER_CHANNEL_SIZE: Config<usize> = Config::new(
     "persist_pubsub_client_receiver_channel_size",
-    25,
+    1024,
     "Size of channel used to buffer received messages from PubSub service.",
     ParameterScope::Environment,
 );
 
 /// Size of channel used per connection to buffer broadcasted messages from PubSub server.
+///
+/// The server drops a diff for a connection whose channel is full. It has to hold the burst
+/// described at [`PUBSUB_CLIENT_SENDER_CHANNEL_SIZE`].
 pub(crate) const PUBSUB_SERVER_CONNECTION_CHANNEL_SIZE: Config<usize> = Config::new(
     "persist_pubsub_server_connection_channel_size",
-    25,
+    1024,
     "Size of channel used per connection to buffer broadcasted messages from PubSub server.",
     ParameterScope::Environment,
 );
