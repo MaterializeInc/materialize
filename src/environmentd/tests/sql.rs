@@ -793,7 +793,7 @@ impl Drop for IndexPreparationCount {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
-async fn test_relation_drop_preserves_notices_on_failure() {
+async fn test_drop_preserves_notice_delivery() {
     use mz_postgres_util::{PostgresError, Sql, batch_execute};
 
     let server = test_util::TestHarness::default().start().await;
@@ -843,6 +843,31 @@ async fn test_relation_drop_preserves_notices_on_failure() {
     batch_execute(&client, Sql::new("SELECT * FROM v"))
         .await
         .expect("failed DROP preserves dependency graph");
+
+    for sql in [
+        "CREATE DATABASE notice_database",
+        "SET DATABASE = notice_database",
+        "CREATE TABLE t (a int)",
+    ] {
+        batch_execute(&client, Sql::new(sql))
+            .await
+            .expect("create active database fixture");
+    }
+    notices.lock().expect("notice lock").clear();
+    batch_execute(&client, Sql::new("DROP DATABASE notice_database CASCADE"))
+        .await
+        .expect("drop active database");
+    let notices = notices.lock().expect("notice lock");
+    let drop_notices: Vec<_> = notices
+        .iter()
+        .filter(|notice| {
+            notice.starts_with("drop cascades to") || notice.starts_with("active database")
+        })
+        .collect();
+    assert_eq!(drop_notices.len(), 2, "deliver each DROP notice once");
+    assert!(drop_notices[0].starts_with("drop cascades to"));
+    assert!(drop_notices[1].contains("notice_database"));
+    assert!(drop_notices[1].starts_with("active database"));
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]

@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Catalog-dependent DROP validation and cleanup.
+//! DROP OBJECTS resolves names, dependency expansion, privileges and physical readers at commit.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -47,6 +47,7 @@ pub struct DropStatement {
     session: Arc<SessionMeta>,
     notices: Vec<PlanNotice>,
     adapter_notices: Vec<AdapterNotice>,
+    committed_notices: Vec<AdapterNotice>,
     index_notices: IndexDropNotices,
 }
 
@@ -62,19 +63,21 @@ impl DropStatement {
             session: Arc::new(session),
             notices: Vec::new(),
             adapter_notices: Vec::new(),
+            committed_notices: Vec::new(),
             index_notices: IndexDropNotices::default(),
         }
     }
 
     pub(crate) fn plan(&mut self, state: &CatalogState) -> Result<DropObjectsPlan, AdapterError> {
         self.adapter_notices.clear();
+        self.committed_notices.clear();
         self.index_notices = IndexDropNotices::default();
         let (result, notices) =
             super::plan_command_with_notices(state, &self.statement, &self.params, &self.session);
         self.notices = notices;
         let (plan, _) = result?;
         let Plan::DropObjects(plan) = plan else {
-            return Err(AdapterError::Unsupported("non-DROP relation intent"));
+            return Err(AdapterError::Unsupported("non-DROP OBJECTS intent"));
         };
         Ok(plan)
     }
@@ -85,17 +88,6 @@ impl DropStatement {
         compute: Option<&ComputeController>,
     ) -> Result<CommandExecution<'_>, AdapterError> {
         let plan = self.plan(state)?;
-        // Item dependency expansion cannot drop roles or namespaces. Their cleanup
-        // requires a different compiler, not an unconditional DropObjects operation.
-        if plan
-            .drop_ids
-            .iter()
-            .any(|id| !matches!(id, ObjectId::Item(_)))
-        {
-            return Err(AdapterError::Internal(
-                "relation DROP expanded to a non-item".into(),
-            ));
-        }
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         let humanizer = state.for_session_metadata(&*self.session, tx);
         self.index_notices = check_index_dependents(state, &humanizer, compute, &plan.drop_ids)?;
@@ -111,14 +103,24 @@ impl DropStatement {
             self.adapter_notices
                 .push(AdapterNotice::CascadeDroppedObject { objects });
         }
-        Ok(CommandExecution::raw(vec![Op::DropObjects {
-            objects: plan
-                .drop_ids
-                .into_iter()
-                .map(DropObjectInfo::manual_drop_from_object_id)
-                .collect(),
-            cascade: plan.cascade,
-        }]))
+        let DropOps {
+            ops,
+            dropped_active_db,
+            dropped_active_cluster,
+        } = drop_objects_ops(state, &*self.session, plan.drop_ids, plan.cascade)?;
+        if dropped_active_db {
+            self.committed_notices
+                .push(AdapterNotice::DroppedActiveDatabase {
+                    name: self.session.vars().database().to_string(),
+                });
+        }
+        if dropped_active_cluster {
+            self.committed_notices
+                .push(AdapterNotice::DroppedActiveCluster {
+                    name: self.session.vars().cluster().to_string(),
+                });
+        }
+        Ok(CommandExecution::raw(ops))
     }
 
     pub(crate) fn notices(&self) -> &[PlanNotice] {
@@ -126,6 +128,9 @@ impl DropStatement {
     }
     pub(crate) fn adapter_notices(&self) -> &[AdapterNotice] {
         &self.adapter_notices
+    }
+    pub(crate) fn committed_notices(&self) -> &[AdapterNotice] {
+        &self.committed_notices
     }
     pub(crate) fn index_notices(&self) -> &IndexDropNotices {
         &self.index_notices
