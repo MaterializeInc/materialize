@@ -12,13 +12,16 @@
 use std::sync::Arc;
 
 use mz_adapter_types::dyncfgs::ENABLE_PASSWORD_AUTH;
+use mz_catalog::memory::objects::Type;
+use mz_repr::{CatalogItemId, GlobalId};
 use mz_sql::ast::{Raw, Statement};
-use mz_sql::catalog::RoleAttributesRaw;
+use mz_sql::catalog::{CatalogTypeDetails, RoleAttributesRaw};
+use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{NetworkPolicyRule, Params, Plan, PlanNotice};
 use mz_sql::session::metadata::SessionMetadata;
 
 use crate::AdapterError;
-use crate::catalog::{CatalogState, Op};
+use crate::catalog::{CatalogItem, CatalogState, Op};
 use crate::session::SessionMeta;
 
 use super::CommandExecution;
@@ -29,6 +32,7 @@ pub struct MetadataStatement {
     params: Params,
     session: Arc<SessionMeta>,
     notices: Vec<PlanNotice>,
+    type_ids: Option<(CatalogItemId, GlobalId)>,
 }
 
 impl MetadataStatement {
@@ -37,6 +41,7 @@ impl MetadataStatement {
             statement,
             Statement::CreateRole(_)
                 | Statement::Comment(_)
+                | Statement::CreateType(_)
                 | Statement::CreateQueryPolicy(_)
                 | Statement::AlterQueryPolicy(_)
                 | Statement::CreateNetworkPolicy(_)
@@ -54,22 +59,24 @@ impl MetadataStatement {
             params,
             session: Arc::new(session),
             notices: Vec::new(),
+            type_ids: None,
         }
     }
 
     pub(crate) fn plan(
         &self,
         state: &CatalogState,
-    ) -> Result<(Plan, Vec<PlanNotice>), AdapterError> {
-        let (plan, _, notices) =
+    ) -> Result<(Plan, ResolvedIds, Vec<PlanNotice>), AdapterError> {
+        let (plan, resolved_ids, notices) =
             super::plan_command(state, &self.statement, &self.params, &self.session)?;
         match plan {
             Plan::CreateRole(_)
             | Plan::Comment(_)
+            | Plan::CreateType(_)
             | Plan::CreateQueryPolicy(_)
             | Plan::AlterQueryPolicy(_)
             | Plan::CreateNetworkPolicy(_)
-            | Plan::AlterNetworkPolicy(_) => Ok((plan, notices)),
+            | Plan::AlterNetworkPolicy(_) => Ok((plan, resolved_ids, notices)),
             _ => Err(AdapterError::Unsupported("non-metadata statement intent")),
         }
     }
@@ -78,13 +85,34 @@ impl MetadataStatement {
         &mut self,
         state: &CatalogState,
     ) -> Result<CommandExecution<'_>, AdapterError> {
-        let (plan, notices) = self.plan(state)?;
+        let (plan, resolved_ids, notices) = self.plan(state)?;
         let op = match plan {
             Plan::CreateRole(plan) => {
                 validate_role_attributes(state, &plan.attributes)?;
                 Op::CreateRole {
                     name: plan.name,
                     attributes: plan.attributes,
+                }
+            }
+            Plan::CreateType(plan) => {
+                let (id, global_id) = self.type_ids.expect("type IDs allocated before commit");
+                let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+                let catalog = state.for_session_metadata(&*self.session, tx);
+                plan.typ.inner.desc(&catalog)?;
+                Op::CreateItem {
+                    id,
+                    name: plan.name,
+                    item: CatalogItem::Type(Type {
+                        create_sql: Some(plan.typ.create_sql),
+                        global_id,
+                        details: CatalogTypeDetails {
+                            array_id: None,
+                            typ: plan.typ.inner,
+                            pg_metadata: None,
+                        },
+                        resolved_ids,
+                    }),
+                    owner_id: *self.session.current_role_id(),
                 }
             }
             Plan::Comment(plan) => Op::Comment {
@@ -125,6 +153,15 @@ impl MetadataStatement {
         state.validate_resource_limits(&ops, self.session.conn_id())?;
         self.notices = notices;
         Ok(CommandExecution::raw(ops))
+    }
+
+    pub(crate) fn allocate_type(&mut self, ids: (CatalogItemId, GlobalId)) {
+        assert!(matches!(&*self.statement, Statement::CreateType(_)));
+        let previous = self.type_ids.replace(ids);
+        assert!(
+            previous.is_none(),
+            "type IDs must remain stable across replay"
+        );
     }
 
     pub(crate) fn creates_role(&self) -> bool {
@@ -311,3 +348,6 @@ mod tests {
 
 #[cfg(test)]
 mod policy_tests;
+
+#[cfg(test)]
+mod type_tests;

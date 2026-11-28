@@ -2612,10 +2612,10 @@ impl<'ast, 'a> VisitMut<'ast, Aug> for NameSimplifier<'a> {
     }
 }
 
-/// Returns the [`CatalogItemId`] dependencies the provided `node` has.
+/// Returns the [`CatalogItemId`]s explicitly written in `node`.
 ///
-/// _DOES NOT_ resolve names, simply does a recursive walk through an object to
-/// find all of the IDs.
+/// This is a syntactic walk, not name resolution. For example, an ID followed by
+/// `[]` yields that written ID, not the resolved array type ID.
 pub fn dependencies<'ast, N>(node: &'ast N) -> Result<BTreeSet<CatalogItemId>, anyhow::Error>
 where
     N: VisitNode<'ast, Raw>,
@@ -2635,6 +2635,21 @@ struct IdDependencVisitor {
 }
 
 impl<'ast> Visit<'ast, Raw> for IdDependencVisitor {
+    fn visit_data_type(&mut self, node: &'ast RawDataType) {
+        // DataType is an abstract AST node, so the generated visitor does not descend into it.
+        match node {
+            RawDataType::Array(inner) | RawDataType::List(inner) => self.visit_data_type(inner),
+            RawDataType::Map {
+                key_type,
+                value_type,
+            } => {
+                self.visit_data_type(key_type);
+                self.visit_data_type(value_type);
+            }
+            RawDataType::Other { name, .. } => self.visit_item_name(name),
+        }
+    }
+
     fn visit_item_name(&mut self, node: &'ast <Raw as AstInfo>::ItemName) {
         // Bail early if we're already in an error state.
         if self.error.is_some() {
@@ -2661,6 +2676,35 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
+
+    #[mz_ore::test]
+    fn dependencies_include_nested_data_types() {
+        for (sql, ids) in [
+            (
+                "CREATE TYPE t AS LIST (ELEMENT TYPE = [u3 AS materialize.public.dependency])",
+                vec![3],
+            ),
+            (
+                "CREATE TYPE t AS MAP (KEY TYPE = text, VALUE TYPE = [u2 AS materialize.public.dependency])",
+                vec![2],
+            ),
+            (
+                "CREATE TYPE t AS (a [u1 AS materialize.public.dependency][], b [u2 AS materialize.public.dependency] list, c map[[u4 AS materialize.public.key_type] => [u3 AS materialize.public.dependency]])",
+                vec![1, 2, 3, 4],
+            ),
+        ] {
+            let statement = mz_sql_parser::parser::parse_statements(sql)
+                .expect("parse dependency fixture")
+                .remove(0)
+                .ast;
+            let expected: BTreeSet<_> = ids.into_iter().map(CatalogItemId::User).collect();
+            assert_eq!(
+                dependencies(&statement).expect("extract IDs"),
+                expected,
+                "{sql}"
+            );
+        }
+    }
 
     #[mz_ore::test]
     fn proptest_schema_id_roundtrips() {
