@@ -18,6 +18,7 @@ use itertools::Itertools;
 use mz_avro::Schema;
 use mz_avro::types::{DecimalValue, ToAvro, Value};
 use mz_ore::cast::CastFrom;
+use mz_repr::adt::inet::Inet;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::numeric::{self, NUMERIC_AGG_MAX_PRECISION, NUMERIC_DATUM_MAX_PRECISION};
 use mz_repr::{CatalogItemId, ColumnName, Datum, RelationDesc, Row, SqlColumnType, SqlScalarType};
@@ -405,6 +406,10 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                 }
                 SqlScalarType::Jsonb => Value::Json(JsonbRef::from_datum(datum).to_serde_json()),
                 SqlScalarType::Uuid => Value::Uuid(datum.unwrap_uuid()),
+                SqlScalarType::Inet => Value::String(datum.unwrap_inet().to_string()),
+                SqlScalarType::Cidr => {
+                    Value::String(datum.unwrap_inet().display(Inet::fmt_cidr).to_string())
+                }
                 ty @ (SqlScalarType::Array(..)
                 | SqlScalarType::Int2Vector
                 | SqlScalarType::List { .. }) => {

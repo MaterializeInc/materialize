@@ -1463,6 +1463,15 @@
       "dyncfg": false
     },
     {
+      "name": "enable_network_types",
+      "typeName": "boolean",
+      "default": "off",
+      "description": "Whether network address type support is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
       "name": "enable_new_outer_join_lowering",
       "typeName": "boolean",
       "default": "on",

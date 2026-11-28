@@ -22,6 +22,7 @@ use mz_pgrepr_consts::oid::TYPE_INT2_OID;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::char;
 use mz_repr::adt::date::Date;
+use mz_repr::adt::inet::Inet;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::mz_acl_item::{AclItem, MzAclItem};
 use mz_repr::adt::numeric::{self as mz_repr_numeric, NumericMaxScale, rescale};
@@ -129,6 +130,10 @@ pub enum Value {
     /// A list of privileges granted to a user that uses [`mz_repr::adt::system::Oid`]s for role
     /// references. This type is used primarily for compatibility with PostgreSQL.
     AclItem(AclItem),
+    /// An IPv4 or IPv6 host address with a netmask.
+    Inet(Inet),
+    /// An IPv4 or IPv6 network. The value has no bits set right of the mask.
+    Cidr(Inet),
 }
 
 impl Value {
@@ -162,6 +167,8 @@ impl Value {
             (Datum::MzTimestamp(t), SqlScalarType::MzTimestamp) => Some(Value::MzTimestamp(t)),
             (Datum::MzAclItem(mai), SqlScalarType::MzAclItem) => Some(Value::MzAclItem(mai)),
             (Datum::AclItem(ai), SqlScalarType::AclItem) => Some(Value::AclItem(ai)),
+            (Datum::Inet(i), SqlScalarType::Inet) => Some(Value::Inet(i)),
+            (Datum::Inet(i), SqlScalarType::Cidr) => Some(Value::Cidr(i)),
             (Datum::Date(d), SqlScalarType::Date) => Some(Value::Date(d)),
             (Datum::Time(t), SqlScalarType::Time) => Some(Value::Time(t)),
             (Datum::Timestamp(ts), SqlScalarType::Timestamp { .. }) => Some(Value::Timestamp(ts)),
@@ -342,6 +349,7 @@ impl Value {
             }
             Value::MzAclItem(mz_acl_item) => Datum::MzAclItem(mz_acl_item),
             Value::AclItem(acl_item) => Datum::AclItem(acl_item),
+            Value::Inet(i) | Value::Cidr(i) => Datum::Inet(i),
         })
     }
 
@@ -461,6 +469,8 @@ impl Value {
             .expect("provided closure never fails"),
             Value::MzAclItem(mz_acl_item) => strconv::format_mz_acl_item(buf, *mz_acl_item),
             Value::AclItem(acl_item) => strconv::format_acl_item(buf, *acl_item),
+            Value::Inet(i) => strconv::format_inet(buf, *i),
+            Value::Cidr(i) => strconv::format_cidr(buf, *i),
         }
     }
 
@@ -613,6 +623,18 @@ impl Value {
                 Ok(postgres_types::IsNull::No)
             }
             Value::AclItem(_) => Err("aclitem has no binary encoding".into()),
+            Value::Inet(i) => {
+                let mut b = Vec::with_capacity(20);
+                i.encode_pg_binary(false, &mut b);
+                buf.extend_from_slice(&b);
+                Ok(postgres_types::IsNull::No)
+            }
+            Value::Cidr(i) => {
+                let mut b = Vec::with_capacity(20);
+                i.encode_pg_binary(true, &mut b);
+                buf.extend_from_slice(&b);
+                Ok(postgres_types::IsNull::No)
+            }
         }
         .expect("encode_binary should never trigger a to_sql failure");
         if let IsNull::Yes = is_null {
@@ -666,6 +688,7 @@ impl Value {
             SqlScalarType::PgLegacyName => Ok(()),
             SqlScalarType::Jsonb => Ok(()),
             SqlScalarType::Uuid => Ok(()),
+            SqlScalarType::Inet | SqlScalarType::Cidr => Ok(()),
             SqlScalarType::Array(elem_type) => Self::binary_encoding_error(elem_type),
             SqlScalarType::Int2Vector => Ok(()),
             SqlScalarType::List { .. } => Err("no binary output function available for type list"),
@@ -773,6 +796,8 @@ impl Value {
             })?),
             Type::MzAclItem => Value::MzAclItem(strconv::parse_mz_acl_item(s)?),
             Type::AclItem => Value::AclItem(strconv::parse_acl_item(s)?),
+            Type::Inet => Value::Inet(strconv::parse_inet(s)?),
+            Type::Cidr => Value::Cidr(strconv::parse_cidr(s)?),
         })
     }
 
@@ -897,6 +922,8 @@ impl Value {
             }
             Type::MzAclItem => packer.push(Datum::MzAclItem(strconv::parse_mz_acl_item(s)?)),
             Type::AclItem => packer.push(Datum::AclItem(strconv::parse_acl_item(s)?)),
+            Type::Inet => packer.push(Datum::Inet(strconv::parse_inet(s)?)),
+            Type::Cidr => packer.push(Datum::Inet(strconv::parse_cidr(s)?)),
         })
     }
 
@@ -1003,6 +1030,8 @@ impl Value {
                 Ok(Value::MzAclItem(mz_acl_item))
             }
             Type::AclItem => Err("aclitem has no binary encoding".into()),
+            Type::Inet => Ok(Value::Inet(Inet::decode_pg_binary(raw, false)?)),
+            Type::Cidr => Ok(Value::Cidr(Inet::decode_pg_binary(raw, true)?)),
         }
     }
 }

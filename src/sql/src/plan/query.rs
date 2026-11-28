@@ -6566,6 +6566,14 @@ fn scalar_type_from_catalog_inner(
                 CatalogType::String => Ok(SqlScalarType::String),
                 CatalogType::Time => Ok(SqlScalarType::Time),
                 CatalogType::Uuid => Ok(SqlScalarType::Uuid),
+                CatalogType::Inet => {
+                    vars::ENABLE_NETWORK_TYPES.require(catalog.system_vars())?;
+                    Ok(SqlScalarType::Inet)
+                }
+                CatalogType::Cidr => {
+                    vars::ENABLE_NETWORK_TYPES.require(catalog.system_vars())?;
+                    Ok(SqlScalarType::Cidr)
+                }
                 CatalogType::Int2Vector => Ok(SqlScalarType::Int2Vector),
                 CatalogType::MzAclItem => Ok(SqlScalarType::MzAclItem),
                 CatalogType::Numeric => unreachable!("handled above"),

@@ -1106,14 +1106,17 @@ SELECT set_masklen('192.168.0.1/16'::INET, 32)
 ----
 192.168.0.1
 
-statement error function "set_masklen" does not exist
+statement error invalid mask length: 100
 SELECT set_masklen('192.168.0.1'::INET, 100)
 
-statement error function "set_masklen" does not exist
+statement error invalid mask length: 33
 SELECT set_masklen('192.168.0.1'::INET, 33)
 
-statement error function "set_masklen" does not exist
+# Materialize follows PostgreSQL, where -1 means the full mask length.
+query T
 SELECT set_masklen('192.168.0.1'::INET, -1)
+----
+192.168.0.1
 
 # Not supported by Materialize.
 onlyif cockroach
@@ -1129,10 +1132,13 @@ SELECT set_masklen('::ffff:192.168.0.1'::INET, 100)
 ----
 ::ffff:192.168.0.1/100
 
-statement error function "set_masklen" does not exist
+# Materialize follows PostgreSQL, where -1 means the full mask length.
+query T
 SELECT set_masklen('::ffff:192.168.0.1'::INET, -1)
+----
+::ffff:192.168.0.1
 
-statement error function "set_masklen" does not exist
+statement error invalid mask length: 129
 SELECT set_masklen('::ffff:192.168.0.1'::INET, 129)
 
 # Not supported by Materialize.

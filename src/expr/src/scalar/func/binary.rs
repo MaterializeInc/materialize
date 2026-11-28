@@ -457,6 +457,20 @@ mod derive {
         PrettySql(PrettySql),
         RegexpReplace(RegexpReplace),
         StartsWith(StartsWith),
+        InetSetMasklen(InetSetMasklen),
+        CidrSetMasklen(CidrSetMasklen),
+        InetSubnet(InetSubnet),
+        InetSubnetEq(InetSubnetEq),
+        InetSupernet(InetSupernet),
+        InetSupernetEq(InetSupernetEq),
+        InetOverlap(InetOverlap),
+        InetSameFamily(InetSameFamily),
+        InetMerge(InetMerge),
+        InetAnd(InetAnd),
+        InetOr(InetOr),
+        AddInetInt64(AddInetInt64),
+        SubInetInt64(SubInetInt64),
+        SubInet(SubInet),
     }
 }
 

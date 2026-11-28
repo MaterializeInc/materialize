@@ -43,6 +43,7 @@
   "AddDateTime": "UNITSTRUCT",
   "AddFloat32": "UNITSTRUCT",
   "AddFloat64": "UNITSTRUCT",
+  "AddInetInt64": "UNITSTRUCT",
   "AddInt16": "UNITSTRUCT",
   "AddInt32": "UNITSTRUCT",
   "AddInt64": "UNITSTRUCT",
@@ -225,6 +226,7 @@
       "MaxDate": "UNIT",
       "MaxFloat32": "UNIT",
       "MaxFloat64": "UNIT",
+      "MaxInet": "UNIT",
       "MaxInt16": "UNIT",
       "MaxInt32": "UNIT",
       "MaxInt64": "UNIT",
@@ -244,6 +246,7 @@
       "MinDate": "UNIT",
       "MinFloat32": "UNIT",
       "MinFloat64": "UNIT",
+      "MinInet": "UNIT",
       "MinInt16": "UNIT",
       "MinInt32": "UNIT",
       "MinInt64": "UNIT",
@@ -479,6 +482,11 @@
       "AddFloat64": {
         "NEWTYPE": {
           "TYPENAME": "AddFloat64"
+        }
+      },
+      "AddInetInt64": {
+        "NEWTYPE": {
+          "TYPENAME": "AddInetInt64"
         }
       },
       "AddInt16": {
@@ -736,6 +744,11 @@
           "TYPENAME": "BitXorUint64"
         }
       },
+      "CidrSetMasklen": {
+        "NEWTYPE": {
+          "TYPENAME": "CidrSetMasklen"
+        }
+      },
       "ConstantTimeEqBytes": {
         "NEWTYPE": {
           "TYPENAME": "ConstantTimeEqBytes"
@@ -924,6 +937,56 @@
       "Gte": {
         "NEWTYPE": {
           "TYPENAME": "Gte"
+        }
+      },
+      "InetAnd": {
+        "NEWTYPE": {
+          "TYPENAME": "InetAnd"
+        }
+      },
+      "InetMerge": {
+        "NEWTYPE": {
+          "TYPENAME": "InetMerge"
+        }
+      },
+      "InetOr": {
+        "NEWTYPE": {
+          "TYPENAME": "InetOr"
+        }
+      },
+      "InetOverlap": {
+        "NEWTYPE": {
+          "TYPENAME": "InetOverlap"
+        }
+      },
+      "InetSameFamily": {
+        "NEWTYPE": {
+          "TYPENAME": "InetSameFamily"
+        }
+      },
+      "InetSetMasklen": {
+        "NEWTYPE": {
+          "TYPENAME": "InetSetMasklen"
+        }
+      },
+      "InetSubnet": {
+        "NEWTYPE": {
+          "TYPENAME": "InetSubnet"
+        }
+      },
+      "InetSubnetEq": {
+        "NEWTYPE": {
+          "TYPENAME": "InetSubnetEq"
+        }
+      },
+      "InetSupernet": {
+        "NEWTYPE": {
+          "TYPENAME": "InetSupernet"
+        }
+      },
+      "InetSupernetEq": {
+        "NEWTYPE": {
+          "TYPENAME": "InetSupernetEq"
         }
       },
       "IsLikeMatchCaseInsensitive": {
@@ -1386,6 +1449,16 @@
           "TYPENAME": "SubFloat64"
         }
       },
+      "SubInet": {
+        "NEWTYPE": {
+          "TYPENAME": "SubInet"
+        }
+      },
+      "SubInetInt64": {
+        "NEWTYPE": {
+          "TYPENAME": "SubInetInt64"
+        }
+      },
       "SubInt16": {
         "NEWTYPE": {
           "TYPENAME": "SubInt16"
@@ -1646,6 +1719,7 @@
   "CastBoolToStringNonstandard": "UNITSTRUCT",
   "CastBytesToString": "UNITSTRUCT",
   "CastCharToString": "UNITSTRUCT",
+  "CastCidrToInet": "UNITSTRUCT",
   "CastDateToMzTimestamp": "UNITSTRUCT",
   "CastDateToString": "UNITSTRUCT",
   "CastDateToTimestamp": {
@@ -1692,6 +1766,7 @@
   "CastFloat64ToUint16": "UNITSTRUCT",
   "CastFloat64ToUint32": "UNITSTRUCT",
   "CastFloat64ToUint64": "UNITSTRUCT",
+  "CastInetToString": "UNITSTRUCT",
   "CastInt16ToFloat32": "UNITSTRUCT",
   "CastInt16ToFloat64": "UNITSTRUCT",
   "CastInt16ToInt32": "UNITSTRUCT",
@@ -1868,9 +1943,11 @@
       }
     }
   },
+  "CastStringToCidr": "UNITSTRUCT",
   "CastStringToDate": "UNITSTRUCT",
   "CastStringToFloat32": "UNITSTRUCT",
   "CastStringToFloat64": "UNITSTRUCT",
+  "CastStringToInet": "UNITSTRUCT",
   "CastStringToInt16": "UNITSTRUCT",
   "CastStringToInt2Vector": "UNITSTRUCT",
   "CastStringToInt32": "UNITSTRUCT",
@@ -2059,6 +2136,8 @@
     "NEWTYPESTRUCT": "U32"
   },
   "Chr": "UNITSTRUCT",
+  "CidrAbbrev": "UNITSTRUCT",
+  "CidrSetMasklen": "UNITSTRUCT",
   "Coalesce": "UNITSTRUCT",
   "ColumnName": {
     "NEWTYPESTRUCT": "STR"
@@ -2402,6 +2481,25 @@
       }
     }
   },
+  "InetAbbrev": "UNITSTRUCT",
+  "InetAnd": "UNITSTRUCT",
+  "InetBroadcast": "UNITSTRUCT",
+  "InetFamily": "UNITSTRUCT",
+  "InetHost": "UNITSTRUCT",
+  "InetHostmask": "UNITSTRUCT",
+  "InetMasklen": "UNITSTRUCT",
+  "InetMerge": "UNITSTRUCT",
+  "InetNetmask": "UNITSTRUCT",
+  "InetNetwork": "UNITSTRUCT",
+  "InetNot": "UNITSTRUCT",
+  "InetOr": "UNITSTRUCT",
+  "InetOverlap": "UNITSTRUCT",
+  "InetSameFamily": "UNITSTRUCT",
+  "InetSetMasklen": "UNITSTRUCT",
+  "InetSubnet": "UNITSTRUCT",
+  "InetSubnetEq": "UNITSTRUCT",
+  "InetSupernet": "UNITSTRUCT",
+  "InetSupernetEq": "UNITSTRUCT",
   "Initcap": "UNITSTRUCT",
   "IsFalse": "UNITSTRUCT",
   "IsLikeMatch": {
@@ -3361,6 +3459,7 @@
       "Date": "UNIT",
       "Float32": "UNIT",
       "Float64": "UNIT",
+      "Inet": "UNIT",
       "Int16": "UNIT",
       "Int2Vector": "UNIT",
       "Int32": "UNIT",
@@ -3479,9 +3578,11 @@
           }
         }
       },
+      "Cidr": "UNIT",
       "Date": "UNIT",
       "Float32": "UNIT",
       "Float64": "UNIT",
+      "Inet": "UNIT",
       "Int16": "UNIT",
       "Int2Vector": "UNIT",
       "Int32": "UNIT",
@@ -3608,6 +3709,8 @@
   "SubDateInterval": "UNITSTRUCT",
   "SubFloat32": "UNITSTRUCT",
   "SubFloat64": "UNITSTRUCT",
+  "SubInet": "UNITSTRUCT",
+  "SubInetInt64": "UNITSTRUCT",
   "SubInt16": "UNITSTRUCT",
   "SubInt32": "UNITSTRUCT",
   "SubInt64": "UNITSTRUCT",
@@ -4017,6 +4120,11 @@
           "TYPENAME": "CastCharToString"
         }
       },
+      "CastCidrToInet": {
+        "NEWTYPE": {
+          "TYPENAME": "CastCidrToInet"
+        }
+      },
       "CastDateToMzTimestamp": {
         "NEWTYPE": {
           "TYPENAME": "CastDateToMzTimestamp"
@@ -4125,6 +4233,11 @@
       "CastFloat64ToUint64": {
         "NEWTYPE": {
           "TYPENAME": "CastFloat64ToUint64"
+        }
+      },
+      "CastInetToString": {
+        "NEWTYPE": {
+          "TYPENAME": "CastInetToString"
         }
       },
       "CastInt16ToFloat32": {
@@ -4547,6 +4660,11 @@
           "TYPENAME": "CastStringToChar"
         }
       },
+      "CastStringToCidr": {
+        "NEWTYPE": {
+          "TYPENAME": "CastStringToCidr"
+        }
+      },
       "CastStringToDate": {
         "NEWTYPE": {
           "TYPENAME": "CastStringToDate"
@@ -4560,6 +4678,11 @@
       "CastStringToFloat64": {
         "NEWTYPE": {
           "TYPENAME": "CastStringToFloat64"
+        }
+      },
+      "CastStringToInet": {
+        "NEWTYPE": {
+          "TYPENAME": "CastStringToInet"
         }
       },
       "CastStringToInt16": {
@@ -4917,6 +5040,11 @@
           "TYPENAME": "Chr"
         }
       },
+      "CidrAbbrev": {
+        "NEWTYPE": {
+          "TYPENAME": "CidrAbbrev"
+        }
+      },
       "Cos": {
         "NEWTYPE": {
           "TYPENAME": "Cos"
@@ -5025,6 +5153,51 @@
       "FloorNumeric": {
         "NEWTYPE": {
           "TYPENAME": "FloorNumeric"
+        }
+      },
+      "InetAbbrev": {
+        "NEWTYPE": {
+          "TYPENAME": "InetAbbrev"
+        }
+      },
+      "InetBroadcast": {
+        "NEWTYPE": {
+          "TYPENAME": "InetBroadcast"
+        }
+      },
+      "InetFamily": {
+        "NEWTYPE": {
+          "TYPENAME": "InetFamily"
+        }
+      },
+      "InetHost": {
+        "NEWTYPE": {
+          "TYPENAME": "InetHost"
+        }
+      },
+      "InetHostmask": {
+        "NEWTYPE": {
+          "TYPENAME": "InetHostmask"
+        }
+      },
+      "InetMasklen": {
+        "NEWTYPE": {
+          "TYPENAME": "InetMasklen"
+        }
+      },
+      "InetNetmask": {
+        "NEWTYPE": {
+          "TYPENAME": "InetNetmask"
+        }
+      },
+      "InetNetwork": {
+        "NEWTYPE": {
+          "TYPENAME": "InetNetwork"
+        }
+      },
+      "InetNot": {
+        "NEWTYPE": {
+          "TYPENAME": "InetNot"
         }
       },
       "Initcap": {

@@ -1874,6 +1874,7 @@ pub enum EvalError {
     UInt64OutOfRange(Box<str>),
     MzTimestampOutOfRange(Box<str>),
     MzTimestampStepOverflow,
+    InetOutOfRange,
     OidOutOfRange(Box<str>),
     IntervalOutOfRange(Box<str>),
     TimestampCannotBeNan,
@@ -2015,6 +2016,7 @@ impl fmt::Display for EvalError {
                 write!(f, "{} mz_timestamp out of range", val.quoted())
             }
             EvalError::MzTimestampStepOverflow => f.write_str("step mz_timestamp overflow"),
+            EvalError::InetOutOfRange => f.write_str("result is out of range"),
             EvalError::OidOutOfRange(val) => write!(f, "{} OID out of range", val.quoted()),
             EvalError::IntervalOutOfRange(val) => {
                 write!(f, "{} interval out of range", val.quoted())
@@ -2339,6 +2341,7 @@ impl RustType<ProtoEvalError> for EvalError {
                 value: val.to_string(),
             }),
             EvalError::MzTimestampStepOverflow => MzTimestampStepOverflow(()),
+            EvalError::InetOutOfRange => InetOutOfRange(()),
             EvalError::OidOutOfRange(val) => OidOutOfRange(ProtoValueOutOfRange {
                 value: val.to_string(),
             }),
@@ -2488,6 +2491,7 @@ impl RustType<ProtoEvalError> for EvalError {
                     Ok(EvalError::MzTimestampOutOfRange(val.value.into()))
                 }
                 MzTimestampStepOverflow(()) => Ok(EvalError::MzTimestampStepOverflow),
+                InetOutOfRange(()) => Ok(EvalError::InetOutOfRange),
                 OidOutOfRange(val) => Ok(EvalError::OidOutOfRange(val.value.into())),
                 IntervalOutOfRange(val) => Ok(EvalError::IntervalOutOfRange(val.value.into())),
                 TimestampCannotBeNan(()) => Ok(EvalError::TimestampCannotBeNan),

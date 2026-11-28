@@ -219,6 +219,8 @@ fn sql_scalar_type_to_data_type(scalar_type: &SqlScalarType) -> DataType {
         )),
         SqlScalarType::MzAclItem => named("mz_aclitem"),
         SqlScalarType::AclItem => named("aclitem"),
+        SqlScalarType::Inet => named("inet"),
+        SqlScalarType::Cidr => named("cidr"),
         SqlScalarType::Record { fields, .. } => DataType::Record(
             fields
                 .iter()

@@ -253,7 +253,7 @@ pub(super) fn generate_source_export_statement_values(
         let ty = if text_column_set.contains(c.name.as_str()) {
             mz_pgrepr::Type::Text
         } else {
-            match mz_pgrepr::Type::from_oid_and_typmod(c.type_oid, c.type_mod) {
+            match ingestable_pg_type(scx, c.type_oid, c.type_mod) {
                 Ok(t) => t,
                 Err(_) => {
                     let mut full_name = purified_export.external_reference.0.clone();
@@ -655,7 +655,7 @@ pub(crate) fn generate_column_casts(
             // storage.
             (CastType::Text, mz_pgrepr::Type::Text)
         } else {
-            match mz_pgrepr::Type::from_oid_and_typmod(column.type_oid, column.type_mod) {
+            match ingestable_pg_type(scx, column.type_oid, column.type_mod) {
                 Ok(t) => (CastType::Natural, t),
                 // If this reference survived purification, we
                 // do not expect it to be from a table that the
@@ -721,6 +721,28 @@ pub(crate) fn generate_column_casts(
         table_cast.push((cast_type, cast));
     }
     Ok(table_cast)
+}
+
+/// Like [`mz_pgrepr::Type::from_oid_and_typmod`], but treats `inet` and `cidr`
+/// as unsupported while `enable_network_types` is off. Those columns then fail
+/// with the usual unsupported-type error, which points at `TEXT COLUMNS`.
+fn ingestable_pg_type(
+    scx: &StatementContext,
+    oid: u32,
+    typmod: i32,
+) -> Result<mz_pgrepr::Type, ()> {
+    use mz_pgrepr::Type;
+    let ty = Type::from_oid_and_typmod(oid, typmod).map_err(|_| ())?;
+    let elem = match &ty {
+        Type::Array(elem) => elem.as_ref(),
+        ty => ty,
+    };
+    if matches!(elem, Type::Inet | Type::Cidr)
+        && !scx.is_feature_flag_enabled(&crate::session::vars::ENABLE_NETWORK_TYPES)
+    {
+        return Err(());
+    }
+    Ok(ty)
 }
 
 /// Resolve a PG type to its corresponding `SqlScalarType` via the catalog.
@@ -825,6 +847,8 @@ fn pg_type_to_cast_func(
             }
         }
         Type::Uuid => CastFunc::CastStringToUuid,
+        Type::Inet => CastFunc::CastStringToInet,
+        Type::Cidr => CastFunc::CastStringToCidr,
         Type::Int2Vector => CastFunc::CastStringToInt2Vector,
         Type::MzTimestamp => CastFunc::CastStringToMzTimestamp,
         // JSON is ingested as JSONB (same as the old plan_cast path).

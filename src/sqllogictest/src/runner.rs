@@ -75,6 +75,7 @@ use mz_persist_client::rpc::{
 use mz_pgrepr::{Interval, Jsonb, Numeric, UInt2, UInt4, UInt8, Value, oid};
 use mz_repr::ColumnName;
 use mz_repr::adt::date::Date;
+use mz_repr::adt::inet::Inet;
 use mz_repr::adt::mz_acl_item::{AclItem, MzAclItem};
 use mz_repr::adt::numeric;
 use mz_secrets::SecretsController;
@@ -530,6 +531,8 @@ impl<'a> FromSql<'a> for Slt {
                 DateTime::<Utc>::from_sql(ty, raw)?.try_into()?,
             )),
             PgType::UUID => Self(Value::Uuid(Uuid::from_sql(ty, raw)?)),
+            PgType::INET => Self(Value::Inet(Inet::decode_pg_binary(raw, false)?)),
+            PgType::CIDR => Self(Value::Cidr(Inet::decode_pg_binary(raw, true)?)),
             PgType::RECORD => {
                 let num_fields = read_be_i32(&mut raw)?;
                 let mut tuple = vec![];
@@ -617,6 +620,8 @@ impl<'a> FromSql<'a> for Slt {
         matches!(
             *ty,
             PgType::ACLITEM
+                | PgType::INET
+                | PgType::CIDR
                 | PgType::BOOL
                 | PgType::BYTEA
                 | PgType::CHAR

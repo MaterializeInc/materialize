@@ -163,6 +163,10 @@ pub enum Type {
     /// A list of privileges granted to a user that uses [`mz_repr::adt::system::Oid`]s for role
     /// references. This type is used primarily for compatibility with PostgreSQL.
     AclItem,
+    /// An IPv4 or IPv6 host address with an optional netmask.
+    Inet,
+    /// An IPv4 or IPv6 network address.
+    Cidr,
 }
 
 /// An unpacked [`typmod`](Type::typmod) for a [`Type`].
@@ -606,6 +610,8 @@ impl Type {
             postgres_types::Type::TIMESTAMP => Type::Timestamp { precision: None },
             postgres_types::Type::TIMESTAMPTZ => Type::TimestampTz { precision: None },
             postgres_types::Type::UUID => Type::Uuid,
+            postgres_types::Type::INET => Type::Inet,
+            postgres_types::Type::CIDR => Type::Cidr,
             postgres_types::Type::REGCLASS => Type::RegClass,
             postgres_types::Type::REGPROC => Type::RegProc,
             postgres_types::Type::REGTYPE => Type::RegType,
@@ -644,6 +650,8 @@ impl Type {
                 Type::Array(Box::new(Type::TimestampTz { precision: None }))
             }
             postgres_types::Type::UUID_ARRAY => Type::Array(Box::new(Type::Uuid)),
+            postgres_types::Type::INET_ARRAY => Type::Array(Box::new(Type::Inet)),
+            postgres_types::Type::CIDR_ARRAY => Type::Array(Box::new(Type::Cidr)),
             postgres_types::Type::VARCHAR_ARRAY => {
                 Type::Array(Box::new(Type::VarChar { max_length: None }))
             }
@@ -784,6 +792,8 @@ impl Type {
                     _ => unreachable!(),
                 },
                 Type::MzAclItem => &MZ_ACL_ITEM_ARRAY,
+                Type::Inet => &postgres_types::Type::INET_ARRAY,
+                Type::Cidr => &postgres_types::Type::CIDR_ARRAY,
             },
             Type::Bool => &postgres_types::Type::BOOL,
             Type::Bytea => &postgres_types::Type::BYTEA,
@@ -829,6 +839,8 @@ impl Type {
                 t => unreachable!("{t:?} is not a range element type"),
             },
             Type::MzAclItem => &MZ_ACL_ITEM,
+            Type::Inet => &postgres_types::Type::INET,
+            Type::Cidr => &postgres_types::Type::CIDR,
         }
     }
 
@@ -962,7 +974,9 @@ impl Type {
             | Type::MzTimestamp
             | Type::VarChar { max_length: None }
             | Type::Range { .. }
-            | Type::MzAclItem => None,
+            | Type::MzAclItem
+            | Type::Inet
+            | Type::Cidr => None,
         }
     }
 
@@ -1012,6 +1026,7 @@ impl Type {
             Type::Range { .. } => -1,
             Type::MzAclItem => MzAclItem::binary_size().try_into().expect("must fit"),
             Type::AclItem => AclItem::binary_size().try_into().expect("must fit"),
+            Type::Inet | Type::Cidr => -1,
         }
     }
 
@@ -1144,6 +1159,8 @@ impl TryFrom<&Type> for SqlScalarType {
                 element_type: Box::new(TryFrom::try_from(&**element_type)?),
             }),
             Type::MzAclItem => Ok(SqlScalarType::MzAclItem),
+            Type::Inet => Ok(SqlScalarType::Inet),
+            Type::Cidr => Ok(SqlScalarType::Cidr),
         }
     }
 }
@@ -1309,6 +1326,8 @@ impl From<&SqlScalarType> for Type {
                 element_type: Box::new(From::from(&**element_type)),
             },
             SqlScalarType::MzAclItem => Type::MzAclItem,
+            SqlScalarType::Inet => Type::Inet,
+            SqlScalarType::Cidr => Type::Cidr,
         }
     }
 }

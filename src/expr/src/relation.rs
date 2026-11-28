@@ -2534,6 +2534,7 @@ impl AggregateExpr {
             | AggregateFunc::MaxTimestamp
             | AggregateFunc::MaxTimestampTz
             | AggregateFunc::MaxInterval
+            | AggregateFunc::MaxInet
             | AggregateFunc::MaxTime
             | AggregateFunc::MaxArray
             | AggregateFunc::MaxList
@@ -2553,6 +2554,7 @@ impl AggregateExpr {
             | AggregateFunc::MinTimestamp
             | AggregateFunc::MinTimestampTz
             | AggregateFunc::MinInterval
+            | AggregateFunc::MinInet
             | AggregateFunc::MinTime
             | AggregateFunc::MinArray
             | AggregateFunc::MinList
@@ -3069,6 +3071,7 @@ impl AggregateExpr {
             | AggregateFunc::MaxTimestamp
             | AggregateFunc::MaxTimestampTz
             | AggregateFunc::MaxInterval
+            | AggregateFunc::MaxInet
             | AggregateFunc::MaxTime
             | AggregateFunc::MaxArray
             | AggregateFunc::MaxList
@@ -3088,6 +3091,7 @@ impl AggregateExpr {
             | AggregateFunc::MinTimestamp
             | AggregateFunc::MinTimestampTz
             | AggregateFunc::MinInterval
+            | AggregateFunc::MinInet
             | AggregateFunc::MinTime
             | AggregateFunc::MinArray
             | AggregateFunc::MinList

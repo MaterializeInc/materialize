@@ -435,6 +435,7 @@ fn eval_error_code(err: &EvalError) -> SqlState {
         | EvalError::OidOutOfRange(_)
         | EvalError::MzTimestampOutOfRange(_)
         | EvalError::MzTimestampStepOverflow
+        | EvalError::InetOutOfRange
         | EvalError::CharOutOfRange => SqlState::NUMERIC_VALUE_OUT_OF_RANGE,
 
         // Out-of-range datetime and interval values.

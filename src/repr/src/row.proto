@@ -66,6 +66,8 @@ message ProtoDatum {
     ProtoRange range = 31;
     mz_repr.adt.mz_acl_item.ProtoMzAclItem mz_acl_item = 32;
     mz_repr.adt.mz_acl_item.ProtoAclItem acl_item = 33;
+    // `Inet::encode_packed`: family, mask length, address bytes.
+    bytes inet = 34;
   }
 }
 

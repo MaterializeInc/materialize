@@ -47,6 +47,7 @@ use uuid::Uuid;
 use crate::adt::array::{ArrayDimension, PackedArrayDimension};
 use crate::adt::date::Date;
 use crate::adt::datetime::PackedNaiveTime;
+use crate::adt::inet::Inet;
 use crate::adt::interval::PackedInterval;
 use crate::adt::jsonb::{JsonbPacker, JsonbRef};
 use crate::adt::mz_acl_item::{PackedAclItem, PackedMzAclItem};
@@ -77,6 +78,7 @@ mod fixed_binary_sizes {
     pub const ARRAY_DIMENSION_FIXED_BYTES: i32 = PackedArrayDimension::SIZE as i32;
 
     pub const UUID_FIXED_BYTES: i32 = 16;
+    pub const INET_FIXED_BYTES: i32 = crate::adt::inet::INET_ORDERED_BYTES as i32;
     static_assertions::const_assert_eq!(UUID_FIXED_BYTES as usize, std::mem::size_of::<Uuid>());
 }
 use fixed_binary_sizes::*;
@@ -104,7 +106,9 @@ pub fn preserves_order(scalar_type: &SqlScalarType) -> bool {
         | SqlScalarType::Uuid
         | SqlScalarType::MzTimestamp
         | SqlScalarType::MzAclItem
-        | SqlScalarType::AclItem => true,
+        | SqlScalarType::AclItem
+        | SqlScalarType::Inet
+        | SqlScalarType::Cidr => true,
         // We sort records lexicographically; a record has a meaningful sort if all its fields do.
         SqlScalarType::Record { fields, .. } => fields
             .iter()
@@ -199,6 +203,8 @@ enum DatumColumnEncoder {
     Uuid(FixedSizeBinaryBuilder),
     AclItem(FixedSizeBinaryBuilder),
     MzAclItem(BinaryBuilder),
+    /// `Inet::encode_ordered`.
+    Inet(FixedSizeBinaryBuilder),
     Range(BinaryBuilder),
     /// Hand rolled "StringBuilder" that reduces the number of copies required
     /// to serialize JSON.
@@ -289,6 +295,7 @@ impl DatumColumnEncoder {
             DatumColumnEncoder::Uuid(a) => a.len() * size_of::<Uuid>(),
             DatumColumnEncoder::AclItem(a) => a.len() * PackedAclItem::SIZE,
             DatumColumnEncoder::MzAclItem(a) => a.values_slice().len(),
+            DatumColumnEncoder::Inet(a) => a.len() * crate::adt::inet::INET_ORDERED_BYTES,
             DatumColumnEncoder::Range(a) => a.values_slice().len(),
             DatumColumnEncoder::Jsonb { buf, .. } => buf.len(),
             DatumColumnEncoder::Array { dims, vals, .. } => {
@@ -386,6 +393,9 @@ impl DatumColumnEncoder {
                 let packed = PackedMzAclItem::from_value(val);
                 builder.append_value(packed.as_bytes());
             }
+            (DatumColumnEncoder::Inet(builder), Datum::Inet(val)) => builder
+                .append_value(val.encode_ordered())
+                .expect("known correct size"),
             (DatumColumnEncoder::Range(builder), d @ Datum::Range(_)) => {
                 let proto = ProtoDatum::from(d);
                 let bytes = proto.encode_to_vec();
@@ -550,6 +560,7 @@ impl DatumColumnEncoder {
             DatumColumnEncoder::Uuid(builder) => builder.append_null(),
             DatumColumnEncoder::AclItem(builder) => builder.append_null(),
             DatumColumnEncoder::MzAclItem(builder) => builder.append_null(),
+            DatumColumnEncoder::Inet(builder) => builder.append_null(),
             DatumColumnEncoder::Range(builder) => builder.append_null(),
             DatumColumnEncoder::Jsonb {
                 offsets,
@@ -736,6 +747,7 @@ impl DatumColumnEncoder {
             }
             DatumColumnEncoder::AclItem(mut builder) => Arc::new(builder.finish()),
             DatumColumnEncoder::MzAclItem(mut builder) => Arc::new(builder.finish()),
+            DatumColumnEncoder::Inet(mut builder) => Arc::new(builder.finish()),
             DatumColumnEncoder::Range(mut builder) => Arc::new(builder.finish()),
             DatumColumnEncoder::Jsonb {
                 offsets,
@@ -903,6 +915,7 @@ enum DatumColumnDecoder {
     Range(BinaryArray),
     MzAclItem(BinaryArray),
     AclItem(FixedSizeBinaryArray),
+    Inet(FixedSizeBinaryArray),
 }
 
 impl DatumColumnDecoder {
@@ -1035,6 +1048,10 @@ impl DatumColumnDecoder {
                     Datum::MzAclItem(packed.into_value())
                 })
             }
+            DatumColumnDecoder::Inet(array) => array
+                .is_valid(idx)
+                .then(|| array.value(idx))
+                .map(|x| Datum::Inet(Inet::decode_ordered(x).expect("failed to roundtrip inet"))),
             DatumColumnDecoder::Range(array) => {
                 let Some(val) = array.is_valid(idx).then(|| array.value(idx)) else {
                     packer.push(Datum::Null);
@@ -1215,6 +1232,9 @@ impl DatumColumnDecoder {
             DatumColumnDecoder::Uuid(a) => {
                 fixed_stats_from_column(a, FixedSizeBytesStatsKind::Uuid)
             }
+            DatumColumnDecoder::Inet(a) => {
+                fixed_stats_from_column(a, FixedSizeBytesStatsKind::PackedInet)
+            }
             DatumColumnDecoder::AclItem(_)
             | DatumColumnDecoder::MzAclItem(_)
             | DatumColumnDecoder::Range(_) => ColumnStatKinds::None,
@@ -1251,6 +1271,7 @@ impl DatumColumnDecoder {
             DatumColumnDecoder::Uuid(a) => ArrayOrd::FixedSizeBinary(a.clone()).goodbytes(),
             DatumColumnDecoder::AclItem(a) => ArrayOrd::FixedSizeBinary(a.clone()).goodbytes(),
             DatumColumnDecoder::MzAclItem(a) => ArrayOrd::Binary(a.clone()).goodbytes(),
+            DatumColumnDecoder::Inet(a) => ArrayOrd::FixedSizeBinary(a.clone()).goodbytes(),
             DatumColumnDecoder::Range(a) => ArrayOrd::Binary(a.clone()).goodbytes(),
             DatumColumnDecoder::Json(a) => ArrayOrd::String(a.clone()).goodbytes(),
             DatumColumnDecoder::Array { dims, vals, .. } => {
@@ -1666,6 +1687,13 @@ fn array_to_decoder(
             let array = downcast_array::<BinaryArray>(array)?;
             DatumColumnDecoder::MzAclItem(array.clone())
         }
+        (
+            DataType::FixedSizeBinary(INET_FIXED_BYTES),
+            SqlScalarType::Inet | SqlScalarType::Cidr,
+        ) => {
+            let array = downcast_array::<FixedSizeBinaryArray>(array)?;
+            DatumColumnDecoder::Inet(array.clone())
+        }
         (DataType::Binary, SqlScalarType::Range { .. }) => {
             let array = downcast_array::<BinaryArray>(array)?;
             DatumColumnDecoder::Range(array.clone())
@@ -1827,6 +1855,9 @@ fn scalar_type_to_encoder(col_ty: &SqlScalarType) -> Result<DatumColumnEncoder, 
         ),
         SqlScalarType::MzAclItem => {
             DatumColumnEncoder::MzAclItem(BinaryBuilder::with_capacity(0, 0))
+        }
+        SqlScalarType::Inet | SqlScalarType::Cidr => {
+            DatumColumnEncoder::Inet(FixedSizeBinaryBuilder::with_capacity(0, INET_FIXED_BYTES))
         }
         SqlScalarType::Range { .. } => {
             DatumColumnEncoder::Range(BinaryBuilder::with_capacity(0, 0))
@@ -2056,6 +2087,7 @@ impl<'a> From<Datum<'a>> for ProtoDatum {
             })),
             Datum::MzAclItem(x) => DatumType::MzAclItem(x.into_proto()),
             Datum::AclItem(x) => DatumType::AclItem(x.into_proto()),
+            Datum::Inet(x) => DatumType::Inet(x.encode_packed()[..x.packed_len()].to_vec()),
         };
         ProtoDatum {
             datum_type: Some(datum_type),
@@ -2253,6 +2285,13 @@ impl RowPacker<'_> {
             }
             Some(DatumType::MzAclItem(x)) => self.push(Datum::MzAclItem(x.clone().into_rust()?)),
             Some(DatumType::AclItem(x)) => self.push(Datum::AclItem(x.clone().into_rust()?)),
+            Some(DatumType::Inet(x)) => {
+                let (inet, len) = Inet::decode_packed(x)?;
+                if len != x.len() {
+                    return Err(format!("trailing bytes in inet datum: {}", x.len() - len));
+                }
+                self.push(Datum::Inet(inet))
+            }
             None => return Err("unknown datum type".into()),
         };
         Ok(())

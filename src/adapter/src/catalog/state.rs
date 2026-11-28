@@ -2371,6 +2371,8 @@ impl CatalogState {
             CatalogType::Timestamp => CatalogType::Timestamp,
             CatalogType::TimestampTz => CatalogType::TimestampTz,
             CatalogType::Uuid => CatalogType::Uuid,
+            CatalogType::Inet => CatalogType::Inet,
+            CatalogType::Cidr => CatalogType::Cidr,
             CatalogType::VarChar => CatalogType::VarChar,
             CatalogType::Int2Vector => CatalogType::Int2Vector,
             CatalogType::MzAclItem => CatalogType::MzAclItem,
