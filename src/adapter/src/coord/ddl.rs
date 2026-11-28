@@ -9,8 +9,12 @@
 
 //! This module encapsulates all of the [`Coordinator`]'s logic for creating, dropping,
 //! and altering objects.
+//!
+//! Preparation phase histograms span scheduling and cache waits until a result or
+//! cancellation reaches the waiter. Their counts include canceled attempts, whose
+//! blocking optimizer work can continue beyond the recorded interval.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -65,6 +69,8 @@ pub struct PendingDdlCommit {
     context: DdlCommitContext,
     commands: Vec<catalog::command::CatalogCommand>,
     responses: BTreeMap<usize, catalog::CommandResponse>,
+    // Telemetry only. Command positions retain their identity across replay attempts.
+    preparations_started: BTreeSet<usize>,
     cancellation: Option<tokio::sync::watch::Receiver<bool>>,
 }
 
@@ -93,6 +99,7 @@ impl PendingDdlCommit {
             context: DdlCommitContext::Transaction(txn),
             commands,
             responses: BTreeMap::new(),
+            preparations_started: BTreeSet::new(),
             cancellation: None,
         }
     }
@@ -106,6 +113,7 @@ impl PendingDdlCommit {
             context: DdlCommitContext::Statement { ctx, response },
             commands,
             responses: BTreeMap::new(),
+            preparations_started: BTreeSet::new(),
             cancellation: None,
         }
     }
@@ -432,6 +440,23 @@ impl Coordinator {
         index: usize,
         request: catalog::command::index::IndexWork,
     ) {
+        let repeated = !pending.preparations_started.insert(index);
+        let phase = if request.is_metadata_refresh() {
+            "index_notice_refresh"
+        } else if repeated {
+            "index_repreparation"
+        } else {
+            "index_preparation"
+        };
+        let duration = self
+            .metrics
+            .catalog_transact_phase_seconds
+            .with_label_values(&[phase]);
+        let canceled = self
+            .metrics
+            .catalog_transact_phase_seconds
+            .with_label_values(&["index_preparation_canceled"]);
+        let started = Instant::now();
         let future = request.execute(
             self.catalog(),
             self.optimizer_metrics(),
@@ -450,8 +475,11 @@ impl Coordinator {
                     response = future => {
                         pending.responses.insert(index, catalog::CommandResponse::Index(response));
                     }
-                    _ = cancellation.wait_for(|canceled| *canceled) => {}
+                    _ = cancellation.wait_for(|canceled| *canceled) => {
+                        canceled.observe(started.elapsed().as_secs_f64());
+                    }
                 }
+                duration.observe(started.elapsed().as_secs_f64());
                 if let Err(error) = tx.send(Message::DdlCommandsReady { pending, otel_ctx }) {
                     warn!("internal_cmd_rx dropped before index preparation completed: {error:?}");
                 }
@@ -466,6 +494,20 @@ impl Coordinator {
         index: usize,
         request: catalog::command::view::ViewPreparation,
     ) {
+        let phase = if pending.preparations_started.insert(index) {
+            "view_preparation"
+        } else {
+            "view_repreparation"
+        };
+        let duration = self
+            .metrics
+            .catalog_transact_phase_seconds
+            .with_label_values(&[phase]);
+        let canceled = self
+            .metrics
+            .catalog_transact_phase_seconds
+            .with_label_values(&["view_preparation_canceled"]);
+        let started = Instant::now();
         let future = request.execute(self.catalog(), self.optimizer_metrics());
         let tx = self.internal_cmd_tx.clone();
         let otel_ctx = OpenTelemetryContext::obtain();
@@ -484,8 +526,11 @@ impl Coordinator {
                     } => {
                         pending.responses.insert(index, catalog::CommandResponse::View(response));
                     }
-                    _ = cancellation.wait_for(|canceled| *canceled) => {}
+                    _ = cancellation.wait_for(|canceled| *canceled) => {
+                        canceled.observe(started.elapsed().as_secs_f64());
+                    }
                 }
+                duration.observe(started.elapsed().as_secs_f64());
                 if let Err(error) = tx.send(Message::DdlCommandsReady { pending, otel_ctx }) {
                     warn!("internal_cmd_rx dropped before view preparation completed: {error:?}");
                 }
