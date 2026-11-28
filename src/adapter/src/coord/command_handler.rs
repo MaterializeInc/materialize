@@ -1566,6 +1566,14 @@ impl Coordinator {
                 .await;
             return;
         }
+        if matches!(
+            &*stmt,
+            Statement::CreateDatabase(_) | Statement::CreateSchema(_)
+        ) {
+            self.sequence_create_namespace_command(ctx, stmt, params)
+                .await;
+            return;
+        }
         if matches!(&*stmt, Statement::CreateView(_)) {
             self.sequence_create_view_command(ctx, stmt, params).await;
             return;
@@ -1821,7 +1829,10 @@ impl Coordinator {
         // planned in the first place, so we accept the abstraction leak.
         match stmt {
             // Semantic replay validates the current names, dependencies and permissions.
-            Statement::CreateView(_) | Statement::CreateTable(_) => false,
+            Statement::CreateView(_)
+            | Statement::CreateTable(_)
+            | Statement::CreateDatabase(_)
+            | Statement::CreateSchema(_) => false,
             // Secrets have a small and understood set of dependencies, and their off-thread work
             // interacts with k8s.
             Statement::AlterSecret(_) => false,
