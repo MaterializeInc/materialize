@@ -121,7 +121,7 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@babel/core": "^7.29.6",
+    "@babel/core": "^8.0.0",
     "@emotion/babel-plugin": "^11.13.5",
     "@eslint/compat": "^2.1.1",
     "@eslint/js": "^10.0.1",
