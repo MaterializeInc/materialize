@@ -666,6 +666,50 @@ async fn test_create_view_replay_revoked_privilege() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn test_materialized_view_committed_publication() {
+    use mz_postgres_util::{Sql, batch_execute, query_one};
+
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default(
+            "enable_replacement_materialized_views".into(),
+            "true".into(),
+        )
+        .start()
+        .await;
+    let client = server.connect().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(30), async {
+        for (sql, observation) in [
+            ("CREATE TABLE publication_input (a int)", None),
+            ("INSERT INTO publication_input VALUES (1)", None),
+            (
+                "CREATE MATERIALIZED VIEW refresh_publication WITH (REFRESH AT CREATION) AS SELECT a FROM publication_input",
+                Some(("SELECT a FROM refresh_publication", 1)),
+            ),
+            ("CREATE MATERIALIZED VIEW publication_mv AS SELECT a FROM publication_input", None),
+            (
+                "CREATE REPLACEMENT MATERIALIZED VIEW replacement_mv FOR publication_mv AS SELECT a + 10 AS a FROM publication_input",
+                Some(("SELECT a FROM publication_mv", 1)),
+            ),
+            (
+                "ALTER MATERIALIZED VIEW publication_mv APPLY REPLACEMENT replacement_mv",
+                Some(("SELECT a FROM publication_mv", 11)),
+            ),
+            (
+                "CREATE MATERIALIZED VIEW IF NOT EXISTS publication_mv AS SELECT 99 AS a",
+                Some(("SELECT a FROM publication_mv", 11)),
+            ),
+            ("DROP MATERIALIZED VIEW publication_mv, refresh_publication", None),
+        ] {
+            batch_execute(&client, Sql::new(sql)).await.expect(sql);
+            if let Some((query, expected)) = observation {
+                let row = query_one(&client, Sql::new(query), &[]).await.expect(query);
+                assert_eq!(row.get::<_, i32>(0), expected, "{sql}");
+            }
+        }
+    }).await.expect("materialized view committed publication timed out");
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
 async fn test_semantic_view_index_execution_routes() {
     use mz_postgres_util::{Sql, batch_execute, query_one};
 
