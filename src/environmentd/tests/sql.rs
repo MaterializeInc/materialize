@@ -358,8 +358,9 @@ async fn test_temporary_ddl_session_lifecycle() {
             else {
                 panic!("expected a PostgreSQL temporary-dependency error");
             };
+            let error = error.unwrap_db_error();
             assert_contains!(
-                error.unwrap_db_error().message(),
+                error.message(),
                 "non-temporary items cannot depend on temporary item"
             );
         }
