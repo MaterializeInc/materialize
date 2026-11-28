@@ -48,7 +48,7 @@ fn drop_statement(session: &Session, name: &str) -> DropStatement {
 }
 
 async fn table_command(
-    catalog: &mut Catalog,
+    catalog: &Catalog,
     session: &Session,
     name: &str,
 ) -> (CatalogCommand, CatalogItemId) {
@@ -80,7 +80,7 @@ async fn commit(catalog: &mut Catalog, commands: &mut [CatalogCommand]) {
 async fn drop_sees_table_created_in_command_prefix() {
     Catalog::with_debug(|mut catalog| async move {
         let session = session();
-        let (create, id) = table_command(&mut catalog, &session, "prefix_table").await;
+        let (create, id) = table_command(&catalog, &session, "prefix_table").await;
         let mut drop = drop_statement(&session, "prefix_table");
         assert!(
             drop.plan(catalog.state()).is_err(),
@@ -109,9 +109,9 @@ async fn drop_sees_table_created_in_command_prefix() {
 async fn failing_drop_rolls_back_prior_creates_and_drops() {
     Catalog::with_debug(|mut catalog| async move {
         let session = session();
-        let (create, original_id) = table_command(&mut catalog, &session, "original_table").await;
+        let (create, original_id) = table_command(&catalog, &session, "original_table").await;
         commit(&mut catalog, &mut [create]).await;
-        let (create, new_id) = table_command(&mut catalog, &session, "new_table").await;
+        let (create, new_id) = table_command(&catalog, &session, "new_table").await;
         let revision = catalog.transient_revision();
         let mut commands = [
             create,
@@ -151,7 +151,7 @@ async fn failing_drop_rolls_back_prior_creates_and_drops() {
 async fn drop_replans_reused_name_and_preserves_renamed_original() {
     Catalog::with_debug(|mut catalog| async move {
         let session = session();
-        let (create, original_id) = table_command(&mut catalog, &session, "reused_table").await;
+        let (create, original_id) = table_command(&catalog, &session, "reused_table").await;
         commit(&mut catalog, &mut [create]).await;
         let mut drop = drop_statement(&session, "reused_table");
         let plan = drop.plan(catalog.state()).expect("plan original drop");
@@ -173,8 +173,7 @@ async fn drop_replans_reused_name_and_preserves_renamed_original() {
             )
             .await
             .expect("rename original table");
-        let (replacement, replacement_id) =
-            table_command(&mut catalog, &session, "reused_table").await;
+        let (replacement, replacement_id) = table_command(&catalog, &session, "reused_table").await;
         commit(&mut catalog, &mut [replacement]).await;
         assert_ne!(original_id, replacement_id);
 
