@@ -1777,6 +1777,7 @@ impl CatalogState {
 
                         // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
                         let raw_expr = view.expr;
+                        fail::fail_point!("catalog_view_reoptimization");
                         let optimized_expr = match optimizer.optimize(raw_expr.clone()) {
                             Ok(optimzed_expr) => optimzed_expr,
                             Err(err) => return Err((err.into(), cached_expr)),

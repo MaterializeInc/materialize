@@ -346,6 +346,65 @@ async fn test_create_view_replay_revoked_privilege() {
     .expect("view privilege replay timed out");
 }
 
+// These failpoints are process-global. Run this test in its own process (as nextest does).
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn test_create_view_reuses_prepared_expression() {
+    use std::sync::atomic::AtomicUsize;
+
+    use mz_postgres_util::{Sql, batch_execute, query_one};
+
+    struct RemoveHooks;
+    impl Drop for RemoveHooks {
+        fn drop(&mut self) {
+            fail::remove("catalog_view_optimize_ready");
+            fail::remove("catalog_view_reoptimization");
+        }
+    }
+
+    let server = test_util::TestHarness::default().start().await;
+    let client = server.connect().await.unwrap();
+    let _hooks = RemoveHooks;
+    let prepared = Arc::new(AtomicUsize::new(0));
+    let fallback = Arc::new(AtomicUsize::new(0));
+    for (name, count) in [
+        ("catalog_view_optimize_ready", Arc::clone(&prepared)),
+        ("catalog_view_reoptimization", Arc::clone(&fallback)),
+    ] {
+        fail::cfg_callback(name, move || {
+            count.fetch_add(1, Ordering::SeqCst);
+        })
+        .unwrap();
+    }
+    tokio::time::timeout(Duration::from_secs(30), async {
+        for sql in [
+            "CREATE VIEW reused AS SELECT 1 AS a",
+            "CREATE OR REPLACE VIEW reused AS SELECT 2 AS a",
+            "CREATE VIEW IF NOT EXISTS reused AS SELECT 3 AS a",
+            "CREATE VIEW IF NOT EXISTS new_view AS SELECT 4 AS a",
+        ] {
+            prepared.store(0, Ordering::SeqCst);
+            batch_execute(&client, Sql::new(sql)).await.unwrap();
+            assert_eq!(prepared.load(Ordering::SeqCst), 1, "{sql}");
+            assert_eq!(
+                fallback.load(Ordering::SeqCst),
+                0,
+                "catalog application must reuse the accepted expression: {sql}"
+            );
+        }
+        let row = query_one(
+            &client,
+            Sql::new("SELECT reused.a, new_view.a FROM reused, new_view"),
+            &[],
+        )
+        .await
+        .unwrap();
+        assert_eq!(row.get::<_, i32>(0), 2);
+        assert_eq!(row.get::<_, i32>(1), 4);
+    })
+    .await
+    .expect("prepared view expression reuse timed out");
+}
+
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 async fn test_timeline_holds_across_catalog_changes() {
     use mz_postgres_util::{Sql, batch_execute, query_one};

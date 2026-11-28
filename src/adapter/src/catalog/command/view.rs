@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use mz_catalog::expr_cache::LocalExpressions;
 use mz_catalog::memory::objects::{CatalogItem, View};
-use mz_expr::OptimizedMirRelationExpr;
+use mz_expr::{CollectionPlan, OptimizedMirRelationExpr};
 use mz_repr::{CatalogItemId, GlobalId, RelationDesc, RelationVersion};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::names::ResolvedIds;
