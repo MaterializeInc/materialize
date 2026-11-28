@@ -665,6 +665,41 @@ async fn test_create_view_replay_revoked_privilege() {
     .expect("view privilege replay timed out");
 }
 
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn test_semantic_view_index_execution_routes() {
+    use mz_postgres_util::{Sql, batch_execute, query_one};
+
+    let server = test_util::TestHarness::default().start().await;
+    let client = server.connect().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(30), async {
+        for sql in [
+            "CREATE VIEW routed_view AS SELECT 1 AS a",
+            "CREATE INDEX routed_index ON routed_view (a)",
+            "BEGIN; CREATE VIEW deferred_view AS SELECT 2 AS a; COMMIT",
+            "BEGIN; CREATE INDEX deferred_index ON deferred_view (a); COMMIT",
+            "EXPLAIN PLAN FOR CREATE VIEW explain_only_view AS SELECT 3 AS a",
+            "EXPLAIN PLAN FOR CREATE INDEX explain_only_index ON routed_view (a)",
+        ] {
+            batch_execute(&client, Sql::new(sql)).await.unwrap();
+        }
+        let row = query_one(
+            &client,
+            Sql::new("SELECT routed_view.a, deferred_view.a FROM routed_view, deferred_view"),
+            &[],
+        ).await.unwrap();
+        assert_eq!(row.get::<_, i32>(0), 1);
+        assert_eq!(row.get::<_, i32>(1), 2);
+        let row = query_one(
+            &client,
+            Sql::new("SELECT (SELECT count(*) FROM mz_indexes WHERE name IN ('routed_index', 'deferred_index')), (SELECT count(*) FROM mz_views WHERE name = 'explain_only_view'), (SELECT count(*) FROM mz_indexes WHERE name = 'explain_only_index')"),
+            &[],
+        ).await.unwrap();
+        assert_eq!(row.get::<_, i64>(0), 2);
+        assert_eq!(row.get::<_, i64>(1), 0);
+        assert_eq!(row.get::<_, i64>(2), 0);
+    }).await.expect("semantic view/index routing timed out");
+}
+
 // These failpoints are process-global. Run this test in its own process (as nextest does).
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
 async fn test_create_view_reuses_prepared_expression() {
