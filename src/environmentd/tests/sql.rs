@@ -295,7 +295,7 @@ async fn test_create_view_replay_revoked_privilege() {
             .with_system_parameter_default("enable_rbac_checks".into(), "true".into())
             .start()
             .await;
-        let ddl = server.connect().await.unwrap();
+        let ddl = server.connect().internal().await.unwrap();
         for sql in [
             "CREATE ROLE view_creator",
             "CREATE SCHEMA view_schema",
