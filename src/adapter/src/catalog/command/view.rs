@@ -251,6 +251,7 @@ impl ViewPreparation {
                         Default::default(),
                     )
                     .await;
+                fail::fail_point!("catalog_view_expression_cached");
             }
             ViewPreparationResponse {
                 request: self,

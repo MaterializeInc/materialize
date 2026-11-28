@@ -677,17 +677,23 @@ async fn test_create_view_reuses_prepared_expression() {
         fn drop(&mut self) {
             fail::remove("catalog_view_optimize_ready");
             fail::remove("catalog_view_reoptimization");
+            fail::remove("catalog_view_expression_cached");
         }
     }
 
-    let server = test_util::TestHarness::default().start().await;
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default("enable_expression_cache".into(), "true".into())
+        .start()
+        .await;
     let client = server.connect().await.unwrap();
     let _hooks = RemoveHooks;
     let prepared = Arc::new(AtomicUsize::new(0));
     let fallback = Arc::new(AtomicUsize::new(0));
+    let cached = Arc::new(AtomicUsize::new(0));
     for (name, count) in [
         ("catalog_view_optimize_ready", Arc::clone(&prepared)),
         ("catalog_view_reoptimization", Arc::clone(&fallback)),
+        ("catalog_view_expression_cached", Arc::clone(&cached)),
     ] {
         fail::cfg_callback(name, move || {
             count.fetch_add(1, Ordering::SeqCst);
@@ -695,15 +701,21 @@ async fn test_create_view_reuses_prepared_expression() {
         .unwrap();
     }
     tokio::time::timeout(Duration::from_secs(30), async {
-        for sql in [
-            "CREATE VIEW reused AS SELECT 1 AS a",
-            "CREATE OR REPLACE VIEW reused AS SELECT 2 AS a",
-            "CREATE VIEW IF NOT EXISTS reused AS SELECT 3 AS a",
-            "CREATE VIEW IF NOT EXISTS new_view AS SELECT 4 AS a",
+        for (sql, cache_writes) in [
+            ("CREATE VIEW reused AS SELECT 1 AS a", 1),
+            ("CREATE OR REPLACE VIEW reused AS SELECT 2 AS a", 1),
+            ("CREATE VIEW IF NOT EXISTS reused AS SELECT 3 AS a", 1),
+            ("CREATE VIEW IF NOT EXISTS new_view AS SELECT 4 AS a", 1),
+            ("CREATE TEMP VIEW temp_reused AS SELECT 1 AS a", 0),
+            ("CREATE OR REPLACE TEMP VIEW temp_reused AS SELECT 2 AS a", 0),
+            ("CREATE TEMP VIEW IF NOT EXISTS temp_reused AS SELECT 3 AS a", 0),
+            ("CREATE TEMP VIEW IF NOT EXISTS temp_new AS SELECT 4 AS a", 0),
         ] {
             prepared.store(0, Ordering::SeqCst);
+            cached.store(0, Ordering::SeqCst);
             batch_execute(&client, Sql::new(sql)).await.unwrap();
             assert_eq!(prepared.load(Ordering::SeqCst), 1, "{sql}");
+            assert_eq!(cached.load(Ordering::SeqCst), cache_writes, "{sql}");
             assert_eq!(
                 fallback.load(Ordering::SeqCst),
                 0,
@@ -712,13 +724,15 @@ async fn test_create_view_reuses_prepared_expression() {
         }
         let row = query_one(
             &client,
-            Sql::new("SELECT reused.a, new_view.a FROM reused, new_view"),
+            Sql::new("SELECT reused.a, new_view.a, temp_reused.a, temp_new.a FROM reused, new_view, temp_reused, temp_new"),
             &[],
         )
         .await
         .unwrap();
         assert_eq!(row.get::<_, i32>(0), 2);
         assert_eq!(row.get::<_, i32>(1), 4);
+        assert_eq!(row.get::<_, i32>(2), 2);
+        assert_eq!(row.get::<_, i32>(3), 4);
     })
     .await
     .expect("prepared view expression reuse timed out");
