@@ -3452,7 +3452,7 @@ impl Coordinator {
     ///
     /// The read hold across shipping keeps the since of `id_bundle` from advancing underneath the
     /// as-of just picked.
-    async fn ship_new_dataflow(
+    pub(crate) async fn ship_new_dataflow(
         &mut self,
         id_bundle: &CollectionIdBundle,
         mut df_desc: LirDataflowDescription,
