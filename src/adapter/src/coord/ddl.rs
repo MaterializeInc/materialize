@@ -232,6 +232,7 @@ impl Coordinator {
         .await;
     }
 
+    #[instrument(skip_all)]
     pub(super) async fn sequence_create_view_command(
         &mut self,
         mut ctx: ExecuteContext,
