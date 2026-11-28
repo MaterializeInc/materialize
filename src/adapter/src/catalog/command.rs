@@ -25,6 +25,9 @@
 //! rollback cannot undo either secret writes or changes in external services.
 
 pub(crate) mod connection;
+pub(crate) mod drop;
+#[cfg(test)]
+mod drop_tests;
 pub(crate) mod index;
 pub(crate) mod namespace;
 pub(crate) mod source;
@@ -49,6 +52,7 @@ use crate::{AdapterError, AdapterNotice};
 
 #[derive(Clone, Debug)]
 pub enum CatalogCommand {
+    DropRelation(Arc<drop::DropStatement>),
     Rename(Arc<RenameCommand>),
     CatalogResult(Arc<CatalogResultCommand>),
     Description(Arc<DescriptionCommand>),
@@ -81,6 +85,13 @@ impl CatalogCommand {
         response: Option<CommandResponse>,
     ) -> Result<CommandExecution<'_>, CommandExecutionError> {
         match self {
+            Self::DropRelation(command) => {
+                assert!(
+                    response.is_none(),
+                    "drop commands have no external preparation"
+                );
+                Ok(Arc::make_mut(command).compile(state, compute)?)
+            }
             Self::CreateIndex(command) => {
                 let response = match response {
                     Some(CommandResponse::Index(response)) => Some(response),
@@ -295,6 +306,7 @@ impl CatalogCommand {
             Self::CreateView(command) => command.notices(),
             Self::CreateTable(command) => command.notices(),
             Self::CreateIndex(command) => command.notices(),
+            Self::DropRelation(command) => command.notices(),
             Self::CreateNamespace(command) => command.notices(),
         }
     }
@@ -661,25 +673,42 @@ fn plan_command(
     params: &Params,
     session: &SessionMeta,
 ) -> Result<(Plan, mz_sql::names::ResolvedIds, Vec<PlanNotice>), AdapterError> {
+    let (result, notices) = plan_command_with_notices(state, statement, params, session);
+    result.map(|(plan, resolved_ids)| (plan, resolved_ids, notices))
+}
+
+/// Retains planning notices even when planning or authorization fails.
+fn plan_command_with_notices(
+    state: &CatalogState,
+    statement: &Statement<Raw>,
+    params: &Params,
+    session: &SessionMeta,
+) -> (
+    Result<(Plan, mz_sql::names::ResolvedIds), AdapterError>,
+    Vec<PlanNotice>,
+) {
     let (tx, mut rx) = mpsc::unbounded_channel();
-    let catalog = state.for_session_metadata(session, tx);
-    let (statement, resolved_ids) = mz_sql::names::resolve(&catalog, statement.clone())?;
-    let (plan, sql_impl_ids) = mz_sql::plan::plan(
-        Some(session.pcx()),
-        &catalog,
-        statement,
-        params,
-        &resolved_ids,
-    )?;
-    mz_sql::rbac::check_plan(
-        &catalog,
-        None,
-        session,
-        &plan,
-        None,
-        &resolved_ids,
-        &sql_impl_ids,
-    )?;
+    let result = (|| {
+        let catalog = state.for_session_metadata(session, tx);
+        let (statement, resolved_ids) = mz_sql::names::resolve(&catalog, statement.clone())?;
+        let (plan, sql_impl_ids) = mz_sql::plan::plan(
+            Some(session.pcx()),
+            &catalog,
+            statement,
+            params,
+            &resolved_ids,
+        )?;
+        mz_sql::rbac::check_plan(
+            &catalog,
+            None,
+            session,
+            &plan,
+            None,
+            &resolved_ids,
+            &sql_impl_ids,
+        )?;
+        Ok((plan, resolved_ids))
+    })();
     let mut notices = Vec::new();
     while let Ok(notice) = rx.try_recv() {
         match notice {
@@ -687,7 +716,7 @@ fn plan_command(
             _ => unreachable!("planning only emits plan notices"),
         }
     }
-    Ok((plan, resolved_ids, notices))
+    (result, notices)
 }
 
 /// Returns the rename/swap ops for the given `Plan`, along with the object

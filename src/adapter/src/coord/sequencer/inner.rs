@@ -21,7 +21,7 @@ use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::{ENABLE_EXPRESSION_CACHE, ENABLE_PASSWORD_AUTH};
 use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, DataSourceDesc, Index, Sink, Source, Table, TableDataSource, Type,
+    CatalogEntry, CatalogItem, DataSourceDesc, Sink, Source, Table, TableDataSource, Type,
 };
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::LirDataflowDescription;
@@ -33,7 +33,7 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{instrument, soft_panic_or_log};
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
-use mz_repr::explain::{ExprHumanizer, ExprHumanizerExt, TransientItem};
+use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, Datum, Diff, GlobalId, RelationDesc, Row, Timestamp};
 use mz_sql::ast::{CreateSinkOption, CreateSinkOptionName};
@@ -815,16 +815,6 @@ impl Coordinator {
                 .add_notice(AdapterNotice::CascadeDroppedObject { objects });
         }
 
-        // Collect GlobalIds for expression cache invalidation.
-        let expr_cache_invalidate_ids: BTreeSet<_> = drop_ids
-            .iter()
-            .filter_map(|id| match id {
-                ObjectId::Item(item_id) => Some(self.catalog().get_entry(item_id).global_ids()),
-                _ => None,
-            })
-            .flatten()
-            .collect();
-
         let DropOps {
             ops,
             dropped_active_db,
@@ -833,15 +823,6 @@ impl Coordinator {
 
         self.catalog_transact_with_context(None, Some(ctx), ops)
             .await?;
-
-        // Invalidate expression cache entries for dropped objects.
-        if !expr_cache_invalidate_ids.is_empty() {
-            let _fut = self.catalog().update_expression_cache(
-                Default::default(),
-                Default::default(),
-                expr_cache_invalidate_ids,
-            );
-        }
 
         fail::fail_point!("after_sequencer_drop_replica");
 
@@ -1143,79 +1124,43 @@ impl Coordinator {
     /// TODO: once pinned LIR makes a dataflow's index imports a durable property, record them
     /// as catalog dependencies so the planner can do this with its regular dependency walk.
     ///
-    /// NOTE: The check is sound only because `DROP` is serialized DDL (`must_serialize_ddl`)
-    /// and callers do not await between it and the catalog commit. Otherwise a concurrent
-    /// `CREATE MATERIALIZED VIEW` could start reading the index in between.
+    /// The caller must retain ordered commit/publication after this check, without
+    /// handing control back to the coordinator message loop.
     fn check_index_dependents(
         &self,
         session: &Session,
         drop_ids: &[ObjectId],
     ) -> Result<IndexDropNotices, AdapterError> {
         let humanizer = self.catalog().for_session(session);
-        let drop_in_use_allowed = self.catalog().system_config().enable_drop_in_use_index();
-        let humanize_index = |index: &Index, item_id: &CatalogItemId| {
-            humanizer
-                .humanize_id(index.global_id())
-                .unwrap_or_else(|| item_id.to_string())
-        };
+        let notices = catalog::command::drop::check_index_dependents(
+            self.catalog().state(),
+            &humanizer,
+            Some(&self.controller.compute),
+            drop_ids,
+        )?;
+        Ok(self.classify_index_drop_notices(notices))
+    }
 
-        let drop_set: BTreeSet<ObjectId> = drop_ids.iter().cloned().collect();
-        let mut orphaned = Vec::new();
-        let mut blocked = Vec::new();
-        let mut transient_by_index = Vec::new();
-        for id in drop_ids {
-            let ObjectId::Item(item_id) = id else {
-                continue;
-            };
-            let Some(index) = self.catalog().get_entry(item_id).index() else {
-                continue;
-            };
-            let (durable, transient) = self.index_readers(index, &drop_set);
-            if !transient.is_empty() {
-                transient_by_index.push((index, item_id, transient));
-            }
-            if durable.is_empty() {
-                continue;
-            }
-            if !drop_in_use_allowed {
-                let dependents = durable
-                    .into_iter()
-                    .map(|dependent_id| {
-                        let entry = self.catalog().get_entry(&dependent_id);
-                        (
-                            entry.item_type().to_string(),
-                            humanizer.minimal_qualification(entry.name()).to_string(),
-                        )
-                    })
-                    .collect();
-                // Minimal qualification, like the planner's RESTRICT error.
-                let index_name = humanizer
-                    .minimal_qualification(self.catalog().get_entry(item_id).name())
-                    .to_string();
-                blocked.push((index_name, dependents));
-                continue;
-            }
-            let dependant_objects = durable
-                .into_iter()
-                .filter_map(|dependent_id| {
-                    let entry = self.catalog().get_entry(&dependent_id);
-                    humanizer.humanize_id(entry.latest_global_id())
-                })
-                .collect();
-            orphaned.push(DroppedInUseIndex {
-                index_name: humanize_index(index, item_id),
-                dependant_objects,
-            });
-        }
+    pub(crate) fn emit_command_index_drop_notices(
+        &self,
+        session: &Session,
+        notices: catalog::command::drop::IndexDropNotices,
+    ) {
+        let IndexDropNotices {
+            orphaned,
+            in_flight,
+        } = self.classify_index_drop_notices(notices);
+        self.emit_index_drop_notices(session, orphaned, in_flight);
+    }
 
-        if !blocked.is_empty() {
-            return Err(AdapterError::IndexInUse { blocked });
-        }
-
+    fn classify_index_drop_notices(
+        &self,
+        notices: catalog::command::drop::IndexDropNotices,
+    ) -> IndexDropNotices {
         let mut in_flight = Vec::new();
-        for (index, item_id, transient) in transient_by_index {
+        for (index_name, transient) in notices.in_flight {
             let mut readers = InFlightIndexReaders {
-                index_name: humanize_index(index, item_id),
+                index_name,
                 ..Default::default()
             };
             for gid in transient {
@@ -1235,42 +1180,10 @@ impl Coordinator {
             in_flight.push(readers);
         }
 
-        Ok(IndexDropNotices {
-            orphaned,
+        IndexDropNotices {
+            orphaned: notices.orphaned,
             in_flight,
-        })
-    }
-
-    /// Compute collections that read from `index`, split into catalog items not in `drop_set`
-    /// and transient (one-shot) dataflows.
-    fn index_readers(
-        &self,
-        index: &Index,
-        drop_set: &BTreeSet<ObjectId>,
-    ) -> (Vec<CatalogItemId>, Vec<GlobalId>) {
-        let mut durable = Vec::new();
-        let mut transient = Vec::new();
-        let readers = self
-            .controller
-            .compute
-            .collection_reverse_dependencies(index.cluster_id, index.global_id())
-            .ok()
-            .into_iter()
-            .flatten();
-        for gid in readers {
-            if gid.is_transient() {
-                transient.push(gid);
-                continue;
-            }
-            // A collection whose item is gone from the catalog is already being torn down.
-            let Some(entry) = self.catalog().try_get_entry_by_global_id(&gid) else {
-                continue;
-            };
-            if !drop_set.contains(&ObjectId::Item(entry.id())) {
-                durable.push(entry.id());
-            }
         }
-        (durable, transient)
     }
 
     /// Reports the outcome of [`Coordinator::check_index_dependents`] to the session.

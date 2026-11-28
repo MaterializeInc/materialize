@@ -279,6 +279,41 @@ impl Coordinator {
         self.prepare_view_command(pending, 0, request);
     }
 
+    pub(super) async fn sequence_drop_relation_command(
+        &mut self,
+        mut ctx: ExecuteContext,
+        statement: Arc<mz_sql::ast::Statement<mz_sql::ast::Raw>>,
+        params: mz_sql::plan::Params,
+    ) {
+        ctx.finish_ddl_on_coordinator = true;
+        let mut command =
+            catalog::command::drop::DropStatement::new(statement, params, ctx.session().meta());
+        let plan = match command.plan(self.catalog().state()) {
+            Ok(plan) => plan,
+            Err(error) => {
+                ctx.session()
+                    .add_notices(command.notices().iter().cloned().map(Into::into));
+                return ctx.retire(Err(error));
+            }
+        };
+        let response = crate::ExecuteResponse::DroppedObject(plan.object_type);
+        if let Err(error) =
+            self.prepare_command_execution(&mut ctx, &mz_sql::plan::Plan::DropObjects(plan))
+        {
+            ctx.session()
+                .add_notices(command.notices().iter().cloned().map(Into::into));
+            return ctx.retire(Err(error));
+        }
+        self.sequence_ddl_commit(PendingDdlCommit::statement(
+            ctx,
+            response,
+            vec![catalog::command::CatalogCommand::DropRelation(Arc::new(
+                command,
+            ))],
+        ))
+        .await;
+    }
+
     pub(super) async fn sequence_create_table_command(
         &mut self,
         mut ctx: ExecuteContext,
@@ -624,6 +659,9 @@ impl Coordinator {
 
     fn emit_command_notices(&self, session: &Session, command: &catalog::command::CatalogCommand) {
         session.add_notices(command.notices().iter().cloned().map(Into::into));
+        if let catalog::command::CatalogCommand::DropRelation(command) = command {
+            session.add_notices(command.adapter_notices().iter().cloned());
+        }
         if let catalog::command::CatalogCommand::CreateIndex(command) = command {
             if let Some(name) = command.skipped_name() {
                 session.add_notice(crate::AdapterNotice::ObjectAlreadyExists {
@@ -1073,6 +1111,7 @@ impl Coordinator {
                             | catalog::command::CatalogCommand::CreateView(_)
                             | catalog::command::CatalogCommand::CreateTable(_)
                             | catalog::command::CatalogCommand::CreateIndex(_)
+                            | catalog::command::CatalogCommand::DropRelation(_)
                             | catalog::command::CatalogCommand::CreateNamespace(_) => {
                                 unreachable!("this command does not allocate IDs");
                             }
@@ -1183,9 +1222,14 @@ impl Coordinator {
                     .filter(|id| self.catalog().state().try_get_entry(id).is_none())
             })
             .collect();
-        if result.is_ok() && matches!(pending.context, DdlCommitContext::Statement { .. }) {
+        if matches!(pending.context, DdlCommitContext::Statement { .. }) {
             for command in &pending.commands {
-                self.emit_command_notices(pending.context.context_mut().session(), command);
+                let failed_drop =
+                    matches!(command, catalog::command::CatalogCommand::DropRelation(_))
+                        && !matches!(&result, Err(AdapterError::Canceled));
+                if result.is_ok() || failed_drop {
+                    self.emit_command_notices(pending.context.context_mut().session(), command);
+                }
             }
         }
         if cleanup_ids.is_empty() {
@@ -1265,6 +1309,15 @@ impl Coordinator {
         .observe(phase_seconds.with_label_values(&["transact"]))
         .await?;
 
+        // Drop implications retire transient readers and remove their ownership records.
+        for command in commands.iter() {
+            if let catalog::command::CatalogCommand::DropRelation(command) = command {
+                self.emit_command_index_drop_notices(
+                    ctx.session(),
+                    command.index_notices().clone(),
+                );
+            }
+        }
         self.track_catalog_audit_events(Some(conn_id), audit_events);
         let stage_start = Instant::now();
         let table_updates = self
