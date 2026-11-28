@@ -737,14 +737,16 @@ impl StorageController for Controller {
         storage_metadata: &StorageMetadata,
         collections: Vec<(GlobalId, RelationDesc)>,
     ) -> Result<(), StorageError> {
+        use futures::TryStreamExt;
+
         let persist_client = self
             .persist
             .open(self.persist_location.clone())
             .await
             .unwrap();
+        let persist_client = &persist_client;
 
-        for (global_id, relation_desc) in collections {
-            let shard_id = storage_metadata.get_collection_shard(global_id)?;
+        let evolve = |shard_id, global_id: GlobalId, relation_desc: RelationDesc| async move {
             let diagnostics = Diagnostics {
                 shard_name: global_id.to_string(),
                 handle_purpose: "evolve nullability for bootstrap".to_string(),
@@ -755,7 +757,7 @@ impl StorageController for Controller {
                 .expect("invalid persist usage");
             let Some((schema_id, current_schema, _)) = latest_schema else {
                 tracing::debug!(?global_id, "no schema registered");
-                continue;
+                return Ok(());
             };
             tracing::debug!(?global_id, ?current_schema, new_schema = ?relation_desc, "migrating schema");
 
@@ -794,9 +796,33 @@ impl StorageController for Controller {
                     });
                 }
             };
+            Ok(())
+        };
+
+        // A replacement materialized view writes to the shard of its target. The collections of
+        // a shard evolve in order, each seeing the schema the previous one registered.
+        let mut by_shard: BTreeMap<_, Vec<_>> = BTreeMap::new();
+        for (global_id, relation_desc) in collections {
+            let shard_id = storage_metadata.get_collection_shard(global_id)?;
+            by_shard
+                .entry(shard_id)
+                .or_default()
+                .push((global_id, relation_desc));
         }
 
-        Ok(())
+        // Shards evolve concurrently. `latest_schema` initializes a shard that has never been
+        // used, with a blob write and a consensus write, and on the first boot of an environment
+        // that is every shard.
+        futures::stream::iter(by_shard)
+            .map(|(shard_id, collections)| async move {
+                for (global_id, relation_desc) in collections {
+                    evolve(shard_id, global_id, relation_desc).await?;
+                }
+                Ok(())
+            })
+            .buffer_unordered(50)
+            .try_collect()
+            .await
     }
 
     /// Create and "execute" the described collection.
