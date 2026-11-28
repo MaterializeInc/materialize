@@ -80,7 +80,6 @@ use mz_sql::names::{
 };
 use mz_sql::plan::{Plan, PlanNotice, StatementDesc};
 use mz_sql::rbac;
-use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql::session::vars::SystemVars;
 use mz_sql_parser::ast::QualifiedReplica;
