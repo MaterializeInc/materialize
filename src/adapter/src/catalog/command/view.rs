@@ -99,26 +99,8 @@ impl ViewStatement {
         &self,
         state: &CatalogState,
     ) -> Result<ViewCompilation, AdapterError> {
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        let catalog = state.for_session_metadata(self.session.as_ref(), tx);
-        let (statement, resolved_ids) =
-            mz_sql::names::resolve(&catalog, (*self.statement).clone())?;
-        let (plan, sql_impl_ids) = mz_sql::plan::plan(
-            Some(self.session.pcx()),
-            &catalog,
-            statement,
-            &self.params,
-            &resolved_ids,
-        )?;
-        mz_sql::rbac::check_plan(
-            &catalog,
-            None,
-            self.session.as_ref(),
-            &plan,
-            None,
-            &resolved_ids,
-            &sql_impl_ids,
-        )?;
+        let (plan, resolved_ids, notices) =
+            super::plan_command(state, &self.statement, &self.params, &self.session)?;
         let Plan::CreateView(plan) = plan else {
             return Err(AdapterError::Unsupported("non-CREATE VIEW intent"));
         };
@@ -128,13 +110,6 @@ impl ViewStatement {
         let dependencies = plan.view.expr.depends_on();
         state.validate_timeline_context(dependencies.iter().copied())?;
         state.validate_system_column_references(plan.ambiguous_columns, &dependencies)?;
-        let mut notices = Vec::new();
-        while let Ok(notice) = rx.try_recv() {
-            match notice {
-                crate::AdapterNotice::PlanNotice(notice) => notices.push(notice),
-                _ => unreachable!("planning only emits plan notices"),
-            }
-        }
         Ok(ViewCompilation {
             plan,
             resolved_ids,
@@ -220,8 +195,8 @@ impl ViewStatement {
         self.skipped_name.as_deref()
     }
 
-    pub(in crate::catalog) fn set_skipped_name(&mut self, name: String) {
-        self.skipped_name = Some(name);
+    pub(in crate::catalog) fn skipped_name_mut(&mut self) -> &mut Option<String> {
+        &mut self.skipped_name
     }
 
     pub(in crate::catalog) fn item_id(&self) -> CatalogItemId {

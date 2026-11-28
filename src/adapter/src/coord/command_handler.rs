@@ -1570,6 +1570,10 @@ impl Coordinator {
             self.sequence_create_view_command(ctx, stmt, params).await;
             return;
         }
+        if matches!(&*stmt, Statement::CreateTable(table) if !table.temporary) {
+            self.sequence_create_table_command(ctx, stmt, params).await;
+            return;
+        }
         if matches!(&*stmt, Statement::AlterConnection(stmt)
             if !stmt.actions.iter().any(|action|
                 matches!(action, AlterConnectionAction::RotateKeys)))
@@ -1818,6 +1822,7 @@ impl Coordinator {
         match stmt {
             // Semantic replay validates the current names, dependencies and permissions.
             Statement::CreateView(view) if !view.temporary => false,
+            Statement::CreateTable(table) if !table.temporary => false,
             // Secrets have a small and understood set of dependencies, and their off-thread work
             // interacts with k8s.
             Statement::AlterSecret(_) => false,
