@@ -433,11 +433,6 @@ pub enum Message {
         span: Span,
         stage: CreateIndexStage,
     },
-    CreateMetricSinkStageReady {
-        ctx: ExecuteContext,
-        span: Span,
-        stage: CreateMetricSinkStage,
-    },
     CreateViewStageReady {
         ctx: ExecuteContext,
         span: Span,
@@ -565,7 +560,6 @@ impl Message {
                 "execute_single_statement_transaction"
             }
             Message::CreateIndexStageReady { .. } => "create_index_stage_ready",
-            Message::CreateMetricSinkStageReady { .. } => "create_metric_sink_stage_ready",
             Message::CreateViewStageReady { .. } => "create_view_stage_ready",
             Message::CreateMaterializedViewStageReady { .. } => {
                 "create_materialized_view_stage_ready"
@@ -668,31 +662,6 @@ pub struct CreateIndexExplain {
     plan: plan::CreateIndexPlan,
     df_meta: DataflowMetainfo,
     explain_ctx: ExplainPlanContext,
-}
-
-#[derive(Debug)]
-pub enum CreateMetricSinkStage {
-    Optimize(CreateMetricSinkOptimize),
-    Finish(CreateMetricSinkFinish),
-}
-
-#[derive(Debug)]
-pub struct CreateMetricSinkOptimize {
-    validity: PlanValidity,
-    plan: plan::CreateMetricSinkPlan,
-    resolved_ids: ResolvedIds,
-}
-
-#[derive(Debug)]
-pub struct CreateMetricSinkFinish {
-    validity: PlanValidity,
-    item_id: CatalogItemId,
-    global_id: GlobalId,
-    plan: plan::CreateMetricSinkPlan,
-    resolved_ids: ResolvedIds,
-    global_mir_plan: optimize::metric_sink::GlobalMirPlan,
-    global_lir_plan: optimize::metric_sink::GlobalLirPlan,
-    optimizer_features: OptimizerFeatures,
 }
 
 #[derive(Debug)]

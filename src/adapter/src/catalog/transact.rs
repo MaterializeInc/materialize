@@ -460,7 +460,7 @@ pub struct TransactionResult {
 
 #[derive(Debug)]
 pub(crate) enum CommandWork {
-    Index(Box<super::command::index::IndexWork>),
+    Compute(Box<super::command::compute::ComputeWork>),
     View(super::command::view::ViewPreparation),
     Connection(super::command::connection::ConnectionPreparation),
     ConnectionSecret(super::command::connection::ConnectionSecret),
@@ -470,7 +470,7 @@ pub(crate) enum CommandWork {
 
 #[derive(Debug)]
 pub(crate) enum CommandResponse {
-    Index(super::command::index::IndexPreparationResponse),
+    Compute(super::command::compute::ComputePreparationResponse),
     View(super::command::view::ViewPreparationResponse),
     Source(mz_sql::pure::SourcePreparationResponse),
     Connection(super::command::connection::ConnectionPreparationResponse),

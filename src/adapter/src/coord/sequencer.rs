@@ -242,17 +242,13 @@ impl Coordinator {
                 Plan::CreateSink(plan) => {
                     self.sequence_create_sink(ctx, plan, resolved_ids).await;
                 }
-                Plan::CreateView(_) | Plan::CreateIndex(_) => {
-                    let msg = "CREATE VIEW and CREATE INDEX must execute as catalog commands";
+                Plan::CreateView(_) | Plan::CreateIndex(_) | Plan::CreateMetricSink(_) => {
+                    let msg = "CREATE VIEW, CREATE INDEX and CREATE METRIC SINK must execute as catalog commands";
                     soft_panic_or_log!("{msg}");
                     ctx.retire(Err(AdapterError::Internal(msg.into())));
                 }
                 Plan::CreateMaterializedView(plan) => {
                     self.sequence_create_materialized_view(ctx, plan, resolved_ids)
-                        .await;
-                }
-                Plan::CreateMetricSink(plan) => {
-                    self.sequence_create_metric_sink(ctx, plan, resolved_ids)
                         .await;
                 }
                 Plan::CreateType(plan) => {

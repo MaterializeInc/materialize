@@ -827,6 +827,200 @@ impl Drop for IndexPreparationCount {
     }
 }
 
+struct MetricSinkPreparationCount(Arc<std::sync::atomic::AtomicUsize>);
+
+impl MetricSinkPreparationCount {
+    fn install() -> Self {
+        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        fail::cfg_callback("catalog_metric_sink_optimize_ready", {
+            let count = Arc::clone(&count);
+            move || {
+                // A competing sink must be able to finish before the first is released.
+                if count.fetch_add(1, Ordering::SeqCst) == 0 {
+                    let _ = fail::eval("test_metric_sink_preparation_gate", |_| ());
+                }
+            }
+        })
+        .unwrap();
+        Self(count)
+    }
+
+    fn get(&self) -> usize {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+
+impl Drop for MetricSinkPreparationCount {
+    fn drop(&mut self) {
+        fail::remove("catalog_metric_sink_optimize_ready");
+    }
+}
+
+// These failpoints are process-global. Run this test in its own process (as nextest does).
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn test_create_metric_sink_reuses_preparation_after_unrelated_ddl() {
+    use mz_postgres_util::{Sql, batch_execute, query_one};
+
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let server = test_util::TestHarness::default()
+            .with_system_parameter_default("enable_metric_sink".into(), "true".into())
+            .start()
+            .await;
+        let creator = server.connect().await.unwrap();
+        let ddl = server.connect().await.unwrap();
+        batch_execute(
+            &ddl,
+            Sql::new(
+                "CREATE TABLE metrics (metric_name text, metric_type text,
+                     labels map[text=>text], value double precision, help text)",
+            ),
+        )
+        .await
+        .unwrap();
+        let prepared = MetricSinkPreparationCount::install();
+        let (release, parked) = CatalogVisibilityGate::install("test_metric_sink_preparation_gate");
+        let create = task::spawn(|| "metric sink preparation reuse", async move {
+            batch_execute(
+                &creator,
+                Sql::new(
+                    "CREATE METRIC SINK replay_sink IN CLUSTER quickstart FROM metrics
+                     WITH (PREFIX = 'mz_metric_sink_replay_')",
+                ),
+            )
+            .await
+        })
+        .abort_on_drop();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            parked.await.unwrap();
+            batch_execute(&ddl, Sql::new("CREATE VIEW unrelated AS SELECT 42 AS a"))
+                .await
+                .unwrap();
+            assert_eq!(
+                query_one(&ddl, Sql::new("SELECT a FROM unrelated"), &[])
+                    .await
+                    .unwrap()
+                    .get::<_, i32>(0),
+                42
+            );
+            let catalog = server
+                .inner
+                .adapter_client()
+                .catalog_snapshot_expensive()
+                .await;
+            assert!(catalog.entries().all(|e| e.name().item != "replay_sink"));
+            assert!(!create.is_finished());
+        })
+        .await
+        .expect("unrelated DDL and query must finish while metric sink preparation is paused");
+        release.release();
+        create.await.unwrap();
+        assert_eq!(prepared.get(), 1, "unrelated DDL must reuse preparation");
+        let catalog = server
+            .inner
+            .adapter_client()
+            .catalog_snapshot_expensive()
+            .await;
+        let sink = catalog
+            .entries()
+            .find(|e| e.name().item == "replay_sink")
+            .expect("successful sink must be published");
+        assert!(sink.item().physical_plan().is_some());
+    })
+    .await
+    .expect("metric sink preparation reuse timed out");
+}
+
+// These failpoints are process-global. Run this test in its own process (as nextest does).
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn test_create_metric_sink_replay_rejects_overlapping_prefix() {
+    use mz_postgres_util::{PostgresError, Sql, batch_execute};
+
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let server = test_util::TestHarness::default()
+            .with_system_parameter_default("enable_metric_sink".into(), "true".into())
+            .start()
+            .await;
+        let creator = server.connect().await.unwrap();
+        let ddl = server.connect().await.unwrap();
+        batch_execute(
+            &ddl,
+            Sql::new(
+                "CREATE TABLE metrics (metric_name text, metric_type text,
+                     labels map[text=>text], value double precision, help text)",
+            ),
+        )
+        .await
+        .unwrap();
+        let prepared = MetricSinkPreparationCount::install();
+        let (release, parked) = CatalogVisibilityGate::install("test_metric_sink_preparation_gate");
+        let create = task::spawn(|| "metric sink prefix replay", async move {
+            batch_execute(
+                &creator,
+                Sql::new(
+                    "CREATE METRIC SINK first_sink IN CLUSTER quickstart FROM metrics
+                     WITH (PREFIX = 'mz_metric_sink_replay_')",
+                ),
+            )
+            .await
+        })
+        .abort_on_drop();
+        let winner_id = tokio::time::timeout(Duration::from_secs(5), async {
+            parked.await.unwrap();
+            batch_execute(
+                &ddl,
+                Sql::new(
+                    "CREATE METRIC SINK winner_sink IN CLUSTER quickstart FROM metrics
+                     WITH (PREFIX = 'mz_metric_sink_replay_nested_')",
+                ),
+            )
+            .await
+            .unwrap();
+            let catalog = server
+                .inner
+                .adapter_client()
+                .catalog_snapshot_expensive()
+                .await;
+            assert!(catalog.entries().all(|e| e.name().item != "first_sink"));
+            assert!(!create.is_finished());
+            catalog
+                .entries()
+                .find(|e| e.name().item == "winner_sink")
+                .expect("competing sink must commit before releasing preparation")
+                .latest_global_id()
+        })
+        .await
+        .expect("competing sink must not be blocked by the first preparation");
+        release.release();
+        let PostgresError::Postgres(error) = create.await.unwrap_err() else {
+            panic!("expected a PostgreSQL prefix conflict error");
+        };
+        let error = error.unwrap_db_error();
+        assert_contains!(error.message(), "conflicts with prefix");
+        assert_contains!(error.message(), "winner_sink");
+        assert_eq!(
+            prepared.get(),
+            2,
+            "prefix conflict must reject before reoptimization"
+        );
+        let catalog = server
+            .inner
+            .adapter_client()
+            .catalog_snapshot_expensive()
+            .await;
+        assert!(catalog.entries().all(|e| e.name().item != "first_sink"));
+        assert_eq!(
+            catalog
+                .entries()
+                .find(|e| e.name().item == "winner_sink")
+                .unwrap()
+                .latest_global_id(),
+            winner_id
+        );
+    })
+    .await
+    .expect("metric sink prefix replay timed out");
+}
+
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
 async fn test_role_command_preserves_rbac_warning() {
     use mz_postgres_util::{Sql, batch_execute};

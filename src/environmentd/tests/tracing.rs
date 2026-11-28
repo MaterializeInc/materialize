@@ -29,7 +29,7 @@ async fn test_expected_spans() {
         // ),
         ("sequence_create_view_command", "CREATE VIEW V AS SELECT 1"),
         (
-            "sequence_create_index_command",
+            "sequence_create_compute_command",
             "CREATE DEFAULT INDEX i ON v",
         ),
         ("implement_subscribe", "SUBSCRIBE (SELECT 1)"),
