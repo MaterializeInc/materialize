@@ -748,6 +748,7 @@ async fn test_index_publication_and_notice_visibility() {
             .start()
             .await;
         let client = server.connect().await.unwrap();
+        let observer = server.connect().internal().await.unwrap();
         for sql in [
             "CREATE TABLE notice_table (a int)",
             "CREATE INDEX notice_index ON notice_table (a)",
@@ -772,7 +773,7 @@ async fn test_index_publication_and_notice_visibility() {
         let notice_query =
             "SELECT count(*) FROM mz_internal.mz_optimizer_notices WHERE object_id = $1";
         assert_eq!(
-            query_one(&client, Sql::new(notice_query), &[&global_id])
+            query_one(&observer, Sql::new(notice_query), &[&global_id])
                 .await
                 .unwrap()
                 .get::<_, i64>(0),
@@ -796,7 +797,7 @@ async fn test_index_publication_and_notice_visibility() {
         .await
         .unwrap();
         assert_eq!(
-            query_one(&client, Sql::new(notice_query), &[&global_id])
+            query_one(&observer, Sql::new(notice_query), &[&global_id])
                 .await
                 .unwrap()
                 .get::<_, i64>(0),
@@ -806,7 +807,7 @@ async fn test_index_publication_and_notice_visibility() {
             .await
             .unwrap();
         assert_eq!(
-            query_one(&client, Sql::new(notice_query), &[&global_id])
+            query_one(&observer, Sql::new(notice_query), &[&global_id])
                 .await
                 .unwrap()
                 .get::<_, i64>(0),
