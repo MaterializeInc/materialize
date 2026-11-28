@@ -77,19 +77,6 @@ impl Staged for CreateViewStage {
 }
 
 impl Coordinator {
-    pub(crate) async fn sequence_create_view(
-        &mut self,
-        ctx: ExecuteContext,
-        plan: plan::CreateViewPlan,
-        resolved_ids: ResolvedIds,
-    ) {
-        let stage = return_if_err!(
-            self.create_view_validate(ctx.session(), plan, resolved_ids, ExplainContext::None),
-            ctx
-        );
-        self.sequence_staged(ctx, Span::current(), stage).await;
-    }
-
     #[instrument]
     pub(crate) async fn explain_create_view(
         &mut self,
