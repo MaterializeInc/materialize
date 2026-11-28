@@ -29,7 +29,7 @@ use mz_transform::notice::RawOptimizerNotice;
 
 use crate::AdapterError;
 use crate::catalog::{Catalog, CatalogState, Op};
-use crate::coord::CollectionIdBundle;
+use crate::coord::id_bundle::CollectionIdBundle;
 use crate::optimize::dataflows::{
     ComputeInstanceSnapshot, DataflowBuilder, dataflow_import_id_bundle,
 };
