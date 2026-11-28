@@ -147,7 +147,9 @@ mod tests {
             ];
             let ts = catalog.current_upper().await;
             let result = catalog.transact_commands(None, ts, None, &mut commands, &mut BTreeMap::new()).await.expect("schema must resolve the database created by the prefix");
-            assert!(!result.catalog_updates.is_empty());
+            assert!(!result.builtin_table_updates.is_empty());
+            let database = catalog.state().resolve_database("replay_database").expect("committed database exists");
+            assert!(database.schemas_by_name.contains_key("replay_schema"), "committed schema exists");
             let CatalogCommand::CreateNamespace(schema) = &commands[2] else { unreachable!("namespace command") };
             assert!(matches!(schema.skipped_notice(), Some(AdapterNotice::SchemaAlreadyExists { name }) if name == "replay_schema"));
             let CatalogCommand::CreateNamespace(database) = &commands[3] else { unreachable!("namespace command") };
