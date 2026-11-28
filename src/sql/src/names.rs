@@ -2681,15 +2681,15 @@ mod tests {
     fn dependencies_include_nested_data_types() {
         for (sql, ids) in [
             (
-                "CREATE TYPE t AS LIST (ELEMENT TYPE = [u3 AS dependency])",
+                "CREATE TYPE t AS LIST (ELEMENT TYPE = [u3 AS materialize.public.dependency])",
                 vec![3],
             ),
             (
-                "CREATE TYPE t AS MAP (KEY TYPE = text, VALUE TYPE = [u2 AS dependency])",
+                "CREATE TYPE t AS MAP (KEY TYPE = text, VALUE TYPE = [u2 AS materialize.public.dependency])",
                 vec![2],
             ),
             (
-                "CREATE TYPE t AS (a [u1 AS dependency][], b [u2 AS dependency] list, c map[[u4 AS key_type] => [u3 AS dependency]])",
+                "CREATE TYPE t AS (a [u1 AS materialize.public.dependency][], b [u2 AS materialize.public.dependency] list, c map[[u4 AS materialize.public.key_type] => [u3 AS materialize.public.dependency]])",
                 vec![1, 2, 3, 4],
             ),
         ] {
