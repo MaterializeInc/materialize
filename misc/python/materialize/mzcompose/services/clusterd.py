@@ -47,6 +47,10 @@ class Clusterd(Service):
         # parameter, so unorchestrated clusterds run the same topology as
         # controller-provisioned replicas. Old images ignore the env var.
         unified_cluster: bool = True,
+        # Where this process reaches persist's pubsub server. Defaults to
+        # the environmentd service, and is overridable so a test can front
+        # each clusterd's pubsub connection with its own proxy.
+        persist_pubsub_url: str | None = None,
     ) -> None:
         environment = [
             "CLUSTERD_LOG_FILTER",
@@ -62,7 +66,8 @@ class Clusterd(Service):
             "CLUSTERD_INTERNAL_HTTP_LISTEN_ADDR=0.0.0.0:6878",
             "CLUSTERD_SECRETS_READER=local-file",
             "CLUSTERD_SECRETS_READER_LOCAL_FILE_DIR=/mzdata/secrets",
-            f"CLUSTERD_PERSIST_PUBSUB_URL=http://{mz_service}:6879",
+            "CLUSTERD_PERSIST_PUBSUB_URL="
+            + (persist_pubsub_url or f"http://{mz_service}:6879"),
             *environment_extra,
         ]
 

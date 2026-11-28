@@ -26,6 +26,7 @@ node_modules
 /test/zippy/tmp/*.td
 /test/**/tmp_*.toml
 junit_*.xml
+invariants-events.log
 parallel-workload-queries.log
 perf.data*
 *.rej

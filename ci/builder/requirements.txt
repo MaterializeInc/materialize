@@ -54,6 +54,7 @@ psycopg-binary==3.3.9
 pydantic==2.14.3
 pyelftools==0.33
 pyjwt==2.15.1
+pymssql==2.3.7
 PyMySQL==1.2.4
 pytest==9.2.0
 pytest-split==0.11.0
