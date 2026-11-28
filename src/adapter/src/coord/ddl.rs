@@ -356,6 +356,41 @@ impl Coordinator {
     }
 
     #[instrument]
+    pub(super) async fn sequence_metadata_command(
+        &mut self,
+        mut ctx: ExecuteContext,
+        statement: Arc<mz_sql::ast::Statement<mz_sql::ast::Raw>>,
+        params: mz_sql::plan::Params,
+    ) {
+        ctx.finish_ddl_on_coordinator = true;
+        let command = catalog::command::metadata::MetadataStatement::new(
+            statement,
+            params,
+            ctx.session().meta(),
+        );
+        let (plan, _) = match command.plan(self.catalog().state()) {
+            Ok(compiled) => compiled,
+            Err(error) => return ctx.retire(Err(error)),
+        };
+        if let Err(error) = self.prepare_command_execution(&mut ctx, &plan) {
+            return ctx.retire(Err(error));
+        }
+        let response = match plan {
+            mz_sql::plan::Plan::CreateRole(_) => crate::ExecuteResponse::CreatedRole,
+            mz_sql::plan::Plan::Comment(_) => crate::ExecuteResponse::Comment,
+            _ => unreachable!("metadata plan validated"),
+        };
+        self.sequence_ddl_commit(PendingDdlCommit::statement(
+            ctx,
+            response,
+            vec![catalog::command::CatalogCommand::Metadata(Arc::new(
+                command,
+            ))],
+        ))
+        .await;
+    }
+
+    #[instrument]
     pub(super) async fn sequence_create_namespace_command(
         &mut self,
         mut ctx: ExecuteContext,
@@ -1157,7 +1192,8 @@ impl Coordinator {
                             | catalog::command::CatalogCommand::CreateTable(_)
                             | catalog::command::CatalogCommand::CreateIndex(_)
                             | catalog::command::CatalogCommand::DropObjects(_)
-                            | catalog::command::CatalogCommand::CreateNamespace(_) => {
+                            | catalog::command::CatalogCommand::CreateNamespace(_)
+                            | catalog::command::CatalogCommand::Metadata(_) => {
                                 unreachable!("this command does not allocate IDs");
                             }
                         }
@@ -1277,6 +1313,14 @@ impl Coordinator {
                 }
                 if (result.is_ok() && !is_drop) || failed_drop {
                     self.emit_command_notices(pending.context.context_mut().session(), command);
+                }
+                if let catalog::command::CatalogCommand::Metadata(command) = command {
+                    if command.creates_role() && !matches!(&result, Err(AdapterError::Canceled)) {
+                        let session = pending.context.context_mut().session();
+                        if let Some(notice) = self.should_emit_rbac_notice(session) {
+                            session.add_notice(notice);
+                        }
+                    }
                 }
             }
         }

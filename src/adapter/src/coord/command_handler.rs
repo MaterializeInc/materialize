@@ -1574,6 +1574,10 @@ impl Coordinator {
                 .await;
             return;
         }
+        if matches!(&*stmt, Statement::CreateRole(_) | Statement::Comment(_)) {
+            self.sequence_metadata_command(ctx, stmt, params).await;
+            return;
+        }
         if matches!(&*stmt, Statement::DropObjects(_)) {
             self.sequence_drop_objects_command(ctx, stmt, params).await;
             return;
@@ -1842,7 +1846,9 @@ impl Coordinator {
             | Statement::CreateIndex(_)
             | Statement::CreateTable(_)
             | Statement::CreateDatabase(_)
-            | Statement::CreateSchema(_) => false,
+            | Statement::CreateSchema(_)
+            | Statement::CreateRole(_)
+            | Statement::Comment(_) => false,
             // Secrets have a small and understood set of dependencies, and their off-thread work
             // interacts with k8s.
             Statement::AlterSecret(_) => false,

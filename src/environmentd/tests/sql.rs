@@ -793,6 +793,51 @@ impl Drop for IndexPreparationCount {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn test_role_command_preserves_rbac_warning() {
+    use mz_postgres_util::{Sql, batch_execute};
+
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default("enable_rbac_checks".into(), "false".into())
+        .start()
+        .await;
+    let notices = Arc::new(Mutex::new(Vec::new()));
+    let client = server
+        .connect()
+        .notice_callback({
+            let notices = Arc::clone(&notices);
+            move |notice| {
+                notices
+                    .lock()
+                    .expect("notice lock")
+                    .push(notice.message().to_string())
+            }
+        })
+        .await
+        .expect("connect role client");
+    batch_execute(&client, Sql::new("SET enable_session_rbac_checks = false"))
+        .await
+        .expect("disable session RBAC");
+    for duplicate in [false, true] {
+        notices.lock().expect("notice lock").clear();
+        let result = batch_execute(&client, Sql::new("CREATE ROLE notice_role")).await;
+        assert_eq!(
+            result.is_err(),
+            duplicate,
+            "only the duplicate creation fails"
+        );
+        assert_eq!(
+            notices
+                .lock()
+                .expect("notice lock")
+                .iter()
+                .filter(|notice| notice.starts_with("RBAC is disabled"))
+                .count(),
+            1
+        );
+    }
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
 async fn test_drop_preserves_notice_delivery() {
     use mz_postgres_util::{PostgresError, Sql, batch_execute};
 
