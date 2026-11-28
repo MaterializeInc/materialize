@@ -411,6 +411,8 @@ impl<Out: Message, In: Message> Connection<Out, In> {
                     if msg_tx.send(msg).is_err() {
                         break;
                     }
+
+                    tokio::task::coop::consume_budget().await;
                 }
                 Err(error) => {
                     warn!("ctp: recv error: {error}");
