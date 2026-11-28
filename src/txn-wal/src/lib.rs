@@ -320,6 +320,10 @@ impl TxnsCodec for TxnsCodecDefault {
 }
 
 /// Helper for common logging for compare_and_append-ing a small amount of data.
+///
+/// On an upper mismatch, returns the shard's actual upper. That upper is empty
+/// if the shard has been finalized, which happens to a data shard when its
+/// collection is dropped while some process still holds a handle to it.
 #[instrument(level = "debug", fields(shard=%txns_or_data_write.shard_id(), ts=?new_upper))]
 pub(crate) async fn small_caa<S, F, K, V, T, D>(
     name: F,
@@ -327,7 +331,7 @@ pub(crate) async fn small_caa<S, F, K, V, T, D>(
     updates: &[((&K, &V), &T, D)],
     upper: T,
     new_upper: T,
-) -> Result<(), T>
+) -> Result<(), Antichain<T>>
 where
     S: AsRef<str>,
     F: Fn() -> S,
@@ -369,9 +373,6 @@ where
             Ok(())
         }
         Err(UpperMismatch { current, .. }) => {
-            let current = current
-                .into_option()
-                .expect("txns shard should not be closed");
             debug!(
                 "CaA {} [{:?},{:?}) mismatch actual={:?}",
                 name().as_ref(),
@@ -420,9 +421,11 @@ pub(crate) async fn empty_caa<S, F, K, V, T, D>(
         .await;
         match res {
             Ok(()) => return,
-            Err(current) => {
-                upper = current;
-            }
+            Err(current) => match current.into_option() {
+                Some(current) => upper = current,
+                // Shard is closed, which means the upper must be past init_ts.
+                None => return,
+            },
         }
     }
 }
@@ -854,7 +857,11 @@ mod tests {
                     }
                     return;
                 }
-                Err(new_current) => current = new_current,
+                Err(new_current) => {
+                    current = new_current
+                        .into_option()
+                        .expect("data shard should not be closed")
+                }
             }
         }
     }

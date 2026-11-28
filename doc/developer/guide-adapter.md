@@ -316,16 +316,20 @@ the change.
 
 ### Group commits and generation handover
 
-At runtime, one group committer per `environmentd` serializes txns-shard operations:
+One group committer per `environmentd` serializes all read-write txns-shard operations, including
+bootstrap table registration and the bootstrap table-upper barrier:
 
 ```text
 append / register / forget -> FIFO group committer -> table-write worker -> txns shard
 ```
 
-FIFO ordering prevents an append from overtaking table registration or forgetting. Bootstrap is
-the only local exception because it runs before the process serves.
+FIFO ordering prevents an append from overtaking table registration or forgetting. Routing
+bootstrap through the same committer ensures a fenced generation checks the catalog fence before
+touching the txns shard, and a promoted generation retries `InvalidUppers` conflicts instead of
+panicking if an older generation is still finishing its own bootstrap. Read-only bootstrap of
+migrated builtin tables is the only direct path, and it writes outside the txns shard.
 
-Each runtime command uses this protocol:
+Each committer command uses this protocol:
 
 ```text
 shared oracle write timestamp -> advance catalog upper -> compare-and-append txns shard
