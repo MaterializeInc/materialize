@@ -1025,7 +1025,7 @@ async fn test_create_index_replay_refreshes_renamed_index_notice() {
         .await
         .unwrap()
         .get(0);
-        assert_contains!(message, "renamed_idx");
+        assert_contains!(message.as_str(), "renamed_idx");
         assert!(!message.contains("old_idx"), "{message}");
         let notices = notices.lock().unwrap();
         assert!(
