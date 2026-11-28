@@ -6599,6 +6599,15 @@ fn test_mcp_developer_schema_shadowing() {
         (3, "SELECT * FROM mz_leak"),
         (4, r#"SELECT * FROM "MZ_CATALOG".leak"#),
         (5, r#"SELECT * FROM "INFORMATION_SCHEMA".tables"#),
+        (11, r#"SHOW CREATE VIEW "MZ_CATALOG".leak"#),
+        (12, "SHOW CREATE VIEW materialize.public.mz_cte_leak"),
+        (13, r#"SHOW COLUMNS FROM "MZ_CATALOG".leak"#),
+        (14, r#"SHOW VIEWS FROM "MZ_CATALOG""#),
+        (15, r#"EXPLAIN OPTIMIZED PLAN FOR VIEW "MZ_CATALOG".leak"#),
+        (
+            16,
+            "EXPLAIN OPTIMIZED PLAN FOR VIEW information_schema.info_leak",
+        ),
     ] {
         let body = query(id, sql);
         let message = body["error"]["message"].as_str().unwrap_or_default();
@@ -6640,6 +6649,13 @@ fn test_mcp_developer_schema_shadowing() {
             10,
             "SELECT t.name FROM mz_objects t WHERE t.name = 'mz_views'",
             "mz_views",
+        ),
+        (17, "SHOW CREATE VIEW mz_catalog.mz_objects", "mz_objects"),
+        (18, "SHOW COLUMNS FROM mz_tables", "owner_id"),
+        (
+            19,
+            "EXPLAIN OPTIMIZED PLAN FOR INDEX mz_internal.mz_show_databases_ind",
+            "mz_show_databases",
         ),
     ] {
         let body = query(id, sql);
