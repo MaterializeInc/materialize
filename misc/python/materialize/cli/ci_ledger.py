@@ -48,6 +48,7 @@ SUMMARY_FIELDS = (
     "title",
     "tests",
     "failures",
+    "new_since_status",
     "last_seen",
     "updated_by",
 )
@@ -126,10 +127,9 @@ def summary(entry: dict[str, Any]) -> dict[str, Any]:
 
 
 def update_changes(args: argparse.Namespace) -> dict[str, Any]:
-    """The fields `update` sets: only those given. A fix implies `fixed`."""
+    """The fields `update` sets: only those given."""
     changes: dict[str, Any] = {}
     for field, value in (
-        ("status", args.status),
         ("failure_type", args.type),
         ("cause", args.cause),
         ("bug", args.bug),
@@ -138,8 +138,9 @@ def update_changes(args: argparse.Namespace) -> dict[str, Any]:
     ):
         if value is not None:
             changes[field] = value
-    if args.fix and args.status is None:
-        changes["status"] = "fixed"
+    if changes.get("failure_type") == "":
+        # The API takes null, not "", to clear the type.
+        changes["failure_type"] = None
     return changes
 
 
@@ -160,7 +161,9 @@ def main(argv: list[str] | None = None) -> int:
     list_parser.add_argument(
         "--status",
         choices=("unreviewed", "claimed", "reviewed", "fixed"),
-        help="unreviewed includes fixed entries that failed again",
+        help="exact status. new_since_status counts an entry's failures in "
+        "builds after its status was last set, and stays 0 while it is "
+        "unreviewed or reviewed only by default as a known issue",
     )
     list_parser.add_argument("--search", help="text in titles, errors, tests, causes")
     list_parser.add_argument("--job", help="only what this Buildkite job failed with")
@@ -179,10 +182,16 @@ def main(argv: list[str] | None = None) -> int:
 
     update_parser = commands.add_parser(
         "update",
-        help="set the review of entries: status, type, cause, bug, fix",
+        help="set the review of entries: type, cause, bug, fix",
         description="Set the review of entries. Fields not given stay as they "
-        'are, "" clears one. A fixed entry that fails again in a later build of '
-        "its release (or main) counts as unreviewed there.",
+        'are, "" clears one. The status follows the fields: fixed with a fix, '
+        "reviewed with a cause or bug, claimed with type claimed, unreviewed "
+        'otherwise. A known issue is the bug by default: "" does not clear it, '
+        "and it does not make a potential regression (the CI annotation linked "
+        "a closed issue) reviewed. A fixed entry that fails again stays fixed, "
+        "find these with a positive new_since_status in `list --status fixed`. "
+        "Giving the fix again restarts that count, for every entry sharing the "
+        "review.",
     )
     update_parser.add_argument(
         "refs",
@@ -191,13 +200,8 @@ def main(argv: list[str] | None = None) -> int:
         help="entry id, or Buildkite job id or URL for every entry the job failed with",
     )
     update_parser.add_argument(
-        "--status",
-        choices=("unreviewed", "reviewed", "fixed"),
-        help="fixed needs a fix, given now or before",
-    )
-    update_parser.add_argument(
         "--type",
-        choices=("claimed", "deterministic", "flaky", "infrastructure"),
+        choices=("claimed", "deterministic", "flaky", "infrastructure", ""),
         help="claimed: you are working on it, set before you start; "
         "flaky: fails sometimes; infrastructure: A system outside of our immediate control failed (GitHub, npm, AWS, ...)",
     )
@@ -207,7 +211,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     update_parser.add_argument(
         "--fix",
-        help="the PR that fixes it, e.g. its GitHub URL; implies --status fixed",
+        help="the PR that fixes it, e.g. its GitHub URL",
     )
     link = update_parser.add_mutually_exclusive_group()
     link.add_argument(
@@ -253,9 +257,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             changes = update_changes(args)
             if not changes:
-                parser.error(
-                    "nothing to update: give --status, --type, --cause, --bug or --fix"
-                )
+                parser.error("nothing to update: give --type, --cause, --bug or --fix")
             ids = list(
                 dict.fromkeys(i for ref in args.refs for i in ledger.resolve(ref))
             )
