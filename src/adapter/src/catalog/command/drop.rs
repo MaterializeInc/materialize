@@ -17,7 +17,7 @@ use mz_compute_client::controller::ComputeController;
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::{CatalogItemId, GlobalId};
 use mz_sql::ast::{Raw, Statement};
-use mz_sql::catalog::{ErrorMessageObjectDescription, SessionCatalog};
+use mz_sql::catalog::{CatalogItem, ErrorMessageObjectDescription, SessionCatalog};
 use mz_sql::names::ObjectId;
 use mz_sql::plan::{DropObjectsPlan, Params, Plan, PlanNotice};
 
