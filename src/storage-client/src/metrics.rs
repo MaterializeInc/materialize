@@ -244,8 +244,8 @@ impl transport::Metrics<StorageCommand, StorageResponse> for ReplicaMetrics {
             .inc_by(u64::cast_from(len));
     }
 
-    fn message_sent(&mut self, msg: &StorageCommand) {
-        self.inner.commands_total.for_command(msg).inc();
+    fn sent_message_counter(&self, msg: &StorageCommand) -> Option<&prometheus::IntCounter> {
+        Some(self.inner.commands_total.for_command(msg))
     }
 
     fn message_received(&mut self, msg: &StorageResponse) {

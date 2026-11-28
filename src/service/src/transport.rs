@@ -38,7 +38,7 @@ use mz_ore::task::{AbortOnDropHandle, JoinHandle};
 use semver::Version;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter};
 use tokio::sync::{mpsc, oneshot, watch};
 use tracing::{Instrument, info, info_span, trace, warn};
 
@@ -305,8 +305,7 @@ impl<Out: Message, In: Message> Connection<Out, In> {
         let span = tracing::Span::current();
         let send_task = mz_ore::task::spawn(
             || "ctp::send",
-            Self::run_send_task(writer, out_rx, error_tx.clone(), metrics.clone())
-                .instrument(span.clone()),
+            Self::run_send_task(writer, out_rx, error_tx.clone()).instrument(span.clone()),
         );
         let recv_task = mz_ore::task::spawn(
             || "ctp::recv",
@@ -350,11 +349,11 @@ impl<Out: Message, In: Message> Connection<Out, In> {
 
     /// Run a connection's send task.
     async fn run_send_task<W: AsyncWrite + Unpin>(
-        mut writer: W,
+        writer: metrics::Writer<W, impl Metrics<Out, In>, Out, In>,
         mut msg_rx: mpsc::UnboundedReceiver<Out>,
         error_tx: ErrorTx,
-        mut metrics: impl Metrics<Out, In>,
     ) {
+        let mut writer = BufWriter::new(writer);
         loop {
             let msg = tokio::select! {
                 // `mpsc::UnboundedReceiver::recv` is cancel safe.
@@ -372,25 +371,37 @@ impl<Out: Message, In: Message> Connection<Out, In> {
                 },
             };
 
-            if let Err(error) = write_message(&mut writer, msg.as_ref()).await {
+            let send = async {
+                write_message(&mut writer, msg.as_ref()).await?;
+                if let Some(msg) = &msg {
+                    let buffered = writer.buffer().len();
+                    writer.get_mut().frame_written(msg, buffered);
+                }
+                // Flushing once the queue is empty means no message waits for a later one.
+                if msg_rx.is_empty() {
+                    writer.flush().await?;
+                }
+                Ok::<_, anyhow::Error>(())
+            };
+            if let Err(error) = send.await {
                 warn!("ctp: send error: {error}");
                 error_tx.report(format!("send error: {error}"));
                 break;
-            };
-
-            if let Some(msg) = &msg {
-                metrics.message_sent(msg);
             }
         }
     }
 
     /// Run a connection's recv task.
     async fn run_recv_task<R: AsyncRead + Unpin>(
-        mut reader: R,
+        reader: R,
         msg_tx: mpsc::UnboundedSender<In>,
         error_tx: ErrorTx,
         mut metrics: impl Metrics<Out, In>,
     ) {
+        // `read_message` reads the length prefix and the payload separately, and each read of
+        // the unbuffered socket is a syscall. Buffering serves both, and every message that
+        // arrived with them, from one read.
+        let mut reader = BufReader::new(reader);
         loop {
             match read_message(&mut reader).await {
                 Ok(msg) => {
@@ -400,6 +411,8 @@ impl<Out: Message, In: Message> Connection<Out, In> {
                     if msg_tx.send(msg).is_err() {
                         break;
                     }
+
+                    tokio::task::coop::consume_budget().await;
                 }
                 Err(error) => {
                     warn!("ctp: recv error: {error}");

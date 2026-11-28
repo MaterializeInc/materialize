@@ -465,8 +465,8 @@ impl transport::Metrics<ComputeCommand, ComputeResponse> for ReplicaMetrics {
             .inc_by(u64::cast_from(len));
     }
 
-    fn message_sent(&mut self, msg: &ComputeCommand) {
-        self.inner.commands_total.for_command(msg).inc();
+    fn sent_message_counter(&self, msg: &ComputeCommand) -> Option<&prometheus::IntCounter> {
+        Some(self.inner.commands_total.for_command(msg))
     }
 
     fn message_received(&mut self, msg: &ComputeResponse) {
