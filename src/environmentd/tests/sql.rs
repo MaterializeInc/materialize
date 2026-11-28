@@ -674,7 +674,7 @@ async fn test_materialized_view_committed_publication() {
             "enable_replacement_materialized_views".into(),
             "true".into(),
         )
-        .enable_feature_flags(&["enable_refresh_every_mvs"])
+        .with_system_parameter_default("enable_refresh_every_mvs".into(), "true".into())
         .start()
         .await;
     let client = server.connect().await.unwrap();
