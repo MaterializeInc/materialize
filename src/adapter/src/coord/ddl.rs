@@ -312,6 +312,41 @@ impl Coordinator {
         .await;
     }
 
+    #[instrument]
+    pub(super) async fn sequence_create_namespace_command(
+        &mut self,
+        mut ctx: ExecuteContext,
+        statement: Arc<mz_sql::ast::Statement<mz_sql::ast::Raw>>,
+        params: mz_sql::plan::Params,
+    ) {
+        ctx.finish_ddl_on_coordinator = true;
+        let command = catalog::command::namespace::NamespaceStatement::new(
+            statement,
+            params,
+            ctx.session().meta(),
+        );
+        let (plan, _) = match command.plan(self.catalog().state()) {
+            Ok(compiled) => compiled,
+            Err(error) => return ctx.retire(Err(error)),
+        };
+        if let Err(error) = self.prepare_command_execution(&mut ctx, &plan) {
+            return ctx.retire(Err(error));
+        }
+        let response = match plan {
+            mz_sql::plan::Plan::CreateDatabase(_) => crate::ExecuteResponse::CreatedDatabase,
+            mz_sql::plan::Plan::CreateSchema(_) => crate::ExecuteResponse::CreatedSchema,
+            _ => unreachable!("namespace plan validated"),
+        };
+        self.sequence_ddl_commit(PendingDdlCommit::statement(
+            ctx,
+            response,
+            vec![catalog::command::CatalogCommand::CreateNamespace(Arc::new(
+                command,
+            ))],
+        ))
+        .await;
+    }
+
     fn prepare_view_command(
         &self,
         mut pending: PendingDdlCommit,
@@ -511,6 +546,11 @@ impl Coordinator {
 
     fn emit_command_notices(&self, session: &Session, command: &catalog::command::CatalogCommand) {
         session.add_notices(command.notices().iter().cloned().map(Into::into));
+        if let catalog::command::CatalogCommand::CreateNamespace(command) = command {
+            if let Some(notice) = command.skipped_notice() {
+                session.add_notice(notice);
+            }
+        }
         if let catalog::command::CatalogCommand::CreateTable(command) = command {
             if let Some(name) = command.skipped_name() {
                 session.add_notice(crate::AdapterNotice::ObjectAlreadyExists {
@@ -934,7 +974,8 @@ impl Coordinator {
                             | catalog::command::CatalogCommand::AlterConnection(_)
                             | catalog::command::CatalogCommand::CreateConnection(_)
                             | catalog::command::CatalogCommand::CreateView(_)
-                            | catalog::command::CatalogCommand::CreateTable(_) => {
+                            | catalog::command::CatalogCommand::CreateTable(_)
+                            | catalog::command::CatalogCommand::CreateNamespace(_) => {
                                 unreachable!("this command does not allocate IDs");
                             }
                         }

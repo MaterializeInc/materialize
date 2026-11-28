@@ -25,6 +25,7 @@
 //! rollback cannot undo either secret writes or changes in external services.
 
 pub(crate) mod connection;
+pub(crate) mod namespace;
 pub(crate) mod source;
 pub(crate) mod source_statement;
 pub(crate) mod table;
@@ -54,6 +55,7 @@ pub enum CatalogCommand {
     CreateConnection(Arc<connection::ConnectionStatement>),
     CreateView(Arc<view::ViewStatement>),
     CreateTable(Arc<table::TableStatement>),
+    CreateNamespace(Arc<namespace::NamespaceStatement>),
     Source(Arc<source_statement::SourceCommand>),
 }
 
@@ -76,6 +78,13 @@ impl CatalogCommand {
         response: Option<CommandResponse>,
     ) -> Result<CommandExecution<'_>, CommandExecutionError> {
         match self {
+            Self::CreateNamespace(command) => {
+                assert!(
+                    response.is_none(),
+                    "namespace commands have no external preparation"
+                );
+                Ok(Arc::make_mut(command).compile(state)?)
+            }
             Self::CreateTable(command) => {
                 assert!(
                     response.is_none(),
@@ -265,6 +274,7 @@ impl CatalogCommand {
             Self::Source(command) => command.notices(),
             Self::CreateView(command) => command.notices(),
             Self::CreateTable(command) => command.notices(),
+            Self::CreateNamespace(command) => command.notices(),
         }
     }
 }
@@ -280,6 +290,11 @@ pub(super) struct CommandExecution<'a> {
 }
 
 enum ExecutionOutcome<'a> {
+    CreateNamespace {
+        kind: namespace::NamespaceKind,
+        name: String,
+        skipped_notice: &'a mut Option<AdapterNotice>,
+    },
     CreateItem {
         skipped_name: &'a mut Option<String>,
         id: mz_repr::CatalogItemId,
@@ -316,7 +331,9 @@ impl<'a> CommandExecution<'a> {
             Some(ExecutionOutcome::Source(command, compiled)) => command
                 .needs_collision_probe(compiled)
                 .then_some(self.ops.as_slice()),
-            Some(ExecutionOutcome::CreateItem { .. }) => Some(self.ops.as_slice()),
+            Some(
+                ExecutionOutcome::CreateItem { .. } | ExecutionOutcome::CreateNamespace { .. },
+            ) => Some(self.ops.as_slice()),
             None => None,
         }
     }
@@ -327,6 +344,37 @@ impl<'a> CommandExecution<'a> {
         result: Result<(), AdapterError>,
     ) -> Result<Option<Self>, AdapterError> {
         let skipped = match self.outcome.as_mut().expect("collision probe requested") {
+            ExecutionOutcome::CreateNamespace {
+                kind,
+                name,
+                skipped_notice,
+            } => match result {
+                Ok(()) => false,
+                Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                    kind: mz_catalog::memory::error::ErrorKind::Sql(error),
+                })) if matches!(
+                    (&*kind, &error),
+                    (
+                        namespace::NamespaceKind::Database,
+                        mz_sql::catalog::CatalogError::DatabaseAlreadyExists(_)
+                    ) | (
+                        namespace::NamespaceKind::Schema,
+                        mz_sql::catalog::CatalogError::SchemaAlreadyExists(_)
+                    )
+                ) =>
+                {
+                    **skipped_notice = Some(match kind {
+                        namespace::NamespaceKind::Database => {
+                            AdapterNotice::DatabaseAlreadyExists { name: name.clone() }
+                        }
+                        namespace::NamespaceKind::Schema => {
+                            AdapterNotice::SchemaAlreadyExists { name: name.clone() }
+                        }
+                    });
+                    true
+                }
+                Err(error) => return Err(error),
+            },
             ExecutionOutcome::CreateItem {
                 skipped_name,
                 id,
