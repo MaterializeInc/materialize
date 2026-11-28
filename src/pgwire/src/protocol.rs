@@ -579,6 +579,8 @@ where
             }
         }
     }
+    // Otherwise each idle connection retains a full copy of the system variables.
+    drop(system_vars);
     session
         .vars_mut()
         .end_transaction(EndTransactionAction::Commit);
