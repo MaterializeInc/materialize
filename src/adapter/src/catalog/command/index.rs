@@ -298,7 +298,7 @@ impl IndexWork {
                     }
                     let optimize = || -> Result<PreparedIndex, AdapterError> {
                         let mut optimizer = crate::optimize::index::Optimizer::new(
-                            self.catalog.clone(),
+                            Arc::clone(&self.catalog),
                             self.compute,
                             self.request.global_id,
                             self.request.config.clone(),
