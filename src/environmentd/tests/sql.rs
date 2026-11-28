@@ -793,7 +793,48 @@ impl Drop for IndexPreparationCount {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
-async fn test_relation_drop_preserves_notices_on_failure() {
+async fn test_semantic_drop_cluster_status_cleanup() {
+    use mz_postgres_util::{Sql, batch_execute};
+
+    let server = test_util::TestHarness::default().start().await;
+    let client = server.connect().await.expect("connect DDL client");
+    let http = reqwest::Client::new();
+    for sql in [
+        "CREATE CLUSTER drop_status_cluster REPLICAS (r1 (SIZE 'scale=1,workers=1'), r2 (SIZE 'scale=1,workers=1'))",
+        "DROP CLUSTER REPLICA drop_status_cluster.r1",
+        "DROP CLUSTER REPLICA IF EXISTS drop_status_cluster.r1",
+        "DROP CLUSTER drop_status_cluster",
+        "CREATE CLUSTER drop_status_cluster REPLICAS (r1 (SIZE 'scale=1,workers=1'))",
+        "DROP CLUSTER drop_status_cluster",
+        "DROP CLUSTER IF EXISTS drop_status_cluster",
+    ] {
+        batch_execute(&client, Sql::new(sql))
+            .await
+            .expect("cluster status cleanup preserves coordinator consistency");
+        let consistency: serde_json::Value = http
+            .get(format!(
+                "http://{}/api/coordinator/check",
+                server.internal_http_local_addr()
+            ))
+            .header("x-materialize-user", "mz_system")
+            .send()
+            .await
+            .expect("request consistency check")
+            .error_for_status()
+            .expect("consistency endpoint succeeds")
+            .json()
+            .await
+            .expect("decode consistency result");
+        assert_eq!(
+            consistency,
+            serde_json::Value::String(String::new()),
+            "coordinator state after {sql}"
+        );
+    }
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn test_drop_preserves_notice_delivery() {
     use mz_postgres_util::{PostgresError, Sql, batch_execute};
 
     let server = test_util::TestHarness::default().start().await;
@@ -843,6 +884,31 @@ async fn test_relation_drop_preserves_notices_on_failure() {
     batch_execute(&client, Sql::new("SELECT * FROM v"))
         .await
         .expect("failed DROP preserves dependency graph");
+
+    for sql in [
+        "CREATE DATABASE notice_database",
+        "SET DATABASE = notice_database",
+        "CREATE TABLE t (a int)",
+    ] {
+        batch_execute(&client, Sql::new(sql))
+            .await
+            .expect("create active database fixture");
+    }
+    notices.lock().expect("notice lock").clear();
+    batch_execute(&client, Sql::new("DROP DATABASE notice_database CASCADE"))
+        .await
+        .expect("drop active database");
+    let notices = notices.lock().expect("notice lock");
+    let drop_notices: Vec<_> = notices
+        .iter()
+        .filter(|notice| {
+            notice.starts_with("drop cascades to") || notice.starts_with("active database")
+        })
+        .collect();
+    assert_eq!(drop_notices.len(), 2, "deliver each DROP notice once");
+    assert!(drop_notices[0].starts_with("drop cascades to"));
+    assert!(drop_notices[1].contains("notice_database"));
+    assert!(drop_notices[1].starts_with("active database"));
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]

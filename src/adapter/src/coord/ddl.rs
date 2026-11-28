@@ -287,7 +287,7 @@ impl Coordinator {
         self.prepare_view_command(pending, 0, request);
     }
 
-    pub(super) async fn sequence_drop_relation_command(
+    pub(super) async fn sequence_drop_objects_command(
         &mut self,
         mut ctx: ExecuteContext,
         statement: Arc<mz_sql::ast::Statement<mz_sql::ast::Raw>>,
@@ -315,7 +315,7 @@ impl Coordinator {
         self.sequence_ddl_commit(PendingDdlCommit::statement(
             ctx,
             response,
-            vec![catalog::command::CatalogCommand::DropRelation(Arc::new(
+            vec![catalog::command::CatalogCommand::DropObjects(Arc::new(
                 command,
             ))],
         ))
@@ -704,7 +704,7 @@ impl Coordinator {
 
     fn emit_command_notices(&self, session: &Session, command: &catalog::command::CatalogCommand) {
         session.add_notices(command.notices().iter().cloned().map(Into::into));
-        if let catalog::command::CatalogCommand::DropRelation(command) = command {
+        if let catalog::command::CatalogCommand::DropObjects(command) = command {
             session.add_notices(command.adapter_notices().iter().cloned());
         }
         if let catalog::command::CatalogCommand::CreateIndex(command) = command {
@@ -1156,7 +1156,7 @@ impl Coordinator {
                             | catalog::command::CatalogCommand::CreateView(_)
                             | catalog::command::CatalogCommand::CreateTable(_)
                             | catalog::command::CatalogCommand::CreateIndex(_)
-                            | catalog::command::CatalogCommand::DropRelation(_)
+                            | catalog::command::CatalogCommand::DropObjects(_)
                             | catalog::command::CatalogCommand::CreateNamespace(_) => {
                                 unreachable!("this command does not allocate IDs");
                             }
@@ -1269,10 +1269,13 @@ impl Coordinator {
             .collect();
         if matches!(pending.context, DdlCommitContext::Statement { .. }) {
             for command in &pending.commands {
+                let is_drop = matches!(command, catalog::command::CatalogCommand::DropObjects(_));
                 let failed_drop =
-                    matches!(command, catalog::command::CatalogCommand::DropRelation(_))
-                        && !matches!(&result, Err(AdapterError::Canceled));
-                if result.is_ok() || failed_drop {
+                    is_drop && result.is_err() && !matches!(&result, Err(AdapterError::Canceled));
+                if result.is_ok() && is_drop {
+                    fail::fail_point!("after_sequencer_drop_replica");
+                }
+                if (result.is_ok() && !is_drop) || failed_drop {
                     self.emit_command_notices(pending.context.context_mut().session(), command);
                 }
             }
@@ -1356,11 +1359,11 @@ impl Coordinator {
 
         // Drop implications retire transient readers and remove their ownership records.
         for command in commands.iter() {
-            if let catalog::command::CatalogCommand::DropRelation(command) = command {
-                self.emit_command_index_drop_notices(
-                    ctx.session(),
-                    command.index_notices().clone(),
-                );
+            if let catalog::command::CatalogCommand::DropObjects(drop) = command {
+                self.emit_command_notices(ctx.session(), command);
+                ctx.session()
+                    .add_notices(drop.committed_notices().iter().cloned());
+                self.emit_command_index_drop_notices(ctx.session(), drop.index_notices().clone());
             }
         }
         self.track_catalog_audit_events(Some(conn_id), audit_events);
@@ -1461,8 +1464,6 @@ impl Coordinator {
         let phase_seconds = self.metrics.catalog_transact_phase_seconds.clone();
         let phase_start = Instant::now();
 
-        let mut clusters_to_drop = vec![];
-        let mut cluster_replicas_to_drop = vec![];
         let mut clusters_to_create = vec![];
         let mut cluster_replicas_to_create = vec![];
         let mut update_metrics_config = false;
@@ -1481,31 +1482,6 @@ impl Coordinator {
 
         for op in &ops {
             match op {
-                catalog::Op::DropObjects {
-                    objects: drop_object_infos,
-                    ..
-                } => {
-                    for drop_object_info in drop_object_infos {
-                        match &drop_object_info {
-                            catalog::DropObjectInfo::Item(_) => {
-                                // Nothing to do, these will be handled by
-                                // applying the side effects that we return.
-                            }
-                            catalog::DropObjectInfo::Cluster(id) => {
-                                clusters_to_drop.push(*id);
-                            }
-                            catalog::DropObjectInfo::ClusterReplica((
-                                cluster_id,
-                                replica_id,
-                                _reason,
-                            )) => {
-                                // Drop the cluster replica itself.
-                                cluster_replicas_to_drop.push((*cluster_id, *replica_id));
-                            }
-                            _ => (),
-                        }
-                    }
-                }
                 catalog::Op::ResetSystemConfiguration { name }
                 | catalog::Op::UpdateSystemConfiguration { name, .. } => {
                     update_metrics_config |= self
@@ -1644,12 +1620,6 @@ impl Coordinator {
             .observe(phase_seconds.with_label_values(&["transact"]))
             .await?;
 
-        for (cluster_id, replica_id) in &cluster_replicas_to_drop {
-            cluster_replica_statuses.remove_cluster_replica_statuses(cluster_id, replica_id);
-        }
-        for cluster_id in &clusters_to_drop {
-            cluster_replica_statuses.remove_cluster_statuses(cluster_id);
-        }
         for cluster_id in clusters_to_create {
             cluster_replica_statuses.initialize_cluster_statuses(cluster_id);
         }

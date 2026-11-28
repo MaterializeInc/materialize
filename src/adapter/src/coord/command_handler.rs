@@ -1574,12 +1574,8 @@ impl Coordinator {
                 .await;
             return;
         }
-        if matches!(&*stmt, Statement::DropObjects(drop) if matches!(drop.object_type,
-            mz_sql::ast::ObjectType::Table
-                | mz_sql::ast::ObjectType::View
-                | mz_sql::ast::ObjectType::Index))
-        {
-            self.sequence_drop_relation_command(ctx, stmt, params).await;
+        if matches!(&*stmt, Statement::DropObjects(_)) {
+            self.sequence_drop_objects_command(ctx, stmt, params).await;
             return;
         }
         if matches!(&*stmt, Statement::CreateIndex(_)) {
@@ -1840,16 +1836,7 @@ impl Coordinator {
         // CONNECTION ROTATE KEYS`). But the whole point of this is to prevent things from being
         // planned in the first place, so we accept the abstraction leak.
         match stmt {
-            Statement::DropObjects(drop)
-                if matches!(
-                    drop.object_type,
-                    mz_sql::ast::ObjectType::Table
-                        | mz_sql::ast::ObjectType::View
-                        | mz_sql::ast::ObjectType::Index
-                ) =>
-            {
-                false
-            }
+            Statement::DropObjects(_) => false,
             // Semantic replay validates the current names, dependencies and permissions.
             Statement::CreateView(_)
             | Statement::CreateIndex(_)

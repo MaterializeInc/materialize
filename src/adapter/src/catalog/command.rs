@@ -52,7 +52,7 @@ use crate::{AdapterError, AdapterNotice};
 
 #[derive(Clone, Debug)]
 pub enum CatalogCommand {
-    DropRelation(Arc<drop::DropStatement>),
+    DropObjects(Arc<drop::DropStatement>),
     Rename(Arc<RenameCommand>),
     CatalogResult(Arc<CatalogResultCommand>),
     Description(Arc<DescriptionCommand>),
@@ -85,7 +85,7 @@ impl CatalogCommand {
         response: Option<CommandResponse>,
     ) -> Result<CommandExecution<'_>, CommandExecutionError> {
         match self {
-            Self::DropRelation(command) => {
+            Self::DropObjects(command) => {
                 assert!(
                     response.is_none(),
                     "drop commands have no external preparation"
@@ -306,7 +306,7 @@ impl CatalogCommand {
             Self::CreateView(command) => command.notices(),
             Self::CreateTable(command) => command.notices(),
             Self::CreateIndex(command) => command.notices(),
-            Self::DropRelation(command) => command.notices(),
+            Self::DropObjects(command) => command.notices(),
             Self::CreateNamespace(command) => command.notices(),
         }
     }
