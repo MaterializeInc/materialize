@@ -29,6 +29,7 @@ pub(crate) mod drop;
 #[cfg(test)]
 mod drop_tests;
 pub(crate) mod index;
+pub(crate) mod metadata;
 pub(crate) mod namespace;
 pub(crate) mod source;
 pub(crate) mod source_statement;
@@ -62,6 +63,7 @@ pub enum CatalogCommand {
     CreateTable(Arc<table::TableStatement>),
     CreateIndex(Arc<index::IndexStatement>),
     CreateNamespace(Arc<namespace::NamespaceStatement>),
+    Metadata(Arc<metadata::MetadataStatement>),
     Source(Arc<source_statement::SourceCommand>),
 }
 
@@ -102,6 +104,13 @@ impl CatalogCommand {
                     AdapterError::Internal("index command requires live compute membership".into())
                 })?;
                 Arc::make_mut(command).compile(state, compute, index, response)
+            }
+            Self::Metadata(command) => {
+                assert!(
+                    response.is_none(),
+                    "metadata commands have no external preparation"
+                );
+                Ok(Arc::make_mut(command).compile(state)?)
             }
             Self::CreateNamespace(command) => {
                 assert!(
@@ -308,6 +317,7 @@ impl CatalogCommand {
             Self::CreateIndex(command) => command.notices(),
             Self::DropObjects(command) => command.notices(),
             Self::CreateNamespace(command) => command.notices(),
+            Self::Metadata(command) => command.notices(),
         }
     }
 }

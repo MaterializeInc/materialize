@@ -717,7 +717,7 @@ impl Coordinator {
         self.transient_id_gen.allocate_id()
     }
 
-    fn should_emit_rbac_notice(&self, session: &Session) -> Option<AdapterNotice> {
+    pub(super) fn should_emit_rbac_notice(&self, session: &Session) -> Option<AdapterNotice> {
         if !rbac::is_rbac_enabled_for_session(self.catalog.system_config(), session) {
             Some(AdapterNotice::RbacUserDisabled)
         } else {

@@ -18,7 +18,7 @@ use futures::future::BoxFuture;
 use maplit::btreemap;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
-use mz_adapter_types::dyncfgs::{ENABLE_EXPRESSION_CACHE, ENABLE_PASSWORD_AUTH};
+use mz_adapter_types::dyncfgs::ENABLE_EXPRESSION_CACHE;
 use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, DataSourceDesc, Sink, Source, Table, TableDataSource, Type,
@@ -459,26 +459,13 @@ impl Coordinator {
         }
     }
 
-    /// Validates the role attributes for a `CREATE ROLE` statement.
-    fn validate_role_attributes(&self, attributes: &RoleAttributesRaw) -> Result<(), AdapterError> {
-        if !ENABLE_PASSWORD_AUTH.get(self.catalog().system_config().dyncfgs()) {
-            if attributes.superuser.is_some() || attributes.password.is_some() {
-                return Err(AdapterError::UnavailableFeature {
-                    feature: "SUPERUSER and PASSWORD attributes".to_string(),
-                    docs: Some("https://materialize.com/docs/sql/create-role/#details".to_string()),
-                });
-            }
-        }
-        Ok(())
-    }
-
     #[instrument]
     pub(super) async fn sequence_create_role(
         &mut self,
         conn_id: Option<&ConnectionId>,
         plan::CreateRolePlan { name, attributes }: plan::CreateRolePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        self.validate_role_attributes(&attributes.clone())?;
+        catalog::command::metadata::validate_role_attributes(self.catalog().state(), &attributes)?;
         let op = catalog::Op::CreateRole { name, attributes };
         self.catalog_transact_with_context(conn_id, None, vec![op])
             .await
@@ -1776,7 +1763,10 @@ impl Coordinator {
         // Apply our updates.
         match option {
             PlannedAlterRoleOption::Attributes(attrs) => {
-                self.validate_role_attributes(&attrs.clone().into())?;
+                catalog::command::metadata::validate_role_attributes(
+                    self.catalog().state(),
+                    &attrs.clone().into(),
+                )?;
 
                 if let Some(inherit) = attrs.inherit {
                     attributes.inherit = inherit;
