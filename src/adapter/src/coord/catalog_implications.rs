@@ -760,6 +760,16 @@ impl Coordinator {
             }
         }
 
+        // Replica status removal requires its parent cluster's status map.
+        for (cluster_id, replica_id) in &cluster_replicas_to_drop {
+            self.cluster_replica_statuses
+                .remove_cluster_replica_statuses(cluster_id, replica_id);
+        }
+        for cluster_id in &clusters_to_drop {
+            self.cluster_replica_statuses
+                .remove_cluster_statuses(cluster_id);
+        }
+
         let clusters_with_replica_creates = cluster_replicas_to_create
             .iter()
             .map(|(cluster_id, ..)| *cluster_id)
