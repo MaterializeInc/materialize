@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Persistent table definitions are resolved against the commit candidate.
+//! Table definitions are resolved against the commit candidate.
 
 use std::sync::Arc;
 
@@ -73,9 +73,6 @@ impl TableStatement {
         let Plan::CreateTable(plan) = plan else {
             return Err(AdapterError::Unsupported("non-CREATE TABLE intent"));
         };
-        if plan.table.temporary {
-            return Err(AdapterError::Unsupported("temporary table command"));
-        }
         Ok(TableCompilation {
             plan,
             resolved_ids,
@@ -119,6 +116,10 @@ impl TableStatement {
 
     pub(crate) fn notices(&self) -> &[PlanNotice] {
         &self.notices
+    }
+
+    pub(super) fn is_temporary(&self) -> bool {
+        matches!(self.statement.as_ref(), Statement::CreateTable(table) if table.temporary)
     }
 
     pub(crate) fn skipped_name(&self) -> Option<&str> {

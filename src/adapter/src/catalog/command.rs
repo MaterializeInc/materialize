@@ -58,6 +58,14 @@ pub enum CatalogCommand {
 }
 
 impl CatalogCommand {
+    pub(crate) fn creates_temporary_item(&self) -> bool {
+        match self {
+            Self::CreateView(command) => command.is_temporary(),
+            Self::CreateTable(command) => command.is_temporary(),
+            _ => false,
+        }
+    }
+
     /// Resolves a command against the candidate catalog, or requests external work.
     ///
     /// The response must belong to this command's index in the replayed batch.

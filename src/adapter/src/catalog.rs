@@ -1223,16 +1223,6 @@ impl Catalog {
             .register(conn_id.clone(), uuid);
     }
 
-    fn item_exists_in_temp_schemas(&self, conn_id: &ConnectionId, item_name: &str) -> bool {
-        // A temporary namespace is registered at the connection's first
-        // temporary-item creation, so it's valid for one to not exist yet.
-        self.state
-            .temporary_namespaces
-            .schema(conn_id)
-            .map(|schema| schema.items.contains_key(item_name))
-            .unwrap_or(false)
-    }
-
     /// Removes the connection's temporary namespace, if it has one.
     pub fn drop_temporary_namespace(&mut self, conn_id: &ConnectionId) {
         self.state.temporary_namespaces.unregister(conn_id)

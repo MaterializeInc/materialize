@@ -20,7 +20,6 @@ use mz_adapter_types::cluster_state::{
     BurstAudit, BurstFinishCause, ExpectedClusterState, ReconfigurationAudit,
 };
 use mz_adapter_types::compaction::CompactionWindow;
-use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::{
     ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT, WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL,
     WITH_0DT_DEPLOYMENT_MAX_WAIT,
@@ -726,41 +725,6 @@ impl Catalog {
         })
     }
 
-    /// Gets [`CatalogItemId`]s of temporary items to be created, checks for name collisions
-    /// within a connection id.
-    fn temporary_ids(
-        &self,
-        ops: &[Op],
-        temporary_drops: BTreeSet<(&ConnectionId, String)>,
-    ) -> Result<BTreeSet<CatalogItemId>, Error> {
-        let mut creating = BTreeSet::new();
-        let mut temporary_ids = BTreeSet::new();
-        for op in ops.iter() {
-            if let Op::CreateItem {
-                id,
-                name,
-                item,
-                owner_id: _,
-            } = op
-            {
-                if let Some(conn_id) = item.conn_id() {
-                    if self.item_exists_in_temp_schemas(conn_id, &name.item)
-                        && !temporary_drops.contains(&(conn_id, name.item.clone()))
-                        || creating.contains(&(conn_id, &name.item))
-                    {
-                        return Err(
-                            SqlCatalogError::ItemAlreadyExists(*id, name.item.clone()).into()
-                        );
-                    } else {
-                        creating.insert((conn_id, &name.item));
-                        temporary_ids.insert(id.clone());
-                    }
-                }
-            }
-        }
-        Ok(temporary_ids)
-    }
-
     #[instrument(name = "catalog::transact")]
     pub async fn transact(
         &mut self,
@@ -778,36 +742,6 @@ impl Catalog {
             )))
         });
 
-        let drop_ids: BTreeSet<CatalogItemId> = ops
-            .iter()
-            .filter_map(|op| match op {
-                Op::DropObjects {
-                    objects: drop_object_infos,
-                    ..
-                } => {
-                    let ids = drop_object_infos.iter().map(|info| info.to_object_id());
-                    let item_ids = ids.filter_map(|id| match id {
-                        ObjectId::Item(id) => Some(id),
-                        _ => None,
-                    });
-                    Some(item_ids)
-                }
-                _ => None,
-            })
-            .flatten()
-            .collect();
-        let temporary_drops = drop_ids
-            .iter()
-            .filter_map(|id| {
-                let entry = self.get_entry(id);
-                match entry.item().conn_id() {
-                    Some(conn_id) => Some((conn_id, entry.name().item.clone())),
-                    None => None,
-                }
-            })
-            .collect();
-
-        let temporary_ids = self.temporary_ids(&ops, temporary_drops)?;
         let mut builtin_table_updates = vec![];
         let mut catalog_updates = vec![];
         let mut audit_events = vec![];
@@ -825,7 +759,6 @@ impl Catalog {
             commit_ts,
             session,
             TransactionOperations::Raw(ops),
-            temporary_ids,
             &mut builtin_table_updates,
             &mut catalog_updates,
             &mut audit_events,
@@ -889,7 +822,6 @@ impl Catalog {
                 commands,
                 responses,
             },
-            BTreeSet::new(),
             &mut builtin_table_updates,
             &mut catalog_updates,
             &mut audit_events,
@@ -992,10 +924,6 @@ impl Catalog {
         prev_snapshot: Option<Snapshot>,
         oracle_write_ts: mz_repr::Timestamp,
     ) -> Result<(CatalogState, Snapshot), AdapterError> {
-        // For DDL transactions, items are not temporary (CREATE TABLE FROM SOURCE, etc.)
-        // but we still need to check for collisions.
-        let temporary_ids = self.temporary_ids(&ops, BTreeSet::new())?;
-
         let mut builtin_table_updates = vec![];
         let mut catalog_updates = vec![];
         let mut audit_events = vec![];
@@ -1023,7 +951,6 @@ impl Catalog {
             oracle_write_ts,
             session,
             TransactionOperations::Raw(ops),
-            temporary_ids,
             &mut builtin_table_updates,
             &mut catalog_updates,
             &mut audit_events,
@@ -1108,7 +1035,6 @@ impl Catalog {
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&ConnMeta>,
         operations: TransactionOperations<'_>,
-        temporary_ids: BTreeSet<CatalogItemId>,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
         parsed_catalog_updates: &mut Vec<ParsedStateUpdate>,
         audit_events: &mut Vec<VersionedEvent>,
@@ -1206,7 +1132,6 @@ impl Catalog {
                         oracle_write_ts,
                         session,
                         TransactionOperations::Raw(ops.to_vec()),
-                        BTreeSet::new(),
                         &mut Vec::new(),
                         &mut Vec::new(),
                         &mut Vec::new(),
@@ -1223,6 +1148,9 @@ impl Catalog {
                 execution = remaining;
             }
             let ops = execution.take_ops();
+            let temporary_ids = preliminary_state
+                .temporary_ids(&ops)
+                .map_err(AdapterError::from)?;
             // Commands accept prepared expressions against this candidate's configuration.
             // Both application passes need them because durable items contain SQL, not MIR.
             cached_exprs.extend(Self::extract_expressions_from_ops(
@@ -3632,6 +3560,70 @@ impl Catalog {
         }
 
         *privileges = PrivilegeMap::from_mz_acl_items(flat_privileges);
+    }
+}
+
+impl CatalogState {
+    /// Checks temporary-name collisions against this candidate and returns intra-batch IDs.
+    fn temporary_ids(&self, ops: &[Op]) -> Result<BTreeSet<CatalogItemId>, Error> {
+        let drop_ids: BTreeSet<CatalogItemId> = ops
+            .iter()
+            .filter_map(|op| match op {
+                Op::DropObjects {
+                    objects: drop_object_infos,
+                    ..
+                } => {
+                    let ids = drop_object_infos.iter().map(|info| info.to_object_id());
+                    let item_ids = ids.filter_map(|id| match id {
+                        ObjectId::Item(id) => Some(id),
+                        _ => None,
+                    });
+                    Some(item_ids)
+                }
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        let temporary_drops: BTreeSet<_> = drop_ids
+            .iter()
+            .filter_map(|id| {
+                let entry = self.get_entry(id);
+                match entry.item().conn_id() {
+                    Some(conn_id) => Some((conn_id, entry.name().item.clone())),
+                    None => None,
+                }
+            })
+            .collect();
+
+        let mut creating = BTreeSet::new();
+        let mut temporary_ids = BTreeSet::new();
+        for op in ops.iter() {
+            if let Op::CreateItem {
+                id,
+                name,
+                item,
+                owner_id: _,
+            } = op
+            {
+                if let Some(conn_id) = item.conn_id() {
+                    if self
+                        .temporary_namespaces
+                        .schema(conn_id)
+                        .is_some_and(|schema| schema.items.contains_key(&name.item))
+                        && !temporary_drops.contains(&(conn_id, name.item.clone()))
+                        || creating.contains(&(conn_id, &name.item))
+                    {
+                        return Err(
+                            SqlCatalogError::ItemAlreadyExists(*id, name.item.clone()).into()
+                        );
+                    } else {
+                        creating.insert((conn_id, &name.item));
+                        temporary_ids.insert(id.clone());
+                    }
+                }
+            }
+        }
+        Ok(temporary_ids)
     }
 }
 

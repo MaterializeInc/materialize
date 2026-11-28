@@ -1103,6 +1103,13 @@ impl Coordinator {
         phase_seconds
             .with_label_values(&["catalog_copy"])
             .observe(copy_start.elapsed().as_secs_f64());
+        if commands
+            .iter()
+            .any(catalog::command::CatalogCommand::creates_temporary_item)
+            && !catalog.state().has_temporary_namespace(conn.conn_id())
+        {
+            catalog.register_temporary_namespace(conn.conn_id(), conn.uuid());
+        }
         let TransactionResult {
             builtin_table_updates,
             catalog_updates,
