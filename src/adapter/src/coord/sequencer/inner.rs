@@ -32,15 +32,15 @@ use mz_ore::task::{self, JoinHandle, spawn};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{instrument, soft_panic_or_log};
 use mz_repr::adt::jsonb::Jsonb;
-use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
+use mz_repr::adt::mz_acl_item::MzAclItem;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, Datum, Diff, GlobalId, RelationDesc, Row, Timestamp};
 use mz_sql::ast::{CreateSinkOption, CreateSinkOptionName};
 use mz_sql::catalog::{
-    CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError,
-    CatalogItem as SqlCatalogItem, CatalogRole, CatalogSchema, CatalogTypeDetails,
-    ErrorMessageObjectDescription, ObjectType, RoleAttributesRaw, RoleVars, SessionCatalog,
+    CatalogCluster, CatalogClusterReplica, CatalogError, CatalogItem as SqlCatalogItem,
+    CatalogRole, CatalogSchema, CatalogTypeDetails, ErrorMessageObjectDescription, ObjectType,
+    RoleAttributesRaw, RoleVars, SessionCatalog,
 };
 use mz_sql::names::{
     ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, ResolvedItemName,
@@ -75,9 +75,8 @@ use tokio::sync::watch;
 use tracing::{Instrument, Span, info, warn};
 
 use crate::active_compute_sink::ActiveComputeSink;
-use crate::catalog::{
-    self, Catalog, CatalogState, ConnCatalog, DropObjectInfo, UpdatePrivilegeVariant,
-};
+use crate::catalog::command::drop::DropOps;
+use crate::catalog::{self, Catalog, CatalogState, UpdatePrivilegeVariant};
 use crate::command::ExecuteResponse;
 use crate::coord::appends::{BuiltinTableAppendNotify, PendingWriteTxn, UserWriteResponder};
 use crate::coord::sequencer::emit_optimizer_notices;
@@ -120,12 +119,6 @@ macro_rules! return_if_err {
 }
 
 pub(super) use return_if_err;
-
-struct DropOps {
-    ops: Vec<catalog::Op>,
-    dropped_active_db: bool,
-    dropped_active_cluster: bool,
-}
 
 /// The outcome of [`Coordinator::check_index_dependents`].
 struct IndexDropNotices {
@@ -842,187 +835,6 @@ impl Coordinator {
         Ok(ExecuteResponse::DroppedObject(object_type))
     }
 
-    fn validate_dropped_role_ownership(
-        &self,
-        session: &Session,
-        dropped_roles: &BTreeMap<RoleId, &str>,
-    ) -> Result<(), AdapterError> {
-        fn privilege_check(
-            privileges: &PrivilegeMap,
-            dropped_roles: &BTreeMap<RoleId, &str>,
-            dependent_objects: &mut BTreeMap<String, Vec<String>>,
-            object_id: &SystemObjectId,
-            catalog: &ConnCatalog,
-        ) {
-            for privilege in privileges.all_values() {
-                if let Some(role_name) = dropped_roles.get(&privilege.grantee) {
-                    let grantor_name = catalog.get_role(&privilege.grantor).name();
-                    let object_description =
-                        ErrorMessageObjectDescription::from_sys_id(object_id, catalog);
-                    dependent_objects
-                        .entry(role_name.to_string())
-                        .or_default()
-                        .push(format!(
-                            "privileges on {object_description} granted by {grantor_name}",
-                        ));
-                }
-                if let Some(role_name) = dropped_roles.get(&privilege.grantor) {
-                    let grantee_name = catalog.get_role(&privilege.grantee).name();
-                    let object_description =
-                        ErrorMessageObjectDescription::from_sys_id(object_id, catalog);
-                    dependent_objects
-                        .entry(role_name.to_string())
-                        .or_default()
-                        .push(format!(
-                            "privileges granted on {object_description} to {grantee_name}"
-                        ));
-                }
-            }
-        }
-
-        let catalog = self.catalog().for_session(session);
-        let mut dependent_objects: BTreeMap<_, Vec<_>> = BTreeMap::new();
-        for entry in self.catalog.entries() {
-            let id = SystemObjectId::Object(entry.id().into());
-            if let Some(role_name) = dropped_roles.get(entry.owner_id()) {
-                let object_description = ErrorMessageObjectDescription::from_sys_id(&id, &catalog);
-                dependent_objects
-                    .entry(role_name.to_string())
-                    .or_default()
-                    .push(format!("owner of {object_description}"));
-            }
-            privilege_check(
-                entry.privileges(),
-                dropped_roles,
-                &mut dependent_objects,
-                &id,
-                &catalog,
-            );
-        }
-        for database in self.catalog.databases() {
-            let database_id = SystemObjectId::Object(database.id().into());
-            if let Some(role_name) = dropped_roles.get(&database.owner_id) {
-                let object_description =
-                    ErrorMessageObjectDescription::from_sys_id(&database_id, &catalog);
-                dependent_objects
-                    .entry(role_name.to_string())
-                    .or_default()
-                    .push(format!("owner of {object_description}"));
-            }
-            privilege_check(
-                &database.privileges,
-                dropped_roles,
-                &mut dependent_objects,
-                &database_id,
-                &catalog,
-            );
-            for schema in database.schemas_by_id.values() {
-                let schema_id = SystemObjectId::Object(
-                    (ResolvedDatabaseSpecifier::Id(database.id()), *schema.id()).into(),
-                );
-                if let Some(role_name) = dropped_roles.get(&schema.owner_id) {
-                    let object_description =
-                        ErrorMessageObjectDescription::from_sys_id(&schema_id, &catalog);
-                    dependent_objects
-                        .entry(role_name.to_string())
-                        .or_default()
-                        .push(format!("owner of {object_description}"));
-                }
-                privilege_check(
-                    &schema.privileges,
-                    dropped_roles,
-                    &mut dependent_objects,
-                    &schema_id,
-                    &catalog,
-                );
-            }
-        }
-        for cluster in self.catalog.clusters() {
-            let cluster_id = SystemObjectId::Object(cluster.id().into());
-            if let Some(role_name) = dropped_roles.get(&cluster.owner_id) {
-                let object_description =
-                    ErrorMessageObjectDescription::from_sys_id(&cluster_id, &catalog);
-                dependent_objects
-                    .entry(role_name.to_string())
-                    .or_default()
-                    .push(format!("owner of {object_description}"));
-            }
-            privilege_check(
-                &cluster.privileges,
-                dropped_roles,
-                &mut dependent_objects,
-                &cluster_id,
-                &catalog,
-            );
-            for replica in cluster.replicas() {
-                if let Some(role_name) = dropped_roles.get(&replica.owner_id) {
-                    let replica_id =
-                        SystemObjectId::Object((replica.cluster_id(), replica.replica_id()).into());
-                    let object_description =
-                        ErrorMessageObjectDescription::from_sys_id(&replica_id, &catalog);
-                    dependent_objects
-                        .entry(role_name.to_string())
-                        .or_default()
-                        .push(format!("owner of {object_description}"));
-                }
-            }
-        }
-        for policy in catalog.get_query_policies() {
-            let id = SystemObjectId::Object(ObjectId::QueryPolicy(policy.id()));
-            if let Some(role_name) = dropped_roles.get(&policy.owner_id()) {
-                let object_description = ErrorMessageObjectDescription::from_sys_id(&id, &catalog);
-                dependent_objects
-                    .entry(role_name.to_string())
-                    .or_default()
-                    .push(format!("owner of {object_description}"));
-            }
-            privilege_check(
-                policy.privileges(),
-                dropped_roles,
-                &mut dependent_objects,
-                &id,
-                &catalog,
-            );
-        }
-        privilege_check(
-            self.catalog().system_privileges(),
-            dropped_roles,
-            &mut dependent_objects,
-            &SystemObjectId::System,
-            &catalog,
-        );
-        for (default_privilege_object, default_privilege_acl_items) in
-            self.catalog.default_privileges()
-        {
-            if let Some(role_name) = dropped_roles.get(&default_privilege_object.role_id) {
-                dependent_objects
-                    .entry(role_name.to_string())
-                    .or_default()
-                    .push(format!(
-                        "default privileges on {}S created by {}",
-                        default_privilege_object.object_type, role_name
-                    ));
-            }
-            for default_privilege_acl_item in default_privilege_acl_items {
-                if let Some(role_name) = dropped_roles.get(&default_privilege_acl_item.grantee) {
-                    dependent_objects
-                        .entry(role_name.to_string())
-                        .or_default()
-                        .push(format!(
-                            "default privileges on {}S granted to {}",
-                            default_privilege_object.object_type, role_name
-                        ));
-                }
-            }
-        }
-
-        if !dependent_objects.is_empty() {
-            Err(AdapterError::DependentObject(dependent_objects))
-        } else {
-            Ok(())
-        }
-    }
-
     #[instrument]
     pub(super) async fn sequence_drop_owned(
         &mut self,
@@ -1221,152 +1033,7 @@ impl Coordinator {
         ids: Vec<ObjectId>,
         cascade: bool,
     ) -> Result<DropOps, AdapterError> {
-        let mut dropped_active_db = false;
-        let mut dropped_active_cluster = false;
-        let mut dropped_roles = BTreeMap::new();
-        let mut dropped_databases = BTreeSet::new();
-        let mut dropped_schemas = BTreeSet::new();
-        // Dropping either the group role or the member role of a role membership will trigger a
-        // revoke role. We use a Set for the revokes to avoid trying to attempt to revoke the same
-        // role membership twice.
-        let mut role_revokes = BTreeSet::new();
-        // Dropping a database or a schema will revoke all default roles associated with that
-        // database or schema.
-        let mut default_privilege_revokes = BTreeSet::new();
-
-        // Clusters we're dropping
-        let mut clusters_to_drop = BTreeSet::new();
-
-        for id in &ids {
-            match id {
-                ObjectId::Database(id) => {
-                    let name = self.catalog().get_database(id).name();
-                    if name == session.vars().database() {
-                        dropped_active_db = true;
-                    }
-                    dropped_databases.insert(id);
-                }
-                ObjectId::Schema((_, spec)) => {
-                    if let SchemaSpecifier::Id(id) = spec {
-                        dropped_schemas.insert(id);
-                    }
-                }
-                ObjectId::Cluster(id) => {
-                    clusters_to_drop.insert(*id);
-                    if let Some(active_id) = self
-                        .catalog()
-                        .active_cluster(session)
-                        .ok()
-                        .map(|cluster| cluster.id())
-                    {
-                        if id == &active_id {
-                            dropped_active_cluster = true;
-                        }
-                    }
-                }
-                ObjectId::Role(id) => {
-                    let role = self.catalog().get_role(id);
-                    let name = role.name();
-                    dropped_roles.insert(*id, name);
-                    // We must revoke all role memberships that the dropped roles belongs to.
-                    for (group_id, grantor_id) in &role.membership.map {
-                        role_revokes.insert((*group_id, *id, *grantor_id));
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        for id in &ids {
-            match id {
-                // Validate that `ClusterReplica` drops do not drop replicas of managed clusters,
-                // unless they are internal replicas, which exist outside the scope
-                // of managed clusters.
-                ObjectId::ClusterReplica((cluster_id, replica_id)) => {
-                    if !clusters_to_drop.contains(cluster_id) {
-                        let cluster = self.catalog.get_cluster(*cluster_id);
-                        if cluster.is_managed() {
-                            let replica =
-                                cluster.replica(*replica_id).expect("Catalog out of sync");
-                            if !replica.config.location.internal() {
-                                coord_bail!("cannot drop replica of managed cluster");
-                            }
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        for role_id in dropped_roles.keys() {
-            self.catalog().ensure_not_reserved_role(role_id)?;
-        }
-        self.validate_dropped_role_ownership(session, &dropped_roles)?;
-        // If any role is a member of a dropped role, then we must revoke that membership.
-        let dropped_role_ids: BTreeSet<_> = dropped_roles.keys().collect();
-        for role in self.catalog().user_roles() {
-            for dropped_role_id in
-                dropped_role_ids.intersection(&role.membership.map.keys().collect())
-            {
-                role_revokes.insert((
-                    **dropped_role_id,
-                    role.id(),
-                    *role
-                        .membership
-                        .map
-                        .get(*dropped_role_id)
-                        .expect("included in keys above"),
-                ));
-            }
-        }
-
-        for (default_privilege_object, default_privilege_acls) in
-            self.catalog().default_privileges()
-        {
-            if matches!(
-                &default_privilege_object.database_id,
-                Some(database_id) if dropped_databases.contains(database_id),
-            ) || matches!(
-                &default_privilege_object.schema_id,
-                Some(schema_id) if dropped_schemas.contains(schema_id),
-            ) {
-                for default_privilege_acl in default_privilege_acls {
-                    default_privilege_revokes.insert((
-                        default_privilege_object.clone(),
-                        default_privilege_acl.clone(),
-                    ));
-                }
-            }
-        }
-
-        let ops = role_revokes
-            .into_iter()
-            .map(|(role_id, member_id, grantor_id)| catalog::Op::RevokeRole {
-                role_id,
-                member_id,
-                grantor_id,
-            })
-            .chain(default_privilege_revokes.into_iter().map(
-                |(privilege_object, privilege_acl_item)| catalog::Op::UpdateDefaultPrivilege {
-                    privilege_object,
-                    privilege_acl_item,
-                    variant: UpdatePrivilegeVariant::Revoke,
-                },
-            ))
-            .chain(iter::once(catalog::Op::DropObjects {
-                objects: ids
-                    .into_iter()
-                    .map(DropObjectInfo::manual_drop_from_object_id)
-                    .collect(),
-                cascade,
-            }))
-            .collect();
-
-        Ok(DropOps {
-            ops,
-            dropped_active_db,
-            dropped_active_cluster,
-        })
+        catalog::command::drop::drop_objects_ops(self.catalog().state(), session, ids, cascade)
     }
 
     pub(super) fn sequence_explain_schema(

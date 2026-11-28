@@ -81,7 +81,7 @@ use mz_sql::plan::{
 };
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
-use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
+use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER};
 use mz_sql::session::vars::{DEFAULT_DATABASE_NAME, SystemVars, Var, VarInput};
 use mz_sql_parser::ast::QualifiedReplica;
 use mz_storage_client::controller::StorageMetadata;
@@ -2938,6 +2938,23 @@ impl CatalogState {
         } else {
             Ok(())
         }
+    }
+
+    pub fn active_cluster(&self, session: &dyn SessionMetadata) -> Result<&Cluster, AdapterError> {
+        // TODO(benesch): this check here is not sufficiently protective. It'd
+        // be very easy for a code path to accidentally avoid this check by
+        // calling `resolve_cluster(session.vars().cluster())`.
+        if session.user().name != SYSTEM_USER.name
+            && session.user().name != SUPPORT_USER.name
+            && session.vars().cluster() == SYSTEM_USER.name
+        {
+            return Err(AdapterError::Unstructured(anyhow::anyhow!(
+                "system cluster '{}' cannot execute user queries",
+                SYSTEM_USER.name,
+            )));
+        }
+        let cluster = self.resolve_cluster(session.vars().cluster())?;
+        Ok(cluster)
     }
 
     pub fn ensure_not_reserved_role(&self, role_id: &RoleId) -> Result<(), Error> {
