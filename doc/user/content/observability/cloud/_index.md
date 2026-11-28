@@ -19,6 +19,8 @@ This section covers monitoring and alerting for Materialize Cloud.
 You can monitor the performance and overall health of your Materialize region.
 To help you get started, the following guides are available:
 
+- [Cloud metrics](/observability/cloud/cloud-metrics-draft/): overview, metrics list, and tokens
+
 - [Datadog](/observability/cloud/datadog/)
 
 - [Grafana](/observability/cloud/grafana/)
