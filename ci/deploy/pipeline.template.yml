@@ -38,6 +38,17 @@ steps:
     concurrency: 1
     concurrency_group: deploy/linux
 
+  - id: deploy-malware-scan
+    label: ":mag: ClamAV scan of release images"
+    command: bin/ci-builder run stable bin/pyactivate -m ci.deploy.malware_scan
+    if: build.tag != null
+    # Reports detections without holding up the release.
+    soft_fail: true
+    timeout_in_minutes: 120
+    artifact_paths: [malware-scan/*.log]
+    agents:
+      queue: linux-x86_64-small
+
   - id: deploy-pypi
     label: ":rocket: :pypi:"
     command: bin/ci-builder run stable bin/pyactivate -m ci.deploy.pypi
