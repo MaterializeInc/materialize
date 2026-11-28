@@ -2382,8 +2382,7 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
     /// perform a topological sort. This is non-trivial because we only have the CREATE SQL of each
     /// item here. Within the SQL the dependent items are sometimes referred to by ID and sometimes
     /// referred to by name.
-    ///
-    /// The logic of this function should match [`sort_temp_item_updates`].
+
     fn sort_item_updates(
         item_updates: Vec<(mz_catalog::durable::Item, Timestamp, StateDiff)>,
     ) -> VecDeque<(mz_catalog::durable::Item, Timestamp, StateDiff)> {
@@ -2415,15 +2414,13 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             }
         }
 
-        // For some groups, the items in them can depend on each other and can be `ALTER`ed so that
-        // an item ends up depending on an item with a greater ID. Thus we need to perform
-        // topological sort for these groups.
+        // Alterations and replayed creates can depend on items with greater IDs.
+        sort_items_topological(&mut types);
         sort_items_topological(&mut connections);
         sort_items_topological(&mut derived_items);
 
         // Other groups we can simply sort by ID.
         for group in [
-            &mut types,
             &mut funcs,
             &mut secrets,
             &mut sources,
