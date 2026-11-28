@@ -28,7 +28,10 @@ async fn test_expected_spans() {
         //     "CREATE MATERIALIZED VIEW MV AS SELECT 1",
         // ),
         ("sequence_create_view_command", "CREATE VIEW V AS SELECT 1"),
-        ("create_index_finish", "CREATE DEFAULT INDEX i ON v"),
+        (
+            "sequence_create_index_command",
+            "CREATE DEFAULT INDEX i ON v",
+        ),
         ("implement_subscribe", "SUBSCRIBE (SELECT 1)"),
         ("try_peek_inner", "SELECT 1"),
     ];

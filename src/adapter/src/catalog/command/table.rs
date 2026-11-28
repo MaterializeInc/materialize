@@ -194,7 +194,7 @@ mod tests {
             let mut commands = [CatalogCommand::CreateTable(Arc::new(command))];
             let ts = catalog.current_upper().await;
             let created = catalog
-                .transact_commands(None, ts, None, &mut commands, &mut BTreeMap::new())
+                .transact_commands(None, None, ts, None, &mut commands, &mut BTreeMap::new())
                 .await
                 .expect("commit table in current schema");
             assert!(!created.catalog_updates.is_empty());
@@ -222,7 +222,7 @@ mod tests {
             let ts = catalog.current_upper().await;
             let mut commands = [CatalogCommand::CreateTable(Arc::new(contender))];
             let skipped = catalog
-                .transact_commands(None, ts, None, &mut commands, &mut BTreeMap::new())
+                .transact_commands(None, None, ts, None, &mut commands, &mut BTreeMap::new())
                 .await
                 .expect("skip current name collision");
             assert!(

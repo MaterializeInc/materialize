@@ -1574,6 +1574,10 @@ impl Coordinator {
                 .await;
             return;
         }
+        if matches!(&*stmt, Statement::CreateIndex(_)) {
+            self.sequence_create_index_command(ctx, stmt, params).await;
+            return;
+        }
         if matches!(&*stmt, Statement::CreateView(_)) {
             self.sequence_create_view_command(ctx, stmt, params).await;
             return;
@@ -1830,6 +1834,7 @@ impl Coordinator {
         match stmt {
             // Semantic replay validates the current names, dependencies and permissions.
             Statement::CreateView(_)
+            | Statement::CreateIndex(_)
             | Statement::CreateTable(_)
             | Statement::CreateDatabase(_)
             | Statement::CreateSchema(_) => false,

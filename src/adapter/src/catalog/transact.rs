@@ -460,6 +460,7 @@ pub struct TransactionResult {
 
 #[derive(Debug)]
 pub(crate) enum CommandWork {
+    Index(Box<super::command::index::IndexWork>),
     View(super::command::view::ViewPreparation),
     Connection(super::command::connection::ConnectionPreparation),
     ConnectionSecret(super::command::connection::ConnectionSecret),
@@ -469,6 +470,7 @@ pub(crate) enum CommandWork {
 
 #[derive(Debug)]
 pub(crate) enum CommandResponse {
+    Index(super::command::index::IndexPreparationResponse),
     View(super::command::view::ViewPreparationResponse),
     Source(mz_sql::pure::SourcePreparationResponse),
     Connection(super::command::connection::ConnectionPreparationResponse),
@@ -501,6 +503,7 @@ enum TransactionOperations<'a> {
     Commands {
         commands: &'a mut [super::command::CatalogCommand],
         responses: &'a mut BTreeMap<usize, CommandResponse>,
+        compute: Option<&'a mz_compute_client::controller::ComputeController>,
     },
 }
 
@@ -798,6 +801,7 @@ impl Catalog {
     pub(crate) async fn transact_commands(
         &mut self,
         storage_collections: Option<&mut Arc<dyn StorageCollections + Send + Sync>>,
+        compute: Option<&mz_compute_client::controller::ComputeController>,
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&ConnMeta>,
         commands: &mut [super::command::CatalogCommand],
@@ -823,6 +827,7 @@ impl Catalog {
             TransactionOperations::Commands {
                 commands,
                 responses,
+                compute,
             },
             &mut builtin_table_updates,
             &mut catalog_updates,
@@ -1097,6 +1102,10 @@ impl Catalog {
 
         let mut updates = Vec::new();
 
+        let compute = match &operations {
+            TransactionOperations::Commands { compute, .. } => *compute,
+            TransactionOperations::Raw(_) => None,
+        };
         let (groups, mut responses): (std::collections::VecDeque<_>, _) = match operations {
             TransactionOperations::Raw(ops) => {
                 ([OperationGroup::Raw(ops)].into_iter().collect(), None)
@@ -1104,6 +1113,7 @@ impl Catalog {
             TransactionOperations::Commands {
                 commands,
                 responses,
+                ..
             } => (
                 commands
                     .iter_mut()
@@ -1123,7 +1133,7 @@ impl Catalog {
                     let response = responses
                         .as_mut()
                         .and_then(|responses| responses.remove(&index));
-                    command.compile(&preliminary_state, index, response)?
+                    command.compile(&preliminary_state, compute, index, response)?
                 }
             };
             if let Some(ops) = execution.collision_probe_ops() {

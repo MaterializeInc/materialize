@@ -147,7 +147,7 @@ mod tests {
             ];
             let revision = catalog.transient_revision();
             let ts = catalog.current_upper().await;
-            catalog.transact_commands(None, ts, None, &mut commands, &mut BTreeMap::new()).await.expect("schema must resolve the database created by the prefix");
+            catalog.transact_commands(None, None, ts, None, &mut commands, &mut BTreeMap::new()).await.expect("schema must resolve the database created by the prefix");
             assert!(catalog.transient_revision() > revision, "commit publishes a new catalog revision");
             let database = catalog.state().resolve_database("replay_database").expect("committed database exists");
             assert!(database.schemas_by_name.contains_key("replay_schema"), "committed schema exists");
@@ -167,7 +167,7 @@ mod tests {
             ];
             let ts = catalog.current_upper().await;
             let result = catalog
-                .transact_commands(None, ts, None, &mut commands, &mut BTreeMap::new())
+                .transact_commands(None, None, ts, None, &mut commands, &mut BTreeMap::new())
                 .await;
             assert!(result.is_err());
             assert!(catalog.state().resolve_database("aborted_database").is_err(), "failed schema creation must roll back the prefix");

@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use crate::catalog::Catalog;
 
 /// A bundle of storage and compute collection identifiers.
-#[derive(Deserialize, Debug, Default, Clone, Serialize)]
+#[derive(Deserialize, Debug, Default, Clone, Serialize, PartialEq, Eq)]
 pub struct CollectionIdBundle {
     /// The identifiers for sources in the storage layer.
     pub storage_ids: BTreeSet<GlobalId>,

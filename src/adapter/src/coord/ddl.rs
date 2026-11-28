@@ -347,6 +347,84 @@ impl Coordinator {
         .await;
     }
 
+    #[instrument]
+    pub(super) async fn sequence_create_index_command(
+        &mut self,
+        mut ctx: ExecuteContext,
+        statement: Arc<mz_sql::ast::Statement<mz_sql::ast::Raw>>,
+        params: mz_sql::plan::Params,
+    ) {
+        ctx.finish_ddl_on_coordinator = true;
+        let mut command =
+            catalog::command::index::IndexStatement::new(statement, params, ctx.session().meta());
+        let compiled = match command.compile_create(self.catalog().state()) {
+            Ok(compiled) => compiled,
+            Err(error) => return ctx.retire(Err(error)),
+        };
+        if let Err(error) = self
+            .prepare_command_execution(&mut ctx, &mz_sql::plan::Plan::CreateIndex(compiled.plan))
+        {
+            return ctx.retire(Err(error));
+        }
+        let ids = match self.allocate_user_id().await {
+            Ok(ids) => ids,
+            Err(error) => return ctx.retire(Err(error)),
+        };
+        command.allocate_create(ids);
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        if let Some((_, previous)) = self
+            .connection_cancel_watches
+            .insert(ctx.session().conn_id().clone(), (tx, rx.clone()))
+        {
+            if *previous.borrow() {
+                return ctx.retire(Err(AdapterError::Canceled));
+            }
+        }
+        let mut pending = PendingDdlCommit::statement(
+            ctx,
+            crate::ExecuteResponse::CreatedIndex,
+            vec![catalog::command::CatalogCommand::CreateIndex(Arc::new(
+                command,
+            ))],
+        );
+        pending.cancellation = Some(rx);
+        self.sequence_ddl_commit(pending).await;
+    }
+
+    fn prepare_index_command(
+        &self,
+        mut pending: PendingDdlCommit,
+        index: usize,
+        request: catalog::command::index::IndexWork,
+    ) {
+        let future = request.execute(
+            self.catalog(),
+            self.optimizer_metrics(),
+            Arc::clone(&self.transient_id_gen),
+        );
+        let tx = self.internal_cmd_tx.clone();
+        let otel_ctx = OpenTelemetryContext::obtain();
+        task::spawn(
+            || "ddl_index_preparation",
+            async move {
+                let mut cancellation = pending
+                    .cancellation
+                    .clone()
+                    .expect("index preparation is cancelable");
+                tokio::select! {
+                    response = future => {
+                        pending.responses.insert(index, catalog::CommandResponse::Index(response));
+                    }
+                    _ = cancellation.wait_for(|canceled| *canceled) => {}
+                }
+                if let Err(error) = tx.send(Message::DdlCommandsReady { pending, otel_ctx }) {
+                    warn!("internal_cmd_rx dropped before index preparation completed: {error:?}");
+                }
+            }
+            .instrument(tracing::Span::current()),
+        );
+    }
+
     fn prepare_view_command(
         &self,
         mut pending: PendingDdlCommit,
@@ -546,6 +624,20 @@ impl Coordinator {
 
     fn emit_command_notices(&self, session: &Session, command: &catalog::command::CatalogCommand) {
         session.add_notices(command.notices().iter().cloned().map(Into::into));
+        if let catalog::command::CatalogCommand::CreateIndex(command) = command {
+            if let Some(name) = command.skipped_name() {
+                session.add_notice(crate::AdapterNotice::ObjectAlreadyExists {
+                    name: name.to_owned(),
+                    ty: "index",
+                });
+            } else {
+                crate::coord::sequencer::emit_optimizer_notices(
+                    &*self.catalog,
+                    session,
+                    command.optimizer_notices(),
+                );
+            }
+        }
         if let catalog::command::CatalogCommand::CreateNamespace(command) = command {
             if let Some(notice) = command.skipped_notice() {
                 session.add_notice(notice);
@@ -954,6 +1046,11 @@ impl Coordinator {
                 Ok(()) => break Ok(()),
                 Err(catalog::CommandExecutionError::Error(error)) => break Err(error),
                 Err(catalog::CommandExecutionError::Pending { index, work }) => match work {
+                    catalog::CommandWork::Index(request) => {
+                        self.release_ddl_lock(guard);
+                        self.prepare_index_command(pending, index, *request);
+                        return;
+                    }
                     catalog::CommandWork::View(request) => {
                         self.release_ddl_lock(guard);
                         self.prepare_view_command(pending, index, request);
@@ -975,6 +1072,7 @@ impl Coordinator {
                             | catalog::command::CatalogCommand::CreateConnection(_)
                             | catalog::command::CatalogCommand::CreateView(_)
                             | catalog::command::CatalogCommand::CreateTable(_)
+                            | catalog::command::CatalogCommand::CreateIndex(_)
                             | catalog::command::CatalogCommand::CreateNamespace(_) => {
                                 unreachable!("this command does not allocate IDs");
                             }
@@ -1157,6 +1255,7 @@ impl Coordinator {
             audit_events,
         } = Box::pin(catalog.transact_commands(
             Some(&mut controller.storage_collections),
+            Some(&controller.compute),
             oracle_write_ts,
             Some(conn),
             commands,
