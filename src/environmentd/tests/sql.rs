@@ -523,6 +523,89 @@ async fn test_temporary_view_cancel_during_optimization() {
 
 // This failpoint is process-global. Run this test in its own process (as nextest does).
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn test_temporary_view_disconnect_during_optimization() {
+    use mz_postgres_util::{Sql, batch_execute, query_one};
+
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let server = test_util::TestHarness::default().start().await;
+        let (creator, connection) = server.connect().with_handle().await.unwrap();
+        batch_execute(
+            &creator,
+            Sql::new("SET statement_timeout = 0; CREATE TEMP TABLE temp_t (a int)"),
+        )
+        .await
+        .unwrap();
+        let adapter = server.inner.adapter_client();
+        let catalog = adapter.catalog_snapshot_expensive().await;
+        let owner = catalog
+            .entries()
+            .find(|entry| entry.name().item == "temp_t")
+            .unwrap()
+            .conn_id()
+            .unwrap()
+            .clone();
+        drop(catalog);
+
+        let (release, parked) = CatalogVisibilityGate::install("catalog_view_optimize_ready");
+        let create = task::spawn(|| "disconnected temporary view", async move {
+            batch_execute(
+                &creator,
+                Sql::new("CREATE TEMP VIEW temp_v AS SELECT * FROM temp_t"),
+            )
+            .await
+        })
+        .abort_on_drop();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            parked.await.unwrap();
+            connection.abort_and_wait().await;
+            assert!(create.await.is_err());
+            // Disable statement timeout above so only socket closure can cause cleanup.
+            Retry::default()
+                .max_duration(Duration::from_secs(4))
+                .retry_async(|_| async {
+                    let catalog = adapter.catalog_snapshot_expensive().await;
+                    if !catalog.state().has_temporary_namespace(&owner)
+                        && catalog.state().get_temp_items(&owner).count() == 0
+                    {
+                        Ok(())
+                    } else {
+                        Err(())
+                    }
+                })
+                .await
+                .expect("disconnect must clean up without waiting for optimization");
+        })
+        .await
+        .expect("disconnect cleanup timed out while optimization was blocked");
+        release.release();
+
+        let client = server.connect().await.unwrap();
+        for sql in [
+            "CREATE TEMP TABLE temp_t (a int)",
+            "INSERT INTO temp_t VALUES (42)",
+            "CREATE TEMP VIEW temp_v AS SELECT * FROM temp_t",
+        ] {
+            batch_execute(&client, Sql::new(sql)).await.unwrap();
+        }
+        assert_eq!(
+            query_one(&client, Sql::new("SELECT a FROM temp_v"), &[])
+                .await
+                .unwrap()
+                .get::<_, i32>(0),
+            42
+        );
+        batch_execute(&client, Sql::new("DISCARD ALL"))
+            .await
+            .unwrap();
+        let catalog = adapter.catalog_snapshot_expensive().await;
+        assert!(!catalog.entries().any(|entry| entry.item().is_temporary()));
+    })
+    .await
+    .expect("temporary view disconnect test timed out");
+}
+
+// This failpoint is process-global. Run this test in its own process (as nextest does).
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
 async fn test_create_view_replay_revoked_privilege() {
     use mz_postgres_util::{PostgresError, Sql, batch_execute, query_one};
 
