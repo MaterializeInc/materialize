@@ -23,9 +23,13 @@ use mz_build_info::BuildInfo;
 use mz_cloud_provider::CloudProvider;
 use mz_cluster_client::ReplicaId;
 use mz_controller_types::ClusterId;
+use mz_dyncfg::ParameterScope;
 use mz_ore::metrics::UIntGauge;
 use mz_ore::now::NowFn;
 use mz_sql::catalog::EnvironmentId;
+use regex::Regex;
+use serde::Deserialize;
+use serde::de::{DeserializeOwned, IgnoredAny};
 use serde_json::Value as JsonValue;
 use tokio::time;
 use tracing::warn;
@@ -61,6 +65,8 @@ pub struct SystemParameterFrontend {
 pub enum SystemParameterFrontendClient {
     File {
         path: PathBuf,
+        #[derivative(Debug = "ignore")]
+        now_fn: NowFn,
     },
     LaunchDarkly {
         /// An SDK client to mediate interactions with the LaunchDarkly client.
@@ -78,7 +84,7 @@ impl Drop for SystemParameterFrontendClient {
     fn drop(&mut self) {
         let client = match self {
             SystemParameterFrontendClient::LaunchDarkly { client, ctx: _ } => client,
-            SystemParameterFrontendClient::File { path: _ } => return,
+            SystemParameterFrontendClient::File { .. } => return,
         };
         // Dropping an `ld::Client` without `close` disconnects its event
         // dispatcher thread, which logs an error and discards the analytics
@@ -96,55 +102,502 @@ impl Drop for SystemParameterFrontendClient {
     }
 }
 
-/// The parsed contents of the config-sync file, a JSON object whose keys are
-/// parameter names.
-#[derive(Debug, Default, PartialEq)]
-struct ConfigFile {
-    /// Environment-wide values, keyed by the parameter's external name.
-    environment: BTreeMap<String, JsonValue>,
+/// The top-level key whose presence selects [`ConfigFileV2`] over
+/// [`LegacyConfigFile`].
+const VERSION_KEY: &str = "version";
+
+/// The top-level key of a [`ConfigFileV2`] naming the release it targets, see
+/// [`running_release`].
+const RELEASE_KEY: &str = "release";
+
+/// The release a [`ConfigFileV2`] must name to be applied by this build: `v`
+/// followed by the build version, such as `v26.46.1`, or `v26.48.0-dev.0` for a
+/// development build. This is the first word of what `mz_version()` reports,
+/// which appends the commit sha in parentheses.
+fn running_release(build_info: &BuildInfo) -> String {
+    format!("v{}", build_info.version)
 }
 
-impl ConfigFile {
-    /// Parses the config-sync file's contents, or `None` if the document is not a
-    /// JSON object.
+/// The config-sync file in the format every consumer reads, which a document
+/// opts into with `"version": 2`.
+///
+/// Deserialization is all-or-nothing: a structural defect anywhere fails the
+/// whole document. What depends on this binary's parameter set rather than on
+/// the document's structure stays a per-parameter diagnostic, see
+/// [`SystemParameterFrontend::scoped_rule_diagnostics`].
+#[derive(Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ConfigFileV2 {
+    /// Checked by [`Self::parse`] ahead of the rest of the document.
+    #[serde(rename = "version")]
+    _version: IgnoredAny,
+    /// Checked by [`Self::parse`] ahead of the rest of the document.
+    #[serde(rename = "release")]
+    _release: IgnoredAny,
+    /// Environment-wide values, keyed by the parameter's external name.
+    #[serde(default)]
+    global_parameters: BTreeMap<String, ParamValue>,
+    /// The rules in file order. The first rule that matches an object decides
+    /// each parameter it supplies.
+    #[serde(default)]
+    rules: Vec<Rule>,
+}
+
+/// The config-sync file in the format without a `version` key: a flat map of
+/// environment-wide values, keyed by the parameter's external name.
+#[derive(Deserialize)]
+#[serde(transparent)]
+struct LegacyConfigFile(BTreeMap<String, ParamValue>);
+
+impl From<LegacyConfigFile> for ConfigFileV2 {
+    fn from(legacy: LegacyConfigFile) -> Self {
+        Self {
+            _version: IgnoredAny,
+            _release: IgnoredAny,
+            global_parameters: legacy.0,
+            rules: Vec::new(),
+        }
+    }
+}
+
+/// Why [`ConfigFileV2::parse`] yields no information about any parameter.
+#[derive(Debug, PartialEq, Eq)]
+enum ParseError {
+    /// The document is a version 2 document for another release.
+    ReleaseMismatch {
+        /// The release the document names.
+        file: String,
+        /// The release this build is, see [`running_release`].
+        running: String,
+    },
+    /// The document is malformed, described by its first defect.
+    Invalid(String),
+}
+
+impl ConfigFileV2 {
+    /// Parses the config-sync file's top-level object in either format, for a
+    /// build that is release `running` (see [`running_release`]).
     ///
-    /// `None` is "no information about any parameter", which callers must keep
-    /// distinct from a valid but empty document.
-    fn parse(contents: &str) -> Option<Self> {
-        match serde_json::from_str(contents) {
-            Ok(environment) => Some(Self { environment }),
-            Err(e) => {
-                warn!("could not parse system parameter sync file: {e}");
-                None
+    /// An error is "no information about any parameter", which callers must keep
+    /// distinct from a valid but empty document. The flat format names no
+    /// release, so it parses for any build.
+    fn parse(
+        document: serde_json::Map<String, JsonValue>,
+        running: &str,
+    ) -> Result<Self, ParseError> {
+        // The format is chosen by the key's presence. Trying version 2 and
+        // falling back to the flat format would read a defective version 2
+        // document as a valid flat one, which prunes every scoped override.
+        let Some(version) = document.get(VERSION_KEY) else {
+            return deserialize_tracked::<LegacyConfigFile>(JsonValue::Object(document))
+                .map(Self::from)
+                .map_err(ParseError::Invalid);
+        };
+        // `version` and `release` are checked ahead of the rest, so a document
+        // of another version or release is reported as that rather than as the
+        // first key or type its schema no longer shares with this build's.
+        if version.as_u64() != Some(2) {
+            return Err(ParseError::Invalid(format!(
+                "{VERSION_KEY}: unsupported version {version}, expected 2"
+            )));
+        }
+        match document.get(RELEASE_KEY) {
+            None => {
+                return Err(ParseError::Invalid(format!(
+                    "{RELEASE_KEY}: missing, expected the release the document targets, \
+                     such as {running:?}"
+                )));
+            }
+            Some(JsonValue::String(release)) if release != running => {
+                return Err(ParseError::ReleaseMismatch {
+                    file: release.clone(),
+                    running: running.to_string(),
+                });
+            }
+            Some(JsonValue::String(_)) => {}
+            Some(release) => {
+                return Err(ParseError::Invalid(format!(
+                    "{RELEASE_KEY}: expected a string, found {release}"
+                )));
+            }
+        }
+        deserialize_tracked(JsonValue::Object(document)).map_err(ParseError::Invalid)
+    }
+}
+
+/// Deserializes `value`, prefixing an error with the path to the element it is
+/// about, such as `rules[0].clauses[1].op`.
+fn deserialize_tracked<T: DeserializeOwned>(value: JsonValue) -> Result<T, String> {
+    serde_path_to_error::deserialize(value).map_err(|e| {
+        // An error about the document as a whole names its own position.
+        if e.path().iter().next().is_none() {
+            e.inner().to_string()
+        } else {
+            format!("{}: {}", e.path(), e.inner())
+        }
+    })
+}
+
+/// A parameter value as the raw string the backend parses, or `None` for a JSON
+/// `null`, which expresses no opinion, so the parameter's current value stands.
+#[derive(Debug, PartialEq, Deserialize)]
+#[serde(from = "JsonValue")]
+struct ParamValue(Option<String>);
+
+impl From<JsonValue> for ParamValue {
+    fn from(value: JsonValue) -> Self {
+        Self(match value {
+            JsonValue::String(v) => Some(v),
+            JsonValue::Number(v) => Some(v.to_string()),
+            JsonValue::Bool(v) => Some(v.to_string()),
+            JsonValue::Object(_) | JsonValue::Array(_) => Some(value.to_string()),
+            JsonValue::Null => None,
+        })
+    }
+}
+
+/// The kind of object a [`Rule`] matches, named after the LaunchDarkly context
+/// kind (see [`cluster_context`] and [`replica_context`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum ContextKind {
+    Cluster,
+    Replica,
+}
+
+/// An attribute of a cluster or replica that a [`Clause`] matches on, the same
+/// set the LaunchDarkly `cluster` and `replica` contexts carry (see
+/// [`cluster_context`] and [`replica_context`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ScopeAttribute {
+    ClusterId,
+    ClusterName,
+    /// Whether the object is, or belongs to, a builtin (system) cluster.
+    IsBuiltin,
+    ReplicaId,
+    ReplicaName,
+    ReplicaSize,
+    ReplicaSizeFamily,
+}
+
+impl ScopeAttribute {
+    /// Whether an object of `kind` carries this attribute.
+    fn in_context(&self, kind: ContextKind) -> bool {
+        match self {
+            Self::ClusterId | Self::ClusterName | Self::IsBuiltin => true,
+            Self::ReplicaId | Self::ReplicaName | Self::ReplicaSize | Self::ReplicaSizeFamily => {
+                kind == ContextKind::Replica
             }
         }
     }
 }
 
-/// The most recent read of the config-sync file and its parse.
+/// The attributes a cluster is matched against, mirroring [`cluster_context`].
+/// Replica-free, so a cluster-coherent parameter resolves identically across
+/// the cluster's replicas.
+fn cluster_attributes(cluster: &ClusterScopeContext) -> BTreeMap<ScopeAttribute, String> {
+    BTreeMap::from([
+        (ScopeAttribute::ClusterId, cluster.id.clone()),
+        (ScopeAttribute::ClusterName, cluster.name.clone()),
+        (ScopeAttribute::IsBuiltin, cluster.is_builtin.to_string()),
+    ])
+}
+
+/// The attributes a replica is matched against, mirroring [`replica_context`].
+fn replica_attributes(replica: &ReplicaScopeContext) -> BTreeMap<ScopeAttribute, String> {
+    BTreeMap::from([
+        (ScopeAttribute::ClusterId, replica.cluster_id.clone()),
+        (ScopeAttribute::ClusterName, replica.cluster_name.clone()),
+        (ScopeAttribute::IsBuiltin, replica.is_builtin.to_string()),
+        (ScopeAttribute::ReplicaId, replica.id.clone()),
+        (ScopeAttribute::ReplicaName, replica.name.clone()),
+        (ScopeAttribute::ReplicaSize, replica.size.clone()),
+        (
+            ScopeAttribute::ReplicaSizeFamily,
+            replica.size_family.clone(),
+        ),
+    ])
+}
+
+/// One element of the `rules` array: the parameters to apply to the objects of
+/// one context kind that its clauses match.
+#[derive(Debug, PartialEq, Deserialize)]
+#[serde(try_from = "RawRule")]
+struct Rule {
+    context_kind: ContextKind,
+    /// The clauses, ANDed. An empty list constrains nothing, so it matches every
+    /// object of [`Self::context_kind`]. Every clause names an attribute that
+    /// objects of that kind carry.
+    clauses: Vec<Clause>,
+    /// The values this rule supplies, keyed by the parameter's external name.
+    parameters: BTreeMap<String, ParamValue>,
+}
+
+/// A [`Rule`] as written, before its clauses are checked against its context
+/// kind.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawRule {
+    context_kind: ContextKind,
+    clauses: Vec<Clause>,
+    parameters: BTreeMap<String, ParamValue>,
+}
+
+impl TryFrom<RawRule> for Rule {
+    type Error = String;
+
+    fn try_from(raw: RawRule) -> Result<Self, String> {
+        for (index, clause) in raw.clauses.iter().enumerate() {
+            if clause
+                .context_kind
+                .is_some_and(|kind| kind != raw.context_kind)
+            {
+                return Err(format!(
+                    "clauses[{index}].contextKind differs from the rule's contextKind"
+                ));
+            }
+            // A clause on an attribute the context kind lacks could only ever be
+            // false. Refusing it keeps a cluster rule replica-free by
+            // construction rather than by `cluster_attributes` staying so.
+            if !clause.attribute.in_context(raw.context_kind) {
+                return Err(format!(
+                    "clauses[{index}].attribute is not carried by objects of the rule's \
+                     contextKind"
+                ));
+            }
+        }
+        Ok(Self {
+            context_kind: raw.context_kind,
+            clauses: raw.clauses,
+            parameters: raw.parameters,
+        })
+    }
+}
+
+impl Rule {
+    /// Whether the rule selects an object of `kind` carrying `attributes`. A rule
+    /// of another context kind selects nothing.
+    fn matches(&self, kind: ContextKind, attributes: &BTreeMap<ScopeAttribute, String>) -> bool {
+        self.context_kind == kind && self.clauses.iter().all(|clause| clause.matches(attributes))
+    }
+}
+
+/// One clause of a [`Rule`]: an operator applied to one attribute's value.
+#[derive(Debug, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "RawClause")]
+struct Clause {
+    /// The attribute whose value the operator is applied to.
+    attribute: ScopeAttribute,
+    op: ClauseOp,
+    /// Whether to invert the clause, after the OR across the operator's operands
+    /// as in LaunchDarkly.
+    negate: bool,
+    /// The context kind the clause names, checked against its rule's.
+    context_kind: Option<ContextKind>,
+}
+
+/// A [`Clause`] as written, in LaunchDarkly's clause shape.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawClause {
+    attribute: ScopeAttribute,
+    op: Operator,
+    values: Vec<ClauseValue>,
+    /// Absent means false. More lenient than the SDK, which requires the key,
+    /// because this file is hand-authored.
+    #[serde(default)]
+    negate: bool,
+    /// Optional, unlike in LaunchDarkly, as the rule already names the context
+    /// kind.
+    #[serde(default)]
+    context_kind: Option<ContextKind>,
+    /// The key LaunchDarkly's REST API stamps on a clause, accepted so that a
+    /// clause copied from the API parses as written.
+    #[serde(default, rename = "_id")]
+    _id: IgnoredAny,
+}
+
+impl TryFrom<RawClause> for Clause {
+    type Error = String;
+
+    fn try_from(raw: RawClause) -> Result<Self, String> {
+        let values = raw.values.into_iter().map(|value| value.0);
+        let op = match raw.op {
+            Operator::In => ClauseOp::In(values.collect()),
+            Operator::StartsWith => ClauseOp::StartsWith(values.collect()),
+            Operator::EndsWith => ClauseOp::EndsWith(values.collect()),
+            Operator::Contains => ClauseOp::Contains(values.collect()),
+            Operator::Matches => ClauseOp::Matches(
+                values
+                    .enumerate()
+                    .map(|(index, pattern)| {
+                        Regex::new(&pattern).map(Pattern).map_err(|e| {
+                            // Collapse the multi-line error so the warning is one
+                            // line.
+                            let error = e
+                                .to_string()
+                                .split_whitespace()
+                                .collect::<Vec<_>>()
+                                .join(" ");
+                            format!("values[{index}] is the invalid pattern {pattern:?}: {error}")
+                        })
+                    })
+                    .collect::<Result<_, _>>()?,
+            ),
+        };
+        Ok(Self {
+            attribute: raw.attribute,
+            op,
+            negate: raw.negate,
+            context_kind: raw.context_kind,
+        })
+    }
+}
+
+/// One entry of a clause's `values`, a JSON string, number or boolean rendered
+/// to a string as scope attributes are, so `true` and `"true"` are the same
+/// value.
+#[derive(Deserialize)]
+#[serde(try_from = "JsonValue")]
+struct ClauseValue(String);
+
+impl TryFrom<JsonValue> for ClauseValue {
+    type Error = String;
+
+    fn try_from(value: JsonValue) -> Result<Self, String> {
+        match value {
+            JsonValue::String(v) => Ok(Self(v)),
+            JsonValue::Number(v) => Ok(Self(v.to_string())),
+            JsonValue::Bool(v) => Ok(Self(v.to_string())),
+            other @ (JsonValue::Object(_) | JsonValue::Array(_) | JsonValue::Null) => Err(format!(
+                "expected a string, number or boolean, found {other}"
+            )),
+        }
+    }
+}
+
+/// A clause's `op`, the string operators of LaunchDarkly's vocabulary.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum Operator {
+    In,
+    StartsWith,
+    EndsWith,
+    Contains,
+    Matches,
+}
+
+/// A [`Clause`]'s operator with the operands it is applied against, ORed.
+#[derive(Debug, PartialEq, Eq)]
+enum ClauseOp {
+    In(Vec<String>),
+    StartsWith(Vec<String>),
+    EndsWith(Vec<String>),
+    Contains(Vec<String>),
+    Matches(Vec<Pattern>),
+}
+
+/// A compiled `matches` pattern, equal to another compiled from the same source.
+#[derive(Debug)]
+struct Pattern(Regex);
+
+impl PartialEq for Pattern {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.as_str() == other.0.as_str()
+    }
+}
+
+impl Eq for Pattern {}
+
+impl Clause {
+    /// Whether the clause holds for an object carrying `attributes`.
+    fn matches(&self, attributes: &BTreeMap<ScopeAttribute, String>) -> bool {
+        let Some(value) = attributes.get(&self.attribute) else {
+            // Unreachable, as `Rule` refuses an attribute outside its context
+            // kind. `false` regardless of `negate`, as in the SDK.
+            return false;
+        };
+        self.op.holds(value) != self.negate
+    }
+}
+
+impl ClauseOp {
+    /// Whether the operator holds for `value`, before [`Clause::negate`].
+    fn holds(&self, value: &str) -> bool {
+        match self {
+            Self::In(allowed) => allowed.iter().any(|allowed| allowed == value),
+            Self::StartsWith(prefixes) => prefixes.iter().any(|prefix| value.starts_with(prefix)),
+            Self::EndsWith(suffixes) => suffixes.iter().any(|suffix| value.ends_with(suffix)),
+            Self::Contains(needles) => needles.iter().any(|needle| value.contains(needle)),
+            // Unanchored, as LaunchDarkly's `matches`, which uses the same crate.
+            Self::Matches(patterns) => patterns.iter().any(|pattern| pattern.0.is_match(value)),
+        }
+    }
+}
+
+/// The outcome of the latest read of the config-sync file, as exported by the
+/// `mz_parameter_frontend_file_status` gauge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConfigFileStatus {
+    /// The document parsed and is applied.
+    Ok,
+    /// The file could not be read, for example because it does not exist.
+    Unreadable,
+    /// The document is malformed.
+    Invalid,
+    /// The document is a version 2 document for another release.
+    ReleaseMismatch,
+}
+
+impl ConfigFileStatus {
+    const ALL: [Self; 4] = [
+        Self::Ok,
+        Self::Unreadable,
+        Self::Invalid,
+        Self::ReleaseMismatch,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::Unreadable => "unreadable",
+            Self::Invalid => "invalid",
+            Self::ReleaseMismatch => "release_mismatch",
+        }
+    }
+}
+
+/// The frontend's cached view of the config-sync file.
 #[derive(Debug)]
 struct CachedConfigFile {
     /// The contents the cache was built from, or `None` if that read failed.
-    /// The next read is compared against it, so the file is re-parsed, and its
-    /// warnings logged, only when it changes.
+    /// The next read is compared against it, so the file is re-parsed, and
+    /// diagnosed, only when it changes.
     contents: Option<String>,
-    /// The parse of `contents`, or `None` if the read failed or the document was
-    /// not a JSON object.
-    current: Option<Arc<ConfigFile>>,
+    /// The parse of [`Self::contents`], or `None` if the read failed or the
+    /// document did not parse. The environment-wide pass reads this.
+    current: Option<Arc<ConfigFileV2>>,
+    /// The newest valid parse whose environment-wide section is committed to
+    /// the catalog. The scoped passes read this. It survives a failed read.
+    published: Option<Arc<ConfigFileV2>>,
+    /// Why [`Self::contents`] did not parse, or `None` if it parsed or the read
+    /// failed. See [`SystemParameterFrontend::config_file_defect`].
+    defect: Option<String>,
 }
 
-/// Renders a JSON value as the raw parameter string the backend parses.
+/// Whether `value`, a scoped source's raw value for `param_name`, is an
+/// override: it parses for the parameter's type and differs from the
+/// environment-wide value held in `params`.
 ///
-/// `null` yields `None`, meaning the file expresses no opinion for this
-/// parameter, so its current value stands.
-fn json_param_value(value: &JsonValue) -> Option<String> {
-    match value {
-        JsonValue::String(v) => Some(v.clone()),
-        JsonValue::Number(v) => Some(v.to_string()),
-        JsonValue::Bool(v) => Some(v.to_string()),
-        JsonValue::Object(_) | JsonValue::Array(_) => Some(value.to_string()),
-        JsonValue::Null => None,
-    }
+/// An unparseable value is no override, as recording it would panic the
+/// optimizer's `bool` decode for a cluster-coherent override. The comparison is
+/// in the parameter's canonical encoding, since a raw boolean is `"true"` where
+/// the environment-wide value is `"on"`. Callers store the raw value.
+fn is_override(params: &SynchronizedParameters, param_name: &str, value: &str) -> bool {
+    params
+        .canonicalize(param_name, value)
+        .is_some_and(|canonical| canonical != params.get(param_name))
 }
 
 impl SystemParameterFrontend {
@@ -155,8 +608,11 @@ impl SystemParameterFrontend {
     /// exponential backoff with power `2s` and max duration `60s`.
     pub async fn from(sync_config: &SystemParameterSyncConfig) -> Result<Self, anyhow::Error> {
         match &sync_config.backend_config {
-            super::SystemParameterSyncClientConfig::File { path } => Ok(Self {
-                client: SystemParameterFrontendClient::File { path: path.clone() },
+            super::SystemParameterSyncClientConfig::File { path, now_fn } => Ok(Self {
+                client: SystemParameterFrontendClient::File {
+                    path: path.clone(),
+                    now_fn: now_fn.clone(),
+                },
                 key_map: sync_config.key_map.clone(),
                 env_id: sync_config.env_id.clone(),
                 build_info: sync_config.build_info,
@@ -190,21 +646,19 @@ impl SystemParameterFrontend {
     /// value was modified.
     pub fn pull(&self, params: &mut SynchronizedParameters) -> bool {
         // Read the file once per tick rather than once per parameter, so a
-        // rewrite landing mid-loop cannot be observed as a torn read.
+        // rewrite landing mid-loop cannot be observed as a torn read. The scoped
+        // passes read only the cache, as the create path runs them on the
+        // coordinator loop.
         let file = match &self.client {
-            SystemParameterFrontendClient::File { path } => {
-                self.refresh_config_file(path, fs::read_to_string(path))
+            SystemParameterFrontendClient::File { path, .. } => {
+                self.refresh_config_file(path, fs::read_to_string(path), params)
             }
             SystemParameterFrontendClient::LaunchDarkly { .. } => None,
         };
 
         let mut changed = false;
         for param_name in params.synchronized().into_iter() {
-            let flag_name = self
-                .key_map
-                .get(param_name)
-                .map(|flag_name| flag_name.as_str())
-                .unwrap_or(param_name);
+            let flag_name = self.external_name(param_name);
 
             let flag_str = match self.client {
                 SystemParameterFrontendClient::LaunchDarkly {
@@ -223,8 +677,8 @@ impl SystemParameterFrontend {
                 // the file could not be read or parsed, keeps its current value.
                 SystemParameterFrontendClient::File { .. } => file
                     .as_ref()
-                    .and_then(|file| file.environment.get(flag_name))
-                    .and_then(json_param_value)
+                    .and_then(|file| file.global_parameters.get(flag_name))
+                    .and_then(|value| value.0.clone())
                     .unwrap_or_else(|| params.get(param_name)),
             };
 
@@ -243,16 +697,27 @@ impl SystemParameterFrontend {
         changed
     }
 
+    /// The name this parameter is keyed by in the backing source: its key-map
+    /// entry when it has one (a LaunchDarkly flag key), otherwise the parameter
+    /// name itself.
+    fn external_name<'a>(&'a self, param_name: &'a str) -> &'a str {
+        self.key_map
+            .get(param_name)
+            .map_or(param_name, String::as_str)
+    }
+
     /// Refreshes the cached config-sync file from `read`, the outcome of reading
     /// it at `path`, and returns its parse.
     ///
     /// Unchanged contents return the cached parse without re-parsing, so a bad
-    /// file is warned about once per change rather than on every tick.
+    /// file is warned about once per change rather than on every tick. The
+    /// scoped passes see the new parse only after [`Self::publish_config_file`].
     fn refresh_config_file(
         &self,
         path: &Path,
         read: io::Result<String>,
-    ) -> Option<Arc<ConfigFile>> {
+        params: &SynchronizedParameters,
+    ) -> Option<Arc<ConfigFileV2>> {
         let mut cache = self
             .config_file
             .lock()
@@ -260,6 +725,9 @@ impl SystemParameterFrontend {
 
         if let Some(cached) = &*cache {
             if cached.contents.as_deref() == read.as_deref().ok() {
+                if cached.current.is_some() {
+                    self.record_file_applied();
+                }
                 return cached.current.clone();
             }
         }
@@ -274,16 +742,107 @@ impl SystemParameterFrontend {
                 None
             }
         };
-        let current = contents
-            .as_deref()
-            .and_then(ConfigFile::parse)
-            .map(Arc::new);
+        let (file, status, defect) = match contents.as_deref().map(|contents| {
+            serde_json::from_str(contents)
+                .map_err(|e| ParseError::Invalid(e.to_string()))
+                .and_then(|document| {
+                    ConfigFileV2::parse(document, &running_release(self.build_info))
+                })
+        }) {
+            None => (None, ConfigFileStatus::Unreadable, None),
+            Some(Ok(file)) => (Some(Arc::new(file)), ConfigFileStatus::Ok, None),
+            Some(Err(ParseError::Invalid(e))) => {
+                warn!("could not parse system parameter sync file: {e}");
+                let defect = format!(
+                    "system parameter sync file {} does not parse: {e}",
+                    path.display()
+                );
+                (None, ConfigFileStatus::Invalid, Some(defect))
+            }
+            Some(Err(ParseError::ReleaseMismatch { file, running })) => {
+                warn!(
+                    "system parameter sync file targets release {file}, running {running}, \
+                     keeping current values"
+                );
+                let defect = format!(
+                    "system parameter sync file {} targets release {file}, running {running}",
+                    path.display()
+                );
+                (None, ConfigFileStatus::ReleaseMismatch, Some(defect))
+            }
+        };
+        for candidate in ConfigFileStatus::ALL {
+            self.metrics
+                .file_status
+                .with_label_values(&[candidate.label()])
+                .set(i64::from(candidate == status));
+        }
+        if let Some(file) = &file {
+            self.record_file_applied();
+            for diagnostic in self.scoped_rule_diagnostics(file, params) {
+                warn!("{diagnostic}");
+            }
+        }
+        let published = cache.as_ref().and_then(|cached| cached.published.clone());
         *cache = Some(CachedConfigFile {
             contents,
-            current: current.clone(),
+            current: file.clone(),
+            // Advanced only by `publish_config_file`.
+            published,
+            defect,
         });
 
-        current
+        file
+    }
+
+    /// Records that a read of the config-sync file parsed, so its values are
+    /// applied.
+    fn record_file_applied(&self) {
+        if let SystemParameterFrontendClient::File { now_fn, .. } = &self.client {
+            self.metrics
+                .file_last_applied_time_seconds
+                .set(now_fn() / 1000);
+        }
+    }
+
+    /// The newest valid config-sync file whose environment-wide section is
+    /// committed to the catalog, or `None` if no read has parsed yet.
+    fn published_config_file(&self) -> Option<Arc<ConfigFileV2>> {
+        self.config_file
+            .lock()
+            .expect("config file cache lock poisoned")
+            .as_ref()
+            .and_then(|cached| cached.published.clone())
+    }
+
+    /// Promotes the current read to the published parse. A no-op when the
+    /// current read failed or did not parse.
+    ///
+    /// Call this after pushing the current read's environment-wide values and
+    /// before the scoped reconcile. A rule is recorded only where it differs from
+    /// the environment-wide value, so it must be resolved against its own file's
+    /// values.
+    pub fn publish_config_file(&self) {
+        let mut cache = self
+            .config_file
+            .lock()
+            .expect("config file cache lock poisoned");
+        if let Some(cached) = &mut *cache {
+            if cached.current.is_some() {
+                cached.published = cached.current.clone();
+            }
+        }
+    }
+
+    /// Why the latest [`Self::pull`] read a config-sync file that exists but does
+    /// not apply, because it is malformed or targets another release. `None` if
+    /// it applies, could not be read, or the frontend is LaunchDarkly-backed.
+    pub fn config_file_defect(&self) -> Option<String> {
+        self.config_file
+            .lock()
+            .expect("config file cache lock poisoned")
+            .as_ref()
+            .and_then(|cached| cached.defect.clone())
     }
 
     /// Whether the frontend knows the desired state of the scoped parameters.
@@ -304,14 +863,77 @@ impl SystemParameterFrontend {
         }
     }
 
+    /// The rule parameters that resolution drops silently and that an operator
+    /// can act on. They depend on this binary's parameter set, which is why they
+    /// are diagnosed per parameter rather than failing the document.
+    fn scoped_rule_diagnostics(
+        &self,
+        file: &ConfigFileV2,
+        params: &SynchronizedParameters,
+    ) -> Vec<String> {
+        let mut diagnostics = Vec::new();
+
+        let scopable = self.scopable_params(params);
+        for (index, rule) in file.rules.iter().enumerate() {
+            let position = format!("rules[{index}]");
+
+            for (name, value) in &rule.parameters {
+                let Some(&(param_name, scope)) = scopable.get(name.as_str()) else {
+                    diagnostics.push(format!(
+                        "ignoring {name} for {position} in the system parameter sync file: \
+                         not a cluster-scoped or replica-scoped system parameter"
+                    ));
+                    continue;
+                };
+                // A cluster-scoped parameter resolves only through the cluster
+                // pass, which never consults a replica rule.
+                if scope == ParameterScope::Cluster && rule.context_kind == ContextKind::Replica {
+                    diagnostics.push(format!(
+                        "ignoring {param_name} for {position} in the system parameter sync file: \
+                         {param_name} is cluster-scoped, so it cannot be supplied through a \
+                         rule of contextKind \"replica\""
+                    ));
+                    continue;
+                }
+                // `null` expresses no opinion rather than a value, so there is
+                // nothing to parse.
+                let Some(value) = &value.0 else {
+                    continue;
+                };
+                if params.canonicalize(param_name, value).is_none() {
+                    diagnostics.push(format!(
+                        "ignoring unparseable value {value:?} for system parameter {param_name} \
+                         on {position} in the system parameter sync file"
+                    ));
+                }
+            }
+        }
+
+        diagnostics
+    }
+
+    /// The synced parameters that declare a scope, keyed by the name a rule spells
+    /// them with and carrying the scope they declare.
+    fn scopable_params<'a>(
+        &'a self,
+        params: &SynchronizedParameters,
+    ) -> BTreeMap<&'a str, (&'static str, ParameterScope)> {
+        let mut scopable = BTreeMap::new();
+        for scope in [ParameterScope::Cluster, ParameterScope::Replica] {
+            for param_name in params.synchronized_with_scope(scope) {
+                scopable.insert(self.external_name(param_name), (param_name, scope));
+            }
+        }
+        scopable
+    }
+
     /// Evaluates the replica-local scoped parameters for each given replica and
-    /// returns, per cluster and replica, the parameter values that differ from
-    /// the environment-wide value held in `params`.
+    /// returns, per replica, the parameter values that differ from the
+    /// environment-wide value held in `params`.
     ///
-    /// Only the LaunchDarkly client performs scoped evaluation. The file
-    /// client returns an empty map (replicas fall back to the environment-wide value).
-    /// The returned map is sparse: replicas (and clusters) with no overriding
-    /// value are omitted.
+    /// The returned map is sparse: replicas with no overriding value are
+    /// omitted. Replicas absent from `replicas` are never evaluated, so a
+    /// config-sync file rule that matches nothing live has no effect.
     pub fn pull_replica_overrides(
         &self,
         params: &SynchronizedParameters,
@@ -320,14 +942,30 @@ impl SystemParameterFrontend {
     ) -> BTreeMap<ReplicaId, BTreeMap<String, String>> {
         let mut out: BTreeMap<ReplicaId, BTreeMap<String, String>> = BTreeMap::new();
 
-        let SystemParameterFrontendClient::LaunchDarkly { client, .. } = &self.client else {
-            // The file client has no notion of scoped evaluation.
-            return out;
-        };
-
         if param_names.is_empty() {
             return out;
         }
+
+        let client = match &self.client {
+            SystemParameterFrontendClient::LaunchDarkly { client, .. } => client,
+            // An empty result means "no overrides", so a caller reconciling the
+            // full desired state must first check `has_scoped_desired_state`.
+            SystemParameterFrontendClient::File { .. } => {
+                let Some(file) = self.published_config_file() else {
+                    return out;
+                };
+                let replicas = replicas
+                    .iter()
+                    .map(|replica| (replica.replica_id, replica_attributes(&replica.replica)));
+                return self.file_overrides(
+                    &file,
+                    params,
+                    param_names,
+                    ContextKind::Replica,
+                    replicas,
+                );
+            }
+        };
 
         for replica in replicas {
             let ctx = match ld_ctx(
@@ -357,11 +995,12 @@ impl SystemParameterFrontend {
 
     /// Evaluates the cluster-coherent scoped parameters for each given cluster
     /// and returns, per cluster, the parameter values that differ from the
-    /// environment-wide value held in `params`. Evaluated replica-free (the
-    /// `cluster` context kind), so the value cannot vary by replica.
+    /// environment-wide value held in `params`. Resolved replica-free, so the
+    /// value cannot vary by replica.
     ///
-    /// Only the LaunchDarkly client performs scoped evaluation. The file
-    /// client returns an empty map. The returned map is sparse.
+    /// The returned map is sparse: clusters with no overriding value are
+    /// omitted. Clusters absent from `clusters` are never evaluated, so a
+    /// config-sync file rule that matches nothing live has no effect.
     pub fn pull_cluster_overrides(
         &self,
         params: &SynchronizedParameters,
@@ -370,14 +1009,29 @@ impl SystemParameterFrontend {
     ) -> BTreeMap<ClusterId, BTreeMap<String, String>> {
         let mut out: BTreeMap<ClusterId, BTreeMap<String, String>> = BTreeMap::new();
 
-        let SystemParameterFrontendClient::LaunchDarkly { client, .. } = &self.client else {
-            // The file client has no notion of scoped evaluation.
-            return out;
-        };
-
         if param_names.is_empty() {
             return out;
         }
+
+        let client = match &self.client {
+            SystemParameterFrontendClient::LaunchDarkly { client, .. } => client,
+            // See the file arm of `pull_replica_overrides`.
+            SystemParameterFrontendClient::File { .. } => {
+                let Some(file) = self.published_config_file() else {
+                    return out;
+                };
+                let clusters = clusters
+                    .iter()
+                    .map(|cluster| (cluster.cluster_id, cluster_attributes(&cluster.cluster)));
+                return self.file_overrides(
+                    &file,
+                    params,
+                    param_names,
+                    ContextKind::Cluster,
+                    clusters,
+                );
+            }
+        };
 
         for cluster in clusters {
             let ctx = match ld_ctx(&self.env_id, self.build_info, Some(&cluster.cluster), None) {
@@ -403,9 +1057,6 @@ impl SystemParameterFrontend {
     /// Evaluates each of `param_names` against `ctx`, returning only the values
     /// that differ from the environment-wide value held in `params`. Shared by
     /// the cluster and replica passes, so the returned map is sparse.
-    ///
-    /// We record on the differs-from-env test, not the `variation_detail`
-    /// reason. The inline comment at the recording decision explains why.
     fn evaluate_scoped_overrides(
         &self,
         client: &ld::Client,
@@ -415,17 +1066,11 @@ impl SystemParameterFrontend {
     ) -> BTreeMap<String, String> {
         let mut overrides = BTreeMap::new();
         for &param_name in param_names {
-            let flag_name = self
-                .key_map
-                .get(param_name)
-                .map(|flag_name| flag_name.as_str())
-                .unwrap_or(param_name);
-
             let base = params.get(param_name);
             // Evaluate with `base` as the default, so a silent LD (flag absent,
             // off, error, failed prerequisite) resolves back to the env-wide
             // value and is dropped by the difference test below.
-            let flag_var = client.variation(ctx, flag_name, base.clone());
+            let flag_var = client.variation(ctx, self.external_name(param_name), base.clone());
             let value = match flag_var {
                 ld::FlagValue::Bool(v) => v.to_string(),
                 ld::FlagValue::Str(v) => v,
@@ -433,38 +1078,74 @@ impl SystemParameterFrontend {
                 ld::FlagValue::Json(v) => v.to_string(),
             };
 
-            // Record iff the scoped evaluation *differs* from the env-wide value.
-            // The `variation_detail` reason is the wrong signal: it cannot say
-            // which context kind's clause matched (an env-level rule and a
-            // cluster-specific rule both report `RuleMatch`), and `Fallthrough`
-            // serves the env-wide value to every object. Comparing against the
-            // env-wide baseline is the only signal that means "this scope context
-            // changed the answer", which is what must beat a manual `FEATURES`
-            // pin and what keeps the durable collections sparse. See the scoped
-            // feature flags design, §Resolution.
-            //
-            // Compare in the parameter's canonical encoding. `base` is the
-            // var-formatted env-wide value (a `bool` is `"on"`/`"off"`), whereas
-            // the raw LaunchDarkly value spells a boolean `"true"`/`"false"`, so a
-            // direct string compare would treat every boolean flag as differing,
-            // even on `Fallthrough`. We still *store* the raw `value` (downstream
-            // consumers parse `"true"`/`"false"`). Only the decision is canonical.
-            let differs = match params.canonicalize(param_name, &value) {
-                Some(canonical) => canonical != base,
-                // LaunchDarkly served a value that does not parse for this
-                // parameter's type (e.g. a malformed boolean like `"maybe"`).
-                // Never record it: storing an unparseable value would poison
-                // resolution. The optimizer's `bool` decode, for one, panics on
-                // every plan for a cluster-coherent override it cannot parse.
-                // Treat it as "no scoped opinion" and fall back to the env-wide
-                // value.
-                None => false,
-            };
-            if differs {
+            // Record on differing from the environment-wide value. The
+            // `variation_detail` reason cannot say which context kind's clause
+            // matched, and `Fallthrough` serves every object the same value. An
+            // unparseable value is dropped silently, as nothing in the
+            // environment can fix it.
+            if is_override(params, param_name, &value) {
                 overrides.insert(param_name.to_string(), value);
             }
         }
         overrides
+    }
+
+    /// Resolves the scoped overrides `file`'s rules declare for each of
+    /// `objects`, the id and scope attributes of each object of context `kind`.
+    /// Every parameter in `param_names` must declare the scope of `kind`.
+    ///
+    /// The first matching rule with a non-null value for a parameter decides it.
+    /// A decided value that matches the environment-wide value or does not parse
+    /// yields no override. Silent, see [`Self::scoped_rule_diagnostics`].
+    fn file_overrides<Id: Ord>(
+        &self,
+        file: &ConfigFileV2,
+        params: &SynchronizedParameters,
+        param_names: &[&'static str],
+        kind: ContextKind,
+        objects: impl Iterator<Item = (Id, BTreeMap<ScopeAttribute, String>)>,
+    ) -> BTreeMap<Id, BTreeMap<String, String>> {
+        let requested: BTreeMap<&str, &'static str> = param_names
+            .iter()
+            .map(|&param_name| (self.external_name(param_name), param_name))
+            .collect();
+
+        let mut out = BTreeMap::new();
+        for (id, attributes) in objects {
+            let mut decided: BTreeMap<&'static str, &str> = BTreeMap::new();
+            for rule in file
+                .rules
+                .iter()
+                .filter(|rule| rule.matches(kind, &attributes))
+            {
+                for (name, value) in &rule.parameters {
+                    let Some(&param_name) = requested.get(name.as_str()) else {
+                        continue;
+                    };
+                    // First match wins before the value is judged, so a malformed
+                    // value does not fall through to a later rule.
+                    if decided.contains_key(param_name) {
+                        continue;
+                    }
+                    // `null` expresses no opinion, leaving the parameter to a later
+                    // rule.
+                    let Some(value) = &value.0 else {
+                        continue;
+                    };
+                    decided.insert(param_name, value);
+                }
+            }
+
+            let overrides: BTreeMap<String, String> = decided
+                .into_iter()
+                .filter(|(param_name, value)| is_override(params, param_name, value))
+                .map(|(param_name, value)| (param_name.to_string(), value.to_string()))
+                .collect();
+            if !overrides.is_empty() {
+                out.insert(id, overrides);
+            }
+        }
+        out
     }
 }
 
@@ -717,10 +1398,10 @@ fn ld_ctx(
 ) -> Result<ld::Context, anyhow::Error> {
     // Register multiple contexts for this client.
     //
-    // Unfortunately, it seems that the order in which conflicting targeting
-    // rules are applied depends on the definition order of feature flag
-    // variations rather than on the order in which context are registered with
-    // the multi-context builder.
+    // NOTE: The order these are added in does not affect evaluation, as the SDK
+    // looks each context kind up by name (`Context::as_kind`). Within a flag,
+    // targets, then rules, then the fallthrough apply, each in array order with
+    // the first match winning.
     let mut ctx_builder = ld::MultiContextBuilder::new();
 
     if env_id.cloud_provider() != &CloudProvider::Local {
@@ -787,423 +1468,4 @@ fn ld_ctx(
 }
 
 #[cfg(test)]
-mod tests {
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    use futures::StreamExt;
-    use launchdarkly_sdk_transport::{ByteStream, TransportError};
-    use mz_build_info::DUMMY_BUILD_INFO;
-    use mz_ore::metrics::MetricsRegistry;
-
-    use super::*;
-
-    fn env_id() -> EnvironmentId {
-        EnvironmentId::for_tests()
-    }
-
-    /// A file-backed frontend reading `path`.
-    fn file_frontend_at(path: &Path) -> SystemParameterFrontend {
-        SystemParameterFrontend {
-            client: SystemParameterFrontendClient::File { path: path.into() },
-            key_map: BTreeMap::new(),
-            env_id: env_id(),
-            build_info: &DUMMY_BUILD_INFO,
-            metrics: Metrics::register_into(&MetricsRegistry::new()),
-            config_file: Mutex::new(None),
-        }
-    }
-
-    /// A file-backed frontend for tests that drive it from contents they pass
-    /// in, so its path is never read.
-    fn file_frontend() -> SystemParameterFrontend {
-        file_frontend_at(Path::new(CONFIG_PATH))
-    }
-
-    /// The path a [`file_frontend`] reports in its warnings. Never opened.
-    const CONFIG_PATH: &str = "/nonexistent/system-params.json";
-
-    /// Parses a document the test knows to be a JSON object.
-    fn parse(contents: &str) -> ConfigFile {
-        ConfigFile::parse(contents).expect("document is a JSON object")
-    }
-
-    #[mz_ore::test]
-    fn test_parse_flat_file_is_environment_wide() {
-        let file = parse(
-            r#"{
-                "max_connections": 1000,
-                "allowed_cluster_replica_sizes": "'25cc', '50cc'",
-                "enable_lgalloc": false
-            }"#,
-        );
-
-        assert_eq!(
-            file.environment.keys().collect::<Vec<_>>(),
-            vec![
-                "allowed_cluster_replica_sizes",
-                "enable_lgalloc",
-                "max_connections"
-            ]
-        );
-
-        // Every JSON scalar renders to the raw string the backend parses.
-        assert_eq!(
-            json_param_value(&file.environment["max_connections"]).as_deref(),
-            Some("1000")
-        );
-        assert_eq!(
-            json_param_value(&file.environment["enable_lgalloc"]).as_deref(),
-            Some("false")
-        );
-        assert_eq!(
-            json_param_value(&file.environment["allowed_cluster_replica_sizes"]).as_deref(),
-            Some("'25cc', '50cc'")
-        );
-        // An explicit `null` expresses no opinion, leaving the value alone.
-        let null = parse(r#"{"max_connections": null}"#);
-        assert_eq!(json_param_value(&null.environment["max_connections"]), None);
-    }
-
-    /// A document that is not a JSON object carries no information, which is
-    /// distinct from an empty document.
-    #[mz_ore::test]
-    fn test_parse_rejects_non_object_document() {
-        assert_eq!(ConfigFile::parse("[]"), None);
-        assert_eq!(ConfigFile::parse("not json"), None);
-        assert_eq!(ConfigFile::parse("{}"), Some(ConfigFile::default()));
-    }
-
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
-    fn test_config_file_cached_until_it_changes() {
-        let frontend = file_frontend();
-        let read = |contents: &str| {
-            frontend
-                .refresh_config_file(Path::new(CONFIG_PATH), Ok(contents.to_string()))
-                .expect("document is a JSON object")
-        };
-
-        let first = read(r#"{"max_connections": 1000}"#);
-        let again = read(r#"{"max_connections": 1000}"#);
-        assert!(Arc::ptr_eq(&first, &again), "unchanged file was re-parsed");
-
-        let changed = read(r#"{"max_connections": 2000}"#);
-        assert!(
-            !Arc::ptr_eq(&first, &changed),
-            "changed file was not parsed"
-        );
-    }
-
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
-    fn test_unreadable_file_has_no_scoped_desired_state() {
-        let frontend = file_frontend();
-        let refresh = |read: io::Result<String>| {
-            frontend.refresh_config_file(Path::new(CONFIG_PATH), read);
-        };
-
-        refresh(Ok(r#"{"max_connections": 1000}"#.to_string()));
-        assert!(frontend.has_scoped_desired_state());
-
-        for failure in [
-            Err(io::Error::from(io::ErrorKind::NotFound)),
-            Ok("}not json{".to_string()),
-            Ok("[]".to_string()),
-        ] {
-            refresh(failure);
-            assert!(!frontend.has_scoped_desired_state());
-
-            refresh(Ok(r#"{"max_connections": 1000}"#.to_string()));
-            assert!(frontend.has_scoped_desired_state());
-        }
-
-        // An empty document is a complete desired state of "no overrides".
-        refresh(Ok("{}".to_string()));
-        assert!(frontend.has_scoped_desired_state());
-    }
-
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
-    fn test_pull_from_file() {
-        let path = std::env::temp_dir().join(format!(
-            "mz-adapter-test-pull-from-file-{}.json",
-            std::process::id()
-        ));
-        let frontend = file_frontend_at(&path);
-        let mut params = SynchronizedParameters::default();
-        let max_connections = params.get("max_connections");
-        assert_ne!(max_connections, "1000");
-
-        fs::write(
-            &path,
-            r#"{"max_connections": 1000, "enable_lgalloc": false, "max_tables": null}"#,
-        )
-        .expect("can write the test file");
-        assert!(frontend.pull(&mut params));
-        assert_eq!(params.get("max_connections"), "1000");
-        assert_eq!(params.get("enable_lgalloc"), "off");
-        assert_eq!(
-            params.get("max_tables"),
-            SynchronizedParameters::default().get("max_tables"),
-            "null changed the value"
-        );
-
-        // Unparseable or missing, the file leaves every current value alone.
-        fs::write(&path, "}not json{").expect("can write the test file");
-        assert!(!frontend.pull(&mut params));
-        assert!(!frontend.has_scoped_desired_state());
-        fs::remove_file(&path).expect("can remove the test file");
-        assert!(!frontend.pull(&mut params));
-        assert!(!frontend.has_scoped_desired_state());
-        assert_eq!(params.get("max_connections"), "1000");
-        assert_eq!(params.get("enable_lgalloc"), "off");
-    }
-
-    #[mz_ore::test]
-    fn builds_cluster_scoped_context() {
-        // Cluster-coherent resolution evaluates with a replica-free `cluster`
-        // context.
-        let cluster = ClusterScopeContext {
-            id: "s2".into(),
-            name: "mz_catalog_server".into(),
-            is_builtin: true,
-        };
-        ld_ctx(&env_id(), &DUMMY_BUILD_INFO, Some(&cluster), None)
-            .expect("cluster-scoped context builds");
-    }
-
-    #[mz_ore::test]
-    fn builds_replica_scoped_context() {
-        // Replica-local resolution carries both a `cluster` and a `replica`
-        // context so a rule can combine size family and cluster.
-        let cluster = ClusterScopeContext {
-            id: "u1".into(),
-            name: "quickstart".into(),
-            is_builtin: false,
-        };
-        let replica = ReplicaScopeContext {
-            id: "u1-replica-1".into(),
-            name: "r1".into(),
-            is_builtin: false,
-            size: "D.1-xsmall".into(),
-            size_family: "D".into(),
-            cluster_id: "u1".into(),
-            cluster_name: "quickstart".into(),
-        };
-        ld_ctx(&env_id(), &DUMMY_BUILD_INFO, Some(&cluster), Some(&replica))
-            .expect("replica-scoped context builds");
-    }
-
-    #[mz_ore::test]
-    fn environment_wide_context_is_unscoped() {
-        ld_ctx(&env_id(), &DUMMY_BUILD_INFO, None, None).expect("environment-wide context builds");
-    }
-
-    /// A fake transport that simulates a long-lived SSE streaming connection:
-    /// returns 200 OK immediately, then delivers multiple SSE events as body
-    /// chunks (exactly how LaunchDarkly's streaming data source works).
-    #[derive(Clone)]
-    struct FakeSseTransport;
-
-    impl HttpTransport for FakeSseTransport {
-        fn request(&self, _request: http::Request<Option<Bytes>>) -> ResponseFuture {
-            let body: ByteStream = Box::pin(futures::stream::iter(vec![
-                Ok(Bytes::from("event: put\ndata: {\"flags\":{}}\n\n")),
-                Ok(Bytes::from("event: patch\ndata: {\"key\":\"flag1\"}\n\n")),
-                Ok(Bytes::from("event: patch\ndata: {\"key\":\"flag2\"}\n\n")),
-            ]));
-            Box::pin(async move {
-                http::Response::builder()
-                    .status(200)
-                    .body(body)
-                    .map_err(|e| TransportError::new(std::io::Error::other(e)))
-            })
-        }
-    }
-
-    /// A fake transport that returns an error, simulating a failed connection.
-    #[derive(Clone)]
-    struct FailingTransport;
-
-    impl HttpTransport for FailingTransport {
-        fn request(&self, _request: http::Request<Option<Bytes>>) -> ResponseFuture {
-            Box::pin(async move {
-                Err(TransportError::new(std::io::Error::new(
-                    std::io::ErrorKind::ConnectionRefused,
-                    "connection refused",
-                )))
-            })
-        }
-    }
-
-    /// A fake transport that returns 200 OK, delivers one event, then errors
-    /// mid-stream with a timeout: the non-Eof stream error a dropped long-lived
-    /// SSE connection surfaces.
-    #[derive(Clone)]
-    struct MidStreamFailureTransport;
-
-    impl HttpTransport for MidStreamFailureTransport {
-        fn request(&self, _request: http::Request<Option<Bytes>>) -> ResponseFuture {
-            let body: ByteStream = Box::pin(futures::stream::iter(vec![
-                Ok(Bytes::from("event: put\ndata: {\"flags\":{}}\n\n")),
-                Err(TransportError::new(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    "body timed out",
-                ))),
-            ]));
-            Box::pin(async move {
-                http::Response::builder()
-                    .status(200)
-                    .body(body)
-                    .map_err(|e| TransportError::new(std::io::Error::other(e)))
-            })
-        }
-    }
-
-    fn test_gauge(registry: &MetricsRegistry, name: &str) -> UIntGauge {
-        registry.register(mz_ore::metric!(
-            name: name,
-            help: "test gauge",
-        ))
-    }
-
-    /// Verifies that MetricsTransport updates the gauge on each body chunk,
-    /// not just on the initial HTTP 200 response head. This matters for
-    /// long-lived streaming connections where SSE events arrive as body chunks.
-    #[mz_ore::test(tokio::test)]
-    async fn test_metric_updated_on_body_chunks() -> Result<(), anyhow::Error> {
-        let time = Arc::new(AtomicU64::new(1_000_000));
-        let time_clone = Arc::clone(&time);
-        let now_fn = NowFn::from(move || time_clone.load(Ordering::SeqCst));
-
-        let registry = MetricsRegistry::new();
-        let gauge = test_gauge(&registry, "test_sse_gauge");
-
-        let transport = MetricsTransport {
-            inner: FakeSseTransport,
-            last_success_gauge: gauge.clone(),
-            now_fn,
-        };
-
-        assert_eq!(gauge.get(), 0);
-
-        let request = http::Request::builder()
-            .uri("https://stream.launchdarkly.com/all")
-            .body(None)?;
-        let response = transport.request(request).await?;
-
-        assert_eq!(gauge.get(), 1000);
-
-        time.store(2_800_000, Ordering::SeqCst);
-
-        let mut body = response.into_body();
-        let mut event_count = 0;
-        while let Some(Ok(_chunk)) = body.next().await {
-            event_count += 1;
-        }
-        assert_eq!(event_count, 3);
-
-        assert_eq!(gauge.get(), 2800);
-        Ok(())
-    }
-
-    #[mz_ore::test(tokio::test)]
-    async fn test_cse_metric_updates_correctly_per_request() -> Result<(), anyhow::Error> {
-        let time = Arc::new(AtomicU64::new(1_000_000));
-        let time_clone = Arc::clone(&time);
-        let now_fn = NowFn::from(move || time_clone.load(Ordering::SeqCst));
-
-        let registry = MetricsRegistry::new();
-        let gauge = test_gauge(&registry, "test_cse_gauge");
-
-        let transport = MetricsTransport {
-            inner: FakeSseTransport,
-            last_success_gauge: gauge.clone(),
-            now_fn,
-        };
-
-        let req = || -> Result<http::Request<Option<Bytes>>, http::Error> {
-            http::Request::builder()
-                .uri("https://events.launchdarkly.com/bulk")
-                .body(None)
-        };
-
-        let _ = transport.request(req()?).await?;
-        assert_eq!(gauge.get(), 1000);
-
-        time.store(2_000_000, Ordering::SeqCst);
-        let _ = transport.request(req()?).await?;
-        assert_eq!(gauge.get(), 2000);
-
-        time.store(3_000_000, Ordering::SeqCst);
-        let _ = transport.request(req()?).await?;
-        assert_eq!(gauge.get(), 3000);
-        Ok(())
-    }
-
-    #[mz_ore::test(tokio::test)]
-    async fn test_metric_not_updated_on_failed_request() -> Result<(), anyhow::Error> {
-        let now_fn = NowFn::from(|| 5_000_000u64);
-
-        let registry = MetricsRegistry::new();
-        let gauge = test_gauge(&registry, "test_fail_gauge");
-
-        let transport = MetricsTransport {
-            inner: FailingTransport,
-            last_success_gauge: gauge.clone(),
-            now_fn,
-        };
-
-        let request = http::Request::builder()
-            .uri("https://stream.launchdarkly.com/all")
-            .body(None)?;
-        let result = transport.request(request).await;
-        assert!(result.is_err());
-        assert_eq!(gauge.get(), 0, "gauge must not update on transport error");
-        Ok(())
-    }
-
-    /// Verifies that when an SSE connection returns 200 OK and then dies
-    /// mid-stream, `last_sse_time_seconds` advances only for the events that
-    /// arrived and then freezes — the frozen timestamp is what lets the
-    /// staleness alert detect a stuck data source.
-    #[mz_ore::test(tokio::test)]
-    async fn test_metric_frozen_on_midstream_error() -> Result<(), anyhow::Error> {
-        let time = Arc::new(AtomicU64::new(1_000_000));
-        let time_clone = Arc::clone(&time);
-        let now_fn = NowFn::from(move || time_clone.load(Ordering::SeqCst));
-
-        let registry = MetricsRegistry::new();
-        let gauge = test_gauge(&registry, "test_midstream_gauge");
-
-        let transport = MetricsTransport {
-            inner: MidStreamFailureTransport,
-            last_success_gauge: gauge.clone(),
-            now_fn,
-        };
-
-        // The 200 OK response head updates the gauge.
-        let request = http::Request::builder()
-            .uri("https://stream.launchdarkly.com/all")
-            .body(None)?;
-        let response = transport.request(request).await?;
-        assert_eq!(gauge.get(), 1000);
-
-        // The first event arrives and advances the gauge.
-        time.store(2_000_000, Ordering::SeqCst);
-        let mut body = response.into_body();
-        assert!(matches!(body.next().await, Some(Ok(_))));
-        assert_eq!(gauge.get(), 2000);
-
-        // The stream then errors mid-flight. Time has moved forward, but the
-        // gauge must stay frozen at the last successful event.
-        time.store(9_000_000, Ordering::SeqCst);
-        assert!(matches!(body.next().await, Some(Err(_))));
-        assert_eq!(
-            gauge.get(),
-            2000,
-            "gauge must freeze on mid-stream error so the staleness alert can fire"
-        );
-        Ok(())
-    }
-}
+mod tests;

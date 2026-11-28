@@ -60,6 +60,11 @@ data:
     }
 ```
 
+In this flat format, each top-level key sets a parameter for the whole
+environment. To set a parameter for a subset of your clusters or replicas
+instead, use the versioned format described in [Scoping Parameters to Clusters
+or Replicas](#scoping-parameters-to-clusters-or-replicas).
+
 Apply the ConfigMap to your cluster:
 
 ```shell
@@ -160,6 +165,358 @@ Even after the ConfigMap is synced, some system parameters may require a restart
 take effect.
 
 {{< /note >}}
+
+## Scoping Parameters to Clusters or Replicas
+
+To scope parameters to a subset of your clusters and replicas, write
+`system-params.json` in the versioned format, which has four top-level keys:
+
+- `version` is required and must be `2`. Its presence is what selects this
+  format.
+- `release` is required and names the Materialize release the document is
+  written for, for example `"v26.46.1"`. A document whose `release` is not the
+  running release is not applied, as described in [Targeting a
+  release](#targeting-a-release).
+- `globalParameters` holds the environment-wide parameters, exactly as the
+  top-level keys of the flat format do.
+- `rules` scopes parameters, as described below.
+
+`globalParameters` and `rules` are optional, and no other top-level key is
+allowed.
+
+Each element of `rules` selects a set of clusters or of replicas, for example
+"every replica of a legacy size family", and lists the parameters to apply to
+them. The rules are an ordered array, and for each parameter the first matching
+rule wins. The way a rule selects objects follows the targeting rules of
+LaunchDarkly, which Materialize Cloud uses for the same purpose, so a clause
+means the same thing in both places.
+
+For example, the following configuration sets environment-wide parameters and
+overrides parameters for one cluster and for a class of replicas:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mz-system-params
+  namespace: materialize-environment
+data:
+  system-params.json: |
+    {
+      "version": 2,
+      "release": "v26.46.1",
+
+      "globalParameters": {
+        "max_connections": 1000,
+        "enable_lgalloc": true
+      },
+
+      "rules": [
+        {
+          "contextKind": "cluster",
+          "clauses": [
+            { "attribute": "cluster_name", "op": "in", "values": ["analytics"] }
+          ],
+          "parameters": { "enable_eager_delta_joins": true }
+        },
+        {
+          "contextKind": "replica",
+          "clauses": [
+            { "attribute": "replica_size_family", "op": "in", "values": ["legacy"] }
+          ],
+          "parameters": { "enable_lgalloc": false }
+        }
+      ]
+    }
+```
+
+In this example, `max_connections` and `enable_lgalloc` apply environment-wide,
+the `analytics` cluster additionally enables `enable_eager_delta_joins`, and
+every replica of a legacy size family turns `enable_lgalloc` back off for itself.
+
+A document without a `version` key is read in the flat format, and is
+equivalent to a versioned document holding the same keys under
+`globalParameters` with no rules. To move a flat ConfigMap to the versioned
+format, add `"version": 2` and the running `release`, and move its keys into
+`globalParameters`.
+
+### Targeting a release
+
+A parameter can change its name, type, or accepted values between releases, so a
+document vetted for one release is not necessarily valid for another. The
+`release` key ties a versioned document to the release it was written for.
+
+`release` must equal the running release exactly: the first word of what
+`SELECT mz_version()` returns, without the commit hash that follows it in
+parentheses. For example, if `mz_version()` returns `v26.46.1 (0123abcde)`, the
+release is `v26.46.1`. A development build reports a prerelease version such as
+`v26.48.0-dev.0`, and matches only that string.
+
+A document for another release is handled like a document that cannot be
+parsed: neither its environment-wide values nor its rules apply, and every
+environment-wide value and override keeps its current value. `environmentd`
+logs a warning naming both releases, for example `system parameter sync file
+targets release v26.46.1, running v26.47.0, keeping current values`. The
+release is checked before the rest of the document, so a document written for
+another release is reported as that, not as a schema error.
+
+During an upgrade, the old and the new generation of `environmentd` read the
+same ConfigMap. Whichever does not match the document keeps the values last
+synced, so no `environmentd` applies a document vetted for another release.
+After the upgrade, the new release keeps the configuration the previous release
+synced until you update `release`, and any parameters that changed, in the
+ConfigMap. Every upgrade, including a patch release, needs that edit before the
+ConfigMap applies again.
+
+The flat format names no release, so a flat document applies to every release.
+
+### Monitoring the ConfigMap
+
+A ConfigMap that is not applied freezes the configuration until it is fixed, so
+`environmentd` exports its state as metrics:
+
+- `mz_parameter_frontend_file_status` is a gauge per `status` label, `ok`,
+  `unreadable`, `invalid`, or `release_mismatch`. The latest read's status is
+  `1` and the others are `0`. Alert when `status="ok"` is not `1`.
+- `mz_parameter_frontend_file_last_applied_time_seconds` is the Unix time of the
+  latest read that was applied. Each successful read advances it, whether or not
+  the ConfigMap changed, so `time() -
+  mz_parameter_frontend_file_last_applied_time_seconds` measures how long the
+  configuration has been frozen.
+
+### Rules
+
+A rule names the kind of object it selects, the clauses that select it, and the
+parameters to apply:
+
+```json
+"rules": [
+  {
+    "contextKind": "replica",
+    "clauses": [
+      {
+        "attribute": "cluster_name",
+        "op": "in",
+        "values": ["analytics", "analytics_staging"]
+      },
+      { "attribute": "replica_size_family", "op": "in", "values": ["legacy"] }
+    ],
+    "parameters": { "enable_lgalloc": false }
+  },
+  {
+    "contextKind": "replica",
+    "clauses": [],
+    "parameters": { "enable_lgalloc": true }
+  }
+]
+```
+
+- `contextKind` is required, and is either `cluster` or `replica`. It decides
+  which objects the rule selects: a `cluster` rule selects clusters and a
+  `replica` rule selects replicas. Neither ever selects the other.
+- **Clauses are ANDed**: the replica must be in one of those clusters *and* be of
+  the `legacy` size family.
+- **Values within a clause are ORed**: the cluster name may be either `analytics`
+  or `analytics_staging`.
+- A rule with an empty `clauses` list selects every object of its context kind.
+  Combined with rule ordering, that makes it a catch-all.
+- **The first matching rule wins**, per object and per parameter. Order the rules
+  from the most specific to the most general. Which operator made a rule match
+  makes no difference to this: a narrow `matches` rule placed before a broad
+  `startsWith` rule is how you write an exception.
+- A rule that does not mention a parameter does not affect it, so a later rule
+  may still set it.
+- A parameter no matching rule sets falls back to the environment-wide value,
+  that is, to its `globalParameters` entry or to the parameter's default.
+
+`rules` is an array rather than an object because the order is part of the
+configuration, and the order of an object's keys is not preserved.
+
+A `replica` rule may write clauses over cluster attributes alone, which selects
+every replica of the matching clusters. A `cluster` rule may not name a replica
+attribute at all, since a cluster does not have one, and a ConfigMap whose rule
+does is rejected.
+
+The available attributes are:
+
+| Attribute             | Context kinds    | Example        |
+| --------------------- | ---------------- | -------------- |
+| `cluster_name`        | cluster, replica | `"quickstart"` |
+| `cluster_id`          | cluster, replica | `"u1"`         |
+| `is_builtin`          | cluster, replica | `true`         |
+| `replica_name`        | replica only     | `"r1"`         |
+| `replica_id`          | replica only     | `"u2"`         |
+| `replica_size`        | replica only     | `"25cc"`       |
+| `replica_size_family` | replica only     | `"legacy"`     |
+
+`is_builtin` is `true` for a system cluster such as `mz_catalog_server`, and for
+its replicas.
+
+Prefer the name attributes over the id ones. An id identifies one incarnation of
+an object: drop and recreate a cluster and its id changes, so a clause written
+against the old id stops matching. A clause written against a name re-applies to
+any cluster or replica later created with that name.
+
+Values may be written as JSON strings, numbers, or booleans, so `"values": [true]`
+and `"values": ["true"]` are equivalent.
+
+A clause may also carry a `contextKind`, as LaunchDarkly's clauses do, so a clause
+copied from LaunchDarkly works as written. It is optional, since the rule already
+names the context kind, and when present it must equal the rule's `contextKind`.
+
+### Clause operators
+
+Every attribute above is a string, so the operators are the string ones:
+
+| `op`         | Holds when the attribute's value                      |
+| ------------ | ----------------------------------------------------- |
+| `in`         | equals one of `values`                                |
+| `startsWith` | starts with one of `values`                           |
+| `endsWith`   | ends with one of `values`                             |
+| `contains`   | contains one of `values`                              |
+| `matches`    | is matched by one of `values` as a regular expression |
+
+```json
+{
+  "contextKind": "cluster",
+  "clauses": [
+    { "attribute": "cluster_name", "op": "startsWith", "values": ["prod-"] }
+  ],
+  "parameters": { "enable_eager_delta_joins": true }
+}
+```
+
+Reach for `startsWith`, `endsWith`, `contains`, or `matches` when you are
+targeting clusters or replicas by name and the set is open-ended: such a clause
+also selects a cluster or replica you create later, which a list of exact names
+cannot do. For `is_builtin`, `replica_size`, and `replica_size_family`, which draw
+from a small fixed set of values, `in` is usually clearer.
+
+Notes on `matches`:
+
+- **Patterns are unanchored**, so a pattern matches anywhere in the value. The
+  pattern `prod` matches the cluster `staging-prod-1`. Write `^prod` to anchor at
+  the start of the name, `prod$` at the end, and `^prod$` to match the whole name.
+- Patterns use RE2 syntax, as in Go's `regexp` package: character classes,
+  alternation, and repetition are supported, backreferences and lookaround are
+  not.
+- Patterns must be JSON strings. A backslash has to be escaped for JSON, so the
+  pattern `\d` is written `"\\d"`.
+- **An invalid pattern rejects the whole ConfigMap.** See [Behavior worth
+  knowing](#behavior-worth-knowing).
+
+LaunchDarkly defines further operators, for numbers, dates, semantic versions,
+and referencing a segment. Materialize rejects all of them here: every attribute
+above is a string, so a numeric, date, or version comparison could only ever be
+false, and a rule holds its clauses itself. Writing one rejects the ConfigMap.
+
+### Negating a clause
+
+A clause may carry `"negate": true`, which inverts it:
+
+```json
+{
+  "attribute": "replica_name",
+  "op": "matches",
+  "values": ["^scratch-"],
+  "negate": true
+}
+```
+
+`negate` applies **after** the OR across `values`, which is what it does in
+LaunchDarkly too. So a negated `in` over two values means "neither of them", not
+"not the first one":
+
+```json
+{
+  "attribute": "cluster_name",
+  "op": "in",
+  "values": ["scratch", "sandbox"],
+  "negate": true
+}
+```
+
+selects every cluster except `scratch` and `sandbox`. `negate` defaults to `false`
+when absent. A clause on an attribute the object does not carry does not match
+whether or not it is negated, so negation is never a way to select objects of the
+other context kind.
+
+### Behavior worth knowing
+
+- **Not every parameter can be scoped.** Only parameters whose scope is
+  `cluster` or `replica` can be set in a rule. Any other parameter is ignored
+  there, so set it in `globalParameters` instead. `environmentd` logs a warning
+  naming the parameter and the rule, which also catches a misspelled parameter
+  name.
+- **A cluster-scoped parameter cannot be set by a `replica` rule.** A
+  cluster-scoped parameter, for example an optimizer feature, is consumed once
+  per cluster when a dataflow is planned, so it must resolve identically for
+  every replica of that cluster. A `replica` rule that supplies one has that
+  parameter ignored, with a warning naming the rule and the parameter.
+  Replica-scoped parameters can be set by either kind of rule.
+- **A structurally invalid ConfigMap is rejected as a whole.** Any of the
+  following makes Materialize ignore the entire document, including
+  `globalParameters`:
+  - a `version` other than `2`, or a top-level key other than the four above;
+  - a missing `release`, or one that is not a string;
+  - a rule missing its `contextKind`, `clauses`, or `parameters`, or with an
+    unrecognised `contextKind`;
+  - a clause missing its `attribute`, `op`, or `values`;
+  - an unknown `attribute`, or a replica attribute in a `cluster` rule;
+  - a clause `contextKind` that differs from its rule's;
+  - an `op` that is not one of the five string operators;
+  - `values` that is not a list of strings, numbers, or booleans;
+  - an invalid `matches` pattern, or a `negate` that is not a boolean;
+  - an unknown key in a rule or a clause;
+  - a section of the wrong type, for example `rules` written as an object.
+
+  This fails safe: applying the rest of the document instead would widen a rule
+  to objects you did not target, or drop overrides you meant to keep. Rejecting
+  the ConfigMap is handled like a ConfigMap that cannot be parsed, see below.
+  `environmentd` logs a warning naming the path to the defect, for example
+  `rules[0].clauses[1].op`. LaunchDarkly's `_id` on a clause is the one unknown
+  key that is ignored rather than rejected, so a clause copied out of the
+  LaunchDarkly API works as written.
+- **A rule matching nothing is not an error.** If you later create a cluster or
+  replica the rule matches, the rule applies to it.
+- **A value that matches the environment-wide value records no override.**
+  Overrides are only stored where they actually differ.
+- **An unparseable value is dropped, not rejected.** The rest of the file still
+  applies and `environmentd` logs a warning naming the parameter and the rule.
+  The rule still decides that parameter for the objects it matches, so a later
+  rule does not apply instead.
+- **Removing a rule removes the override**, returning the affected objects to
+  the environment-wide value.
+- **A ConfigMap that cannot be read, parsed, or validated, or that targets
+  another release, leaves every value in place.** A malformed JSON document, a
+  structurally invalid one, one for another release, or a deleted ConfigMap
+  carries no information rather than an empty set of overrides, so
+  neither the environment-wide values nor the existing overrides change until a
+  valid ConfigMap says so. Removing an override means editing the file, not
+  breaking it.
+- **On first boot, a ConfigMap that is invalid or targets another release stops
+  `environmentd` from starting.** Until an environment has synced its
+  configuration once, there are no values to keep, so applying nothing would
+  start it on compiled-in defaults instead of the configuration you wrote.
+  `environmentd` exits with an error naming the file and either both releases or
+  the defect, for example `refusing to boot on compiled-in defaults, as no system
+  configuration has been synced yet: system parameter sync file
+  /path/to/system-params.json targets release v26.46.1, running v26.47.0`. Fix
+  the ConfigMap and `environmentd` starts on its next restart. A missing or
+  unreadable ConfigMap does not block the first boot.
+
+To see which overrides are currently in effect, query:
+
+```sql
+SELECT c.name AS cluster, p.name, p.value
+FROM mz_internal.mz_cluster_system_parameters p
+JOIN mz_clusters c ON c.id = p.cluster_id;
+
+SELECT c.name AS cluster, r.name AS replica, p.name, p.value
+FROM mz_internal.mz_replica_system_parameters p
+JOIN mz_cluster_replicas r ON r.id = p.replica_id
+JOIN mz_clusters c ON c.id = r.cluster_id;
+```
 
 ## Available System Parameters
 
