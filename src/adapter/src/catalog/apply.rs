@@ -2382,7 +2382,6 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
     /// perform a topological sort. This is non-trivial because we only have the CREATE SQL of each
     /// item here. Within the SQL the dependent items are sometimes referred to by ID and sometimes
     /// referred to by name.
-
     fn sort_item_updates(
         item_updates: Vec<(mz_catalog::durable::Item, Timestamp, StateDiff)>,
     ) -> VecDeque<(mz_catalog::durable::Item, Timestamp, StateDiff)> {
