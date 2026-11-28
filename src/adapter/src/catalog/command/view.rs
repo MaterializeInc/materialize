@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Persistent view commands re-plan against the commit candidate. Only the
+//! View commands re-plan against the commit candidate. Only the
 //! catalog-independent optimization is reusable, and only when its complete
 //! inputs still match. Neither stale successes nor stale errors can authorize
 //! publication.
@@ -59,6 +59,7 @@ pub(crate) enum ViewResolution {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ViewPreparation {
     global_id: GlobalId,
+    temporary: bool,
     expr: HirRelationExpr,
     config: OptimizerConfig,
 }
@@ -104,9 +105,6 @@ impl ViewStatement {
         let Plan::CreateView(plan) = plan else {
             return Err(AdapterError::Unsupported("non-CREATE VIEW intent"));
         };
-        if plan.view.temporary {
-            return Err(AdapterError::Unsupported("temporary view command"));
-        }
         let dependencies = plan.view.expr.depends_on();
         state.validate_timeline_context(dependencies.iter().copied())?;
         state.validate_system_column_references(plan.ambiguous_columns, &dependencies)?;
@@ -124,6 +122,7 @@ impl ViewStatement {
     ) -> ViewPreparation {
         ViewPreparation {
             global_id: self.create_id.expect("view IDs allocated at admission").1,
+            temporary: compiled.plan.view.temporary,
             expr: compiled.plan.view.expr.clone(),
             config: OptimizerConfig::from(state.system_config()),
         }
@@ -170,7 +169,7 @@ impl ViewStatement {
                     raw_expr: view.expr.into(),
                     desc: RelationDesc::new(typ, view.column_names),
                     locally_optimized_expr: optimized.clone().into(),
-                    conn_id: None,
+                    conn_id: view.temporary.then(|| self.session.conn_id().clone()),
                     resolved_ids: compiled.resolved_ids,
                     dependencies: view.dependencies,
                 }),
@@ -189,6 +188,10 @@ impl ViewStatement {
 
     pub(crate) fn notices(&self) -> &[PlanNotice] {
         &self.notices
+    }
+
+    pub(super) fn is_temporary(&self) -> bool {
+        matches!(self.statement.as_ref(), Statement::CreateView(view) if view.temporary)
     }
 
     pub(crate) fn skipped_name(&self) -> Option<&str> {
@@ -211,7 +214,11 @@ impl ViewPreparation {
         metrics: OptimizerMetrics,
     ) -> impl std::future::Future<Output = ViewPreparationResponse> + Send + use<> {
         // Retain the cache sender, not a catalog snapshot across optimization and I/O.
-        let cache = catalog.expr_cache_handle.clone();
+        let cache = if self.temporary {
+            None
+        } else {
+            catalog.expr_cache_handle.clone()
+        };
         async move {
             let request = self.clone();
             let span = tracing::Span::current();

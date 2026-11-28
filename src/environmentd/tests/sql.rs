@@ -285,6 +285,241 @@ async fn test_create_view_cancel_during_optimization() {
     .expect("view optimization cancellation timed out");
 }
 
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn test_temporary_ddl_session_lifecycle() {
+    use mz_postgres_util::{PostgresError, Sql, batch_execute, query_one};
+
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let server = test_util::TestHarness::default().start().await;
+        let a = server.connect().await.unwrap();
+        let b = server.connect().await.unwrap();
+
+        // Each kind must work before its session has a temporary namespace.
+        batch_execute(&a, Sql::new("CREATE TEMP TABLE temp_t (a int)"))
+            .await
+            .unwrap();
+        let adapter = server.inner.adapter_client();
+        let catalog = adapter.catalog_snapshot_expensive().await;
+        let owner = catalog
+            .entries()
+            .find(|entry| entry.name().item == "temp_t")
+            .unwrap()
+            .conn_id()
+            .unwrap()
+            .clone();
+        drop(catalog);
+        batch_execute(&b, Sql::new("CREATE TEMP VIEW temp_v AS SELECT 20 AS a"))
+            .await
+            .unwrap();
+        for sql in [
+            "INSERT INTO temp_t VALUES (1)",
+            "CREATE TEMP VIEW temp_v AS SELECT a FROM temp_t",
+            "CREATE TEMP TABLE IF NOT EXISTS temp_t (different text)",
+            "CREATE TEMP VIEW IF NOT EXISTS temp_v AS SELECT 99 AS a",
+        ] {
+            batch_execute(&a, Sql::new(sql)).await.unwrap();
+        }
+        for sql in [
+            "CREATE TEMP TABLE temp_t (a int)",
+            "INSERT INTO temp_t VALUES (2)",
+        ] {
+            batch_execute(&b, Sql::new(sql)).await.unwrap();
+        }
+        for (client, table_value, view_value) in [(&a, 1, 1), (&b, 2, 20)] {
+            let row = query_one(
+                client,
+                Sql::new("SELECT temp_t.a, temp_v.a FROM temp_t, temp_v"),
+                &[],
+            )
+            .await
+            .unwrap();
+            assert_eq!(row.get::<_, i32>(0), table_value);
+            assert_eq!(row.get::<_, i32>(1), view_value);
+        }
+        batch_execute(
+            &a,
+            Sql::new("CREATE OR REPLACE TEMP VIEW temp_v AS SELECT a + 10 AS a FROM temp_t"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            query_one(&a, Sql::new("SELECT a FROM temp_v"), &[])
+                .await
+                .unwrap()
+                .get::<_, i32>(0),
+            11
+        );
+        for sql in [
+            "CREATE VIEW persistent_v AS SELECT * FROM temp_t",
+            "CREATE VIEW persistent_v AS SELECT * FROM temp_v",
+        ] {
+            let PostgresError::Postgres(error) =
+                batch_execute(&a, Sql::new(sql)).await.unwrap_err()
+            else {
+                panic!("expected a PostgreSQL temporary-dependency error");
+            };
+            assert_contains!(
+                error.unwrap_db_error().message(),
+                "non-temporary items cannot depend on temporary item"
+            );
+        }
+
+        let catalog = adapter.catalog_snapshot_expensive().await;
+        assert_eq!(
+            catalog
+                .entries()
+                .filter(|entry| entry.item().is_temporary())
+                .count(),
+            4
+        );
+        assert!(
+            !catalog
+                .entries()
+                .any(|entry| entry.name().item == "persistent_v")
+        );
+        drop(catalog);
+
+        batch_execute(&a, Sql::new("DISCARD ALL")).await.unwrap();
+        let catalog = adapter.catalog_snapshot_expensive().await;
+        assert_eq!(catalog.state().get_temp_items(&owner).count(), 0);
+        assert_eq!(
+            catalog
+                .entries()
+                .filter(|entry| entry.item().is_temporary())
+                .count(),
+            2
+        );
+        drop(catalog);
+        let row = query_one(
+            &b,
+            Sql::new("SELECT temp_t.a, temp_v.a FROM temp_t, temp_v"),
+            &[],
+        )
+        .await
+        .unwrap();
+        assert_eq!(row.get::<_, i32>(0), 2);
+        assert_eq!(row.get::<_, i32>(1), 20);
+        for sql in [
+            "CREATE TEMP TABLE temp_t (a int)",
+            "CREATE TEMP VIEW temp_v AS SELECT * FROM temp_t",
+            "DISCARD ALL",
+        ] {
+            batch_execute(&a, Sql::new(sql)).await.unwrap();
+        }
+        batch_execute(&b, Sql::new("DISCARD ALL")).await.unwrap();
+        let catalog = adapter.catalog_snapshot_expensive().await;
+        assert_eq!(catalog.state().get_temp_items(&owner).count(), 0);
+        assert!(!catalog.entries().any(|entry| entry.item().is_temporary()));
+    })
+    .await
+    .expect("temporary DDL lifecycle timed out");
+}
+
+// This failpoint is process-global. Run this test in its own process (as nextest does).
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn test_temporary_view_cancel_during_optimization() {
+    use mz_postgres_util::{PostgresError, Sql, batch_execute, query_one};
+
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let server = test_util::TestHarness::default().start().await;
+        let creator = server.connect().await.unwrap();
+        let cancel = server.connect().await.unwrap();
+        batch_execute(&creator, Sql::new("CREATE TEMP TABLE temp_t (a int)"))
+            .await
+            .unwrap();
+        let pid: i32 = query_one(&creator, Sql::new("SELECT pg_backend_pid()"), &[])
+            .await
+            .unwrap()
+            .get(0);
+        let adapter = server.inner.adapter_client();
+        let catalog = adapter.catalog_snapshot_expensive().await;
+        let owner = catalog
+            .entries()
+            .find(|entry| entry.name().item == "temp_t")
+            .unwrap()
+            .conn_id()
+            .unwrap()
+            .clone();
+        drop(catalog);
+
+        let (release, parked) = CatalogVisibilityGate::install("catalog_view_optimize_ready");
+        let create = task::spawn(|| "cancel temporary view optimization", async move {
+            let result = batch_execute(
+                &creator,
+                Sql::new("CREATE TEMP VIEW temp_v AS SELECT * FROM temp_t"),
+            )
+            .await;
+            (creator, result)
+        })
+        .abort_on_drop();
+        let creator = tokio::time::timeout(Duration::from_secs(5), async {
+            parked.await.unwrap();
+            // Await SQL cancellation and the statement's error before cleanup.
+            assert!(
+                query_one(
+                    &cancel,
+                    Sql::new("SELECT pg_cancel_backend($1::int4)"),
+                    &[&pid],
+                )
+                .await
+                .unwrap()
+                .get::<_, bool>(0)
+            );
+            let (creator, result) = create.await;
+            let PostgresError::Postgres(error) = result.unwrap_err() else {
+                panic!("expected a PostgreSQL cancellation error");
+            };
+            assert_eq!(error.unwrap_db_error().code(), &SqlState::QUERY_CANCELED);
+            let catalog = adapter.catalog_snapshot_expensive().await;
+            assert_eq!(catalog.state().get_temp_items(&owner).count(), 1);
+            assert!(!catalog.entries().any(|entry| entry.name().item == "temp_v"));
+            drop(catalog);
+            batch_execute(&creator, Sql::new("DISCARD ALL"))
+                .await
+                .unwrap();
+            let catalog = adapter.catalog_snapshot_expensive().await;
+            assert_eq!(catalog.state().get_temp_items(&owner).count(), 0);
+            assert!(!catalog.entries().any(|entry| entry.item().is_temporary()));
+            creator
+        })
+        .await
+        .expect("cancellation and cleanup must finish while optimization is blocked");
+        release.release();
+
+        for sql in [
+            "CREATE TEMP TABLE temp_t (a int)",
+            "INSERT INTO temp_t VALUES (42)",
+            "CREATE TEMP VIEW temp_v AS SELECT * FROM temp_t",
+        ] {
+            batch_execute(&creator, Sql::new(sql)).await.unwrap();
+        }
+        assert_eq!(
+            query_one(&creator, Sql::new("SELECT a FROM temp_v"), &[])
+                .await
+                .unwrap()
+                .get::<_, i32>(0),
+            42
+        );
+        assert_eq!(
+            adapter
+                .catalog_snapshot_expensive()
+                .await
+                .state()
+                .get_temp_items(&owner)
+                .count(),
+            2
+        );
+        batch_execute(&creator, Sql::new("DISCARD ALL"))
+            .await
+            .unwrap();
+        let catalog = adapter.catalog_snapshot_expensive().await;
+        assert_eq!(catalog.state().get_temp_items(&owner).count(), 0);
+        assert!(!catalog.entries().any(|entry| entry.item().is_temporary()));
+    })
+    .await
+    .expect("temporary view optimization cancellation timed out");
+}
+
 // This failpoint is process-global. Run this test in its own process (as nextest does).
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
 async fn test_create_view_replay_revoked_privilege() {
