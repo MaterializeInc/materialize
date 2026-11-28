@@ -277,3 +277,120 @@ impl ViewPreparation {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use mz_sql::session::vars::VarInput;
+
+    use super::*;
+    use crate::session::Session;
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn view_preparation_checks_configuration_and_error_freshness() {
+        Catalog::with_debug(|catalog| async move {
+            let mut state = catalog.state().clone();
+            let mut session = Session::dummy();
+            session.initialize_role_metadata(mz_sql::session::user::MZ_SYSTEM_ROLE_ID);
+            session
+                .start_transaction(mz_ore::now::to_datetime(1000), None, None)
+                .unwrap();
+            let raw = mz_sql_parser::parser::parse_statements(
+                "CREATE VIEW materialize.public.prepared_view AS SELECT 1 AS a",
+            )
+            .unwrap()
+            .remove(0)
+            .ast;
+            let mut command = ViewStatement::new(Arc::new(raw), Params::empty(), session.meta());
+            let ts = catalog.current_upper().await;
+            let ids = catalog.allocate_user_ids(1, ts).await.unwrap().remove(0);
+            command.allocate_create(ids);
+            let ViewResolution::Prepare(original) = command.resolve(&state, None).unwrap() else {
+                panic!("first execution must request preparation");
+            };
+            let original_flag = state.system_config().enable_new_outer_join_lowering();
+            state
+                .system_config_mut()
+                .set(
+                    "enable_new_outer_join_lowering",
+                    VarInput::Flat(if original_flag { "false" } else { "true" }),
+                )
+                .unwrap();
+            let ViewResolution::Prepare(current) = command
+                .resolve(
+                    &state,
+                    Some(ViewPreparationResponse {
+                        request: original,
+                        result: Err(AdapterError::Unsupported("obsolete optimizer error")),
+                    }),
+                )
+                .expect("obsolete errors must not decide the current command")
+            else {
+                panic!("changed configuration must require new preparation");
+            };
+            assert!(matches!(
+                command.resolve(
+                    &state,
+                    Some(ViewPreparationResponse {
+                        request: current.clone(),
+                        result: Err(AdapterError::Unsupported("current optimizer error")),
+                    })
+                ),
+                Err(AdapterError::Unsupported("current optimizer error"))
+            ));
+
+            let optimized = crate::optimize::view::Optimizer::new(current.config.clone(), None)
+                .optimize(current.expr.clone())
+                .unwrap();
+            assert!(matches!(
+                command
+                    .resolve(
+                        &state,
+                        Some(ViewPreparationResponse {
+                            request: current.clone(),
+                            result: Ok(optimized.clone()),
+                        })
+                    )
+                    .unwrap(),
+                ViewResolution::Ready { .. }
+            ));
+
+            state
+                .system_config_mut()
+                .set("max_tables", VarInput::Flat("999"))
+                .unwrap();
+            assert!(
+                matches!(
+                    command.resolve(&state, None).unwrap(),
+                    ViewResolution::Ready { .. }
+                ),
+                "unrelated configuration changes must reuse preparation"
+            );
+
+            state
+                .system_config_mut()
+                .set(
+                    "enable_new_outer_join_lowering",
+                    VarInput::Flat(if original_flag { "true" } else { "false" }),
+                )
+                .unwrap();
+            assert!(
+                matches!(
+                    command
+                        .resolve(
+                            &state,
+                            Some(ViewPreparationResponse {
+                                request: current,
+                                result: Ok(optimized),
+                            })
+                        )
+                        .unwrap(),
+                    ViewResolution::Prepare(_)
+                ),
+                "neither a late success nor retained preparation may bypass current inputs"
+            );
+            catalog.expire().await;
+        })
+        .await;
+    }
+}
