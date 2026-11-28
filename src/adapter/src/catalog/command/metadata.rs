@@ -12,6 +12,7 @@
 use std::sync::Arc;
 
 use mz_adapter_types::dyncfgs::ENABLE_PASSWORD_AUTH;
+use mz_catalog::memory::objects::Type;
 use mz_repr::{CatalogItemId, GlobalId};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{CatalogTypeDetails, RoleAttributesRaw};
@@ -20,7 +21,7 @@ use mz_sql::plan::{NetworkPolicyRule, Params, Plan, PlanNotice};
 use mz_sql::session::metadata::SessionMetadata;
 
 use crate::AdapterError;
-use crate::catalog::{CatalogItem, CatalogState, Op, Type};
+use crate::catalog::{CatalogItem, CatalogState, Op};
 use crate::session::SessionMeta;
 
 use super::CommandExecution;
