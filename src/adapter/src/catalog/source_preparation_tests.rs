@@ -422,7 +422,9 @@ async fn source_command_preserves_only_observed_outcomes() {
                 }
                 Err(CommandExecutionError::Error(error)) => return Err(error),
                 Err(CommandExecutionError::Pending { index, work }) => match work {
-                    CommandWork::Connection(_) | CommandWork::ConnectionSecret(_) => {
+                    CommandWork::Connection(_)
+                    | CommandWork::ConnectionSecret(_)
+                    | CommandWork::View(_) => {
                         unreachable!("source command")
                     }
                     CommandWork::Prepare(request) => {

@@ -18,7 +18,7 @@ use mz_ore::collections::CollectionExt;
 use mz_repr::{CatalogItemId, GlobalId};
 use mz_storage_types::sources::Timeline;
 
-use crate::catalog::Catalog;
+use crate::catalog::{Catalog, CatalogState};
 use crate::{AdapterError, CollectionIdBundle, TimelineContext};
 
 impl Catalog {
@@ -106,6 +106,18 @@ impl Catalog {
         id_bundle
     }
 
+    pub(crate) fn validate_timeline_context<I>(
+        &self,
+        ids: I,
+    ) -> Result<TimelineContext, AdapterError>
+    where
+        I: IntoIterator<Item = GlobalId>,
+    {
+        self.state().validate_timeline_context(ids)
+    }
+}
+
+impl CatalogState {
     /// Return an error if the ids are from incompatible [`TimelineContext`]s. This should
     /// be used to prevent users from doing things that are either meaningless
     /// (joining data from timelines that have similar numbers with different
@@ -118,9 +130,10 @@ impl Catalog {
     where
         I: IntoIterator<Item = GlobalId>,
     {
-        let items_ids = ids
-            .into_iter()
-            .filter_map(|gid| self.try_resolve_item_id(&gid));
+        let items_ids = ids.into_iter().filter_map(|gid| {
+            self.try_get_entry_by_global_id(&gid)
+                .map(|entry| entry.id())
+        });
         let mut timeline_contexts: Vec<_> =
             self.get_timeline_contexts(items_ids).into_iter().collect();
         // If there's more than one timeline, we will not produce meaningful
@@ -185,7 +198,7 @@ impl Catalog {
                             .insert(TimelineContext::TimelineDependent(source.timeline.clone()));
                     }
                     CatalogItem::Index(index) => {
-                        let on_id = self.resolve_item_id(&index.on);
+                        let on_id = self.get_entry_by_global_id(&index.on).id();
                         ids.push(on_id);
                     }
                     CatalogItem::View(View {
@@ -202,7 +215,7 @@ impl Catalog {
                         let item_ids = optimized_expr
                             .depends_on()
                             .into_iter()
-                            .map(|gid| self.resolve_item_id(&gid));
+                            .map(|gid| self.get_entry_by_global_id(&gid).id());
                         ids.extend(item_ids);
                     }
                     CatalogItem::MaterializedView(MaterializedView {
@@ -219,7 +232,7 @@ impl Catalog {
                         let item_ids = optimized_expr
                             .depends_on()
                             .into_iter()
-                            .map(|gid| self.resolve_item_id(&gid));
+                            .map(|gid| self.get_entry_by_global_id(&gid).id());
                         ids.extend(item_ids);
                     }
                     CatalogItem::Table(table) => {

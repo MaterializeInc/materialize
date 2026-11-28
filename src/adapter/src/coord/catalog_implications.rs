@@ -868,6 +868,19 @@ impl Coordinator {
         // Apply source drop overwrites.
         sources_to_drop.retain(|(_, gid)| !source_gids_to_keep.contains(gid));
 
+        let expression_cache_invalidations: BTreeSet<_> = view_gids_to_drop
+            .iter()
+            .copied()
+            .chain(indexes_to_drop.iter().map(|(_, gid)| *gid))
+            .collect();
+        if !expression_cache_invalidations.is_empty() {
+            let _completion = self.catalog().update_expression_cache(
+                Vec::new(),
+                Vec::new(),
+                expression_cache_invalidations,
+            );
+        }
+
         let readable_collections_to_drop: BTreeSet<_> = sources_to_drop
             .iter()
             .map(|(_, gid)| *gid)

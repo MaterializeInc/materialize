@@ -168,7 +168,7 @@ where
 ///       macro call.
 ///    3. Extend the `let optimizer_feature_overrides = ...` call in
 ///       `plan_create_cluster`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OptimizerConfig {
     /// The mode in which the optimizer runs.
     pub mode: OptimizeMode,

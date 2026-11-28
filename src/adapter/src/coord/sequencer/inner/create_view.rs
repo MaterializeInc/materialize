@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use maplit::btreemap;
 use mz_catalog::memory::error::ErrorKind;
@@ -412,13 +412,6 @@ impl Coordinator {
                 .cache_local_expression(global_id, optimized_expr.clone(), optimizer_features)
                 .await;
         }
-        // Invalidate the entries of the views that `CREATE OR REPLACE` drops, as `DROP` does.
-        // The new view has fresh ids, so its entry stays.
-        let replaced_global_ids: BTreeSet<_> = drop_ids
-            .iter()
-            .flat_map(|id| self.catalog().get_entry(id).global_ids())
-            .collect();
-
         let ops = vec![
             catalog::Op::DropObjects {
                 objects: drop_ids
@@ -452,16 +445,7 @@ impl Coordinator {
             .catalog_transact_with_context(None, Some(ctx), ops)
             .await
         {
-            Ok(()) => {
-                if !replaced_global_ids.is_empty() {
-                    let _fut = self.catalog().update_expression_cache(
-                        Vec::new(),
-                        Vec::new(),
-                        replaced_global_ids,
-                    );
-                }
-                Ok(StageResult::Response(ExecuteResponse::CreatedView))
-            }
+            Ok(()) => Ok(StageResult::Response(ExecuteResponse::CreatedView)),
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
                 kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {

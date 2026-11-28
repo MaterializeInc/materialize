@@ -459,6 +459,7 @@ pub struct TransactionResult {
 
 #[derive(Debug)]
 pub(crate) enum CommandWork {
+    View(super::command::view::ViewPreparation),
     Connection(super::command::connection::ConnectionPreparation),
     ConnectionSecret(super::command::connection::ConnectionSecret),
     Prepare(mz_sql::pure::SourcePreparationRequest),
@@ -467,6 +468,7 @@ pub(crate) enum CommandWork {
 
 #[derive(Debug)]
 pub(crate) enum CommandResponse {
+    View(super::command::view::ViewPreparationResponse),
     Source(mz_sql::pure::SourcePreparationResponse),
     Connection(super::command::connection::ConnectionPreparationResponse),
     ConnectionSecret(super::command::connection::ConnectionSecretResponse),
