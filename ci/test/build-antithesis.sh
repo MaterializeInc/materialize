@@ -106,7 +106,7 @@ buildkite-agent artifact upload antithesis-images.json
 
 if [[ -n ${CI_ANTITHESIS_DURATION:-} ]]; then
     echo "--- Launching a run of $CI_ANTITHESIS_DURATION minutes"
-    jq --arg duration "$CI_ANTITHESIS_DURATION" --arg commit "$(git rev-parse HEAD)" '{params: {
+    run=$(jq --arg duration "$CI_ANTITHESIS_DURATION" --arg commit "$(git rev-parse HEAD)" '{params: {
         "antithesis.config_image": .config,
         "antithesis.images": (del(.config) | [.[]] | join(";")),
         "antithesis.duration": $duration,
@@ -119,5 +119,7 @@ if [[ -n ${CI_ANTITHESIS_DURATION:-} ]]; then
     }}' antithesis-images.json \
         | curl --fail-with-body --silent --show-error --data @- \
             --header "Authorization: Bearer $ANTITHESIS_API_KEY" --header "Content-Type: application/json" \
-            https://materialize.antithesis.com/api/v1/launch/basic_k8s_test
+            https://materialize.antithesis.com/api/v1/launch/basic_k8s_test \
+        | tee /dev/stderr | jq -r .runId)
+    buildkite-agent meta-data set antithesis-run-id "$run"
 fi

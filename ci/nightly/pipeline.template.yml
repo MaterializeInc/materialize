@@ -79,6 +79,19 @@ steps:
         sanitizer: skip
         branches: "main"
 
+      - id: antithesis-results
+        label: "Antithesis results"
+        depends_on: antithesis
+        timeout_in_minutes: 180
+        agents:
+          queue: linux-aarch64-small
+        coverage: skip
+        sanitizer: skip
+        branches: "main"
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: antithesis-results
+
       - id: build-rust-latest-beta
         label: "Build with Latest Rust Beta"
         command: bin/ci-builder run stable ci/test/rust-beta-build.sh
