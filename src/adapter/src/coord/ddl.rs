@@ -363,12 +363,12 @@ impl Coordinator {
         params: mz_sql::plan::Params,
     ) {
         ctx.finish_ddl_on_coordinator = true;
-        let command = catalog::command::metadata::MetadataStatement::new(
+        let mut command = catalog::command::metadata::MetadataStatement::new(
             statement,
             params,
             ctx.session().meta(),
         );
-        let (plan, _) = match command.plan(self.catalog().state()) {
+        let (plan, _, _) = match command.plan(self.catalog().state()) {
             Ok(compiled) => compiled,
             Err(error) => return ctx.retire(Err(error)),
         };
@@ -378,6 +378,14 @@ impl Coordinator {
         let response = match plan {
             mz_sql::plan::Plan::CreateRole(_) => crate::ExecuteResponse::CreatedRole,
             mz_sql::plan::Plan::Comment(_) => crate::ExecuteResponse::Comment,
+            mz_sql::plan::Plan::CreateType(_) => {
+                let ids = match self.allocate_user_id().await {
+                    Ok(ids) => ids,
+                    Err(error) => return ctx.retire(Err(error)),
+                };
+                command.allocate_type(ids);
+                crate::ExecuteResponse::CreatedType
+            }
             mz_sql::plan::Plan::CreateQueryPolicy(_) => crate::ExecuteResponse::CreatedQueryPolicy,
             mz_sql::plan::Plan::AlterQueryPolicy(_) => {
                 crate::ExecuteResponse::AlteredObject(mz_sql::catalog::ObjectType::QueryPolicy)
