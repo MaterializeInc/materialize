@@ -128,8 +128,8 @@ impl ConnectionStatement {
         self.skipped_name.as_deref()
     }
 
-    pub(in crate::catalog) fn set_skipped_name(&mut self, name: Option<String>) {
-        self.skipped_name = name;
+    pub(in crate::catalog) fn skipped_name_mut(&mut self) -> &mut Option<String> {
+        &mut self.skipped_name
     }
 
     pub(in crate::catalog) fn owner_id(&self) -> mz_repr::role_id::RoleId {

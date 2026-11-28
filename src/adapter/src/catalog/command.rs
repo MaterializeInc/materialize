@@ -27,6 +27,7 @@
 pub(crate) mod connection;
 pub(crate) mod source;
 pub(crate) mod source_statement;
+pub(crate) mod table;
 pub(crate) mod view;
 
 use std::sync::Arc;
@@ -52,6 +53,7 @@ pub enum CatalogCommand {
     AlterConnection(Arc<connection::ConnectionStatement>),
     CreateConnection(Arc<connection::ConnectionStatement>),
     CreateView(Arc<view::ViewStatement>),
+    CreateTable(Arc<table::TableStatement>),
     Source(Arc<source_statement::SourceCommand>),
 }
 
@@ -66,6 +68,13 @@ impl CatalogCommand {
         response: Option<CommandResponse>,
     ) -> Result<CommandExecution<'_>, CommandExecutionError> {
         match self {
+            Self::CreateTable(command) => {
+                assert!(
+                    response.is_none(),
+                    "table commands have no external preparation"
+                );
+                Ok(Arc::make_mut(command).compile(state)?)
+            }
             Self::CreateView(command) => {
                 let command = Arc::make_mut(command);
                 let response = match response {
@@ -84,12 +93,13 @@ impl CatalogCommand {
                         if_not_exists,
                     } => {
                         let id = command.item_id();
-                        let outcome = if_not_exists.then_some(ExecutionOutcome::CreateView {
-                            command,
+                        Ok(CommandExecution::create_item(
+                            ops,
                             id,
                             name,
-                        });
-                        Ok(CommandExecution { ops, outcome })
+                            if_not_exists,
+                            command.skipped_name_mut(),
+                        ))
                     }
                 }
             }
@@ -146,17 +156,13 @@ impl CatalogCommand {
                 // Resource checks precede IF NOT EXISTS collision handling.
                 state.validate_resource_limits(&ops, command.connection_id())?;
                 command.applied(compiled.notices);
-                command.set_skipped_name(None);
-                let outcome = if compiled.plan.if_not_exists {
-                    Some(ExecutionOutcome::CreateConnection {
-                        command,
-                        id,
-                        name: name.item,
-                    })
-                } else {
-                    None
-                };
-                Ok(CommandExecution { ops, outcome })
+                Ok(CommandExecution::create_item(
+                    ops,
+                    id,
+                    name.item,
+                    compiled.plan.if_not_exists,
+                    command.skipped_name_mut(),
+                ))
             }
             Self::AlterConnection(command) => {
                 use connection::ConnectionResolution;
@@ -250,6 +256,7 @@ impl CatalogCommand {
             Self::AlterConnection(command) | Self::CreateConnection(command) => command.notices(),
             Self::Source(command) => command.notices(),
             Self::CreateView(command) => command.notices(),
+            Self::CreateTable(command) => command.notices(),
         }
     }
 }
@@ -265,20 +272,33 @@ pub(super) struct CommandExecution<'a> {
 }
 
 enum ExecutionOutcome<'a> {
-    CreateView {
-        command: &'a mut view::ViewStatement,
+    CreateItem {
+        skipped_name: &'a mut Option<String>,
         id: mz_repr::CatalogItemId,
         name: String,
     },
     Source(&'a mut SourceCommand, Box<SourceCompilation>),
-    CreateConnection {
-        command: &'a mut connection::ConnectionStatement,
-        id: mz_repr::CatalogItemId,
-        name: String,
-    },
 }
 
-impl CommandExecution<'_> {
+impl<'a> CommandExecution<'a> {
+    fn create_item(
+        ops: Vec<Op>,
+        id: mz_repr::CatalogItemId,
+        name: String,
+        if_not_exists: bool,
+        skipped_name: &'a mut Option<String>,
+    ) -> Self {
+        *skipped_name = None;
+        Self {
+            ops,
+            outcome: if_not_exists.then_some(ExecutionOutcome::CreateItem {
+                skipped_name,
+                id,
+                name,
+            }),
+        }
+    }
+
     pub(super) fn raw(ops: Vec<Op>) -> Self {
         Self { ops, outcome: None }
     }
@@ -288,8 +308,7 @@ impl CommandExecution<'_> {
             Some(ExecutionOutcome::Source(command, compiled)) => command
                 .needs_collision_probe(compiled)
                 .then_some(self.ops.as_slice()),
-            Some(ExecutionOutcome::CreateConnection { .. }) => Some(self.ops.as_slice()),
-            Some(ExecutionOutcome::CreateView { .. }) => Some(self.ops.as_slice()),
+            Some(ExecutionOutcome::CreateItem { .. }) => Some(self.ops.as_slice()),
             None => None,
         }
     }
@@ -300,7 +319,11 @@ impl CommandExecution<'_> {
         result: Result<(), AdapterError>,
     ) -> Result<Option<Self>, AdapterError> {
         let skipped = match self.outcome.as_mut().expect("collision probe requested") {
-            ExecutionOutcome::CreateView { command, id, name } => match result {
+            ExecutionOutcome::CreateItem {
+                skipped_name,
+                id,
+                name,
+            } => match result {
                 Ok(()) => false,
                 Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
                     kind:
@@ -308,7 +331,7 @@ impl CommandExecution<'_> {
                             mz_sql::catalog::CatalogError::ItemAlreadyExists(attempted_id, _),
                         ),
                 })) if attempted_id == *id => {
-                    command.set_skipped_name(name.clone());
+                    **skipped_name = Some(name.clone());
                     true
                 }
                 Err(error) => return Err(error),
@@ -318,19 +341,6 @@ impl CommandExecution<'_> {
                 command.check_outcome(outcome)?;
                 command.skipped_name().is_some()
             }
-            ExecutionOutcome::CreateConnection { command, id, name } => match result {
-                Ok(()) => false,
-                Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
-                    kind:
-                        mz_catalog::memory::error::ErrorKind::Sql(
-                            mz_sql::catalog::CatalogError::ItemAlreadyExists(attempted_id, _),
-                        ),
-                })) if attempted_id == *id => {
-                    command.set_skipped_name(Some(name.clone()));
-                    true
-                }
-                Err(error) => return Err(error),
-            },
         };
         if skipped { Ok(None) } else { Ok(Some(self)) }
     }
@@ -388,7 +398,7 @@ impl RenameCommand {
         params: Params,
         session: SessionMeta,
     ) -> Result<(Self, Plan), AdapterError> {
-        let (plan, notices) = plan_command(state, &statement, &params, &session)?;
+        let (plan, _, notices) = plan_command(state, &statement, &params, &session)?;
         let (ops, object_type) = rename_ops(&plan);
         Ok((
             Self {
@@ -420,7 +430,7 @@ impl RenameCommand {
     /// Rejects changes to the object type, whether the command is a no-op, or
     /// the planning notices. The caller must apply the returned writes.
     pub(super) fn execute(&self, state: &CatalogState) -> Result<Vec<Op>, AdapterError> {
-        let (plan, notices) = plan_command(state, &self.statement, &self.params, &self.session)?;
+        let (plan, _, notices) = plan_command(state, &self.statement, &self.params, &self.session)?;
         let (ops, object_type) = rename_ops(&plan);
         let outcome = RenameOutcome {
             object_type,
@@ -485,7 +495,7 @@ impl CatalogResultCommand {
         params: Params,
         session: SessionMeta,
     ) -> Result<(Self, Plan), AdapterError> {
-        let (plan, notices) = plan_command(state, &statement, &params, &session)?;
+        let (plan, _, notices) = plan_command(state, &statement, &params, &session)?;
         let row = Self::result(&plan)?;
         let command = Self {
             statement,
@@ -500,7 +510,7 @@ impl CatalogResultCommand {
     /// Rechecks planning and authorization and requires the recorded row and
     /// notices.
     pub(in crate::catalog) fn execute(&self, state: &CatalogState) -> Result<(), AdapterError> {
-        let (plan, notices) = plan_command(state, &self.statement, &self.params, &self.session)?;
+        let (plan, _, notices) = plan_command(state, &self.statement, &self.params, &self.session)?;
         if Self::result(&plan)? == self.row && notices == self.notices {
             Ok(())
         } else {
@@ -573,7 +583,7 @@ fn plan_command(
     statement: &Statement<Raw>,
     params: &Params,
     session: &SessionMeta,
-) -> Result<(Plan, Vec<PlanNotice>), AdapterError> {
+) -> Result<(Plan, mz_sql::names::ResolvedIds, Vec<PlanNotice>), AdapterError> {
     let (tx, mut rx) = mpsc::unbounded_channel();
     let catalog = state.for_session_metadata(session, tx);
     let (statement, resolved_ids) = mz_sql::names::resolve(&catalog, statement.clone())?;
@@ -600,7 +610,7 @@ fn plan_command(
             _ => unreachable!("planning only emits plan notices"),
         }
     }
-    Ok((plan, notices))
+    Ok((plan, resolved_ids, notices))
 }
 
 /// Returns the rename/swap ops for the given `Plan`, along with the object

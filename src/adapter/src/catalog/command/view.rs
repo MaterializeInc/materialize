@@ -99,26 +99,8 @@ impl ViewStatement {
         &self,
         state: &CatalogState,
     ) -> Result<ViewCompilation, AdapterError> {
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        let catalog = state.for_session_metadata(self.session.as_ref(), tx);
-        let (statement, resolved_ids) =
-            mz_sql::names::resolve(&catalog, (*self.statement).clone())?;
-        let (plan, sql_impl_ids) = mz_sql::plan::plan(
-            Some(self.session.pcx()),
-            &catalog,
-            statement,
-            &self.params,
-            &resolved_ids,
-        )?;
-        mz_sql::rbac::check_plan(
-            &catalog,
-            None,
-            self.session.as_ref(),
-            &plan,
-            None,
-            &resolved_ids,
-            &sql_impl_ids,
-        )?;
+        let (plan, resolved_ids, notices) =
+            super::plan_command(state, &self.statement, &self.params, &self.session)?;
         let Plan::CreateView(plan) = plan else {
             return Err(AdapterError::Unsupported("non-CREATE VIEW intent"));
         };
@@ -128,13 +110,6 @@ impl ViewStatement {
         let dependencies = plan.view.expr.depends_on();
         state.validate_timeline_context(dependencies.iter().copied())?;
         state.validate_system_column_references(plan.ambiguous_columns, &dependencies)?;
-        let mut notices = Vec::new();
-        while let Ok(notice) = rx.try_recv() {
-            match notice {
-                crate::AdapterNotice::PlanNotice(notice) => notices.push(notice),
-                _ => unreachable!("planning only emits plan notices"),
-            }
-        }
         Ok(ViewCompilation {
             plan,
             resolved_ids,
@@ -220,8 +195,8 @@ impl ViewStatement {
         self.skipped_name.as_deref()
     }
 
-    pub(in crate::catalog) fn set_skipped_name(&mut self, name: String) {
-        self.skipped_name = Some(name);
+    pub(in crate::catalog) fn skipped_name_mut(&mut self) -> &mut Option<String> {
+        &mut self.skipped_name
     }
 
     pub(in crate::catalog) fn item_id(&self) -> CatalogItemId {
@@ -275,5 +250,131 @@ impl ViewPreparation {
                 result,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_sql::session::vars::VarInput;
+
+    use super::*;
+    use crate::session::Session;
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn view_preparation_checks_configuration_and_error_freshness() {
+        Catalog::with_debug(|catalog| async move {
+            let mut state = catalog.state().clone();
+            let mut session = Session::dummy();
+            session.initialize_role_metadata(mz_sql::session::user::MZ_SYSTEM_ROLE_ID);
+            session
+                .start_transaction(mz_ore::now::to_datetime(1000), None, None)
+                .expect("start invoking transaction");
+            let raw = mz_sql_parser::parser::parse_statements(
+                "CREATE VIEW materialize.public.prepared_view AS SELECT 1 AS a",
+            )
+            .expect("parse view statement")
+            .remove(0)
+            .ast;
+            let mut command = ViewStatement::new(Arc::new(raw), Params::empty(), session.meta());
+            let ts = catalog.current_upper().await;
+            let ids = catalog
+                .allocate_user_ids(1, ts)
+                .await
+                .expect("allocate view IDs")
+                .remove(0);
+            command.allocate_create(ids);
+            let ViewResolution::Prepare(original) = command
+                .resolve(&state, None)
+                .expect("resolve initial preparation")
+            else {
+                panic!("first execution must request preparation");
+            };
+            let original_flag = state.system_config().enable_new_outer_join_lowering();
+            state
+                .system_config_mut()
+                .set(
+                    "enable_new_outer_join_lowering",
+                    VarInput::Flat(if original_flag { "false" } else { "true" }),
+                )
+                .expect("change optimizer configuration");
+            let ViewResolution::Prepare(current) = command
+                .resolve(
+                    &state,
+                    Some(ViewPreparationResponse {
+                        request: original,
+                        result: Err(AdapterError::Unsupported("obsolete optimizer error")),
+                    }),
+                )
+                .expect("obsolete errors must not decide the current command")
+            else {
+                panic!("changed configuration must require new preparation");
+            };
+            assert!(matches!(
+                command.resolve(
+                    &state,
+                    Some(ViewPreparationResponse {
+                        request: current.clone(),
+                        result: Err(AdapterError::Unsupported("current optimizer error")),
+                    })
+                ),
+                Err(AdapterError::Unsupported("current optimizer error"))
+            ));
+
+            let optimized = crate::optimize::view::Optimizer::new(current.config.clone(), None)
+                .optimize(current.expr.clone())
+                .expect("optimize current view");
+            assert!(matches!(
+                command
+                    .resolve(
+                        &state,
+                        Some(ViewPreparationResponse {
+                            request: current.clone(),
+                            result: Ok(optimized.clone()),
+                        })
+                    )
+                    .expect("accept current preparation"),
+                ViewResolution::Ready { .. }
+            ));
+
+            state
+                .system_config_mut()
+                .set("max_tables", VarInput::Flat("999"))
+                .expect("change unrelated limit");
+            assert!(
+                matches!(
+                    command
+                        .resolve(&state, None)
+                        .expect("reuse current preparation"),
+                    ViewResolution::Ready { .. }
+                ),
+                "unrelated configuration changes must reuse preparation"
+            );
+
+            state
+                .system_config_mut()
+                .set(
+                    "enable_new_outer_join_lowering",
+                    VarInput::Flat(if original_flag { "true" } else { "false" }),
+                )
+                .expect("restore optimizer configuration");
+            assert!(
+                matches!(
+                    command
+                        .resolve(
+                            &state,
+                            Some(ViewPreparationResponse {
+                                request: current,
+                                result: Ok(optimized),
+                            })
+                        )
+                        .expect("reject obsolete success"),
+                    ViewResolution::Prepare(_)
+                ),
+                "neither a late success nor retained preparation may bypass current inputs"
+            );
+            catalog.expire().await;
+        })
+        .await;
     }
 }
