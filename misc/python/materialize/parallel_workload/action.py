@@ -7,23 +7,31 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import contextlib
 import copy
 import datetime
+import decimal
 import json
+import math
 import random
+import struct
 import threading
 import time
 import urllib.parse
+import uuid
 import zlib
+from collections import Counter
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import psycopg
 import requests
 import websocket
+from deepdiff import DeepDiff
 from pg8000.native import identifier
 from psycopg import Connection
 from psycopg.errors import OperationalError
+from psycopg.types.range import Range
 
 import materialize.parallel_workload.column
 from materialize.data_ingest.data_type import (
@@ -35,14 +43,29 @@ from materialize.data_ingest.data_type import (
     Boolean,
     Bytea,
     Char,
+    DataType,
+    DataValue,
+    Date,
+    DateRange,
+    Double,
+    Float,
+    Int4Range,
+    Int8Range,
     IntArray,
+    Interval,
     IntList,
     Jsonb,
+    MzTimestamp,
+    Numeric383,
+    NumRange,
     Oid,
     Text,
     TextTextMap,
+    Time,
     Timestamp,
     TimestampTz,
+    TsRange,
+    TsTzRange,
     VarChar,
 )
 from materialize.data_ingest.query_error import QueryError
@@ -102,6 +125,7 @@ from materialize.parallel_workload.database import (
     Type,
     View,
     WebhookSource,
+    correctness,
 )
 from materialize.parallel_workload.executor import Executor, Http
 from materialize.parallel_workload.expression import ExprKind, expression
@@ -798,6 +822,14 @@ class Action:
         )
 
 
+# TODO: Enable once CLU-169 is fixed: a bounded (UP TO) SUBSCRIBE over an
+# object whose as_of has advanced to the end of time soft-panics the
+# optimizer ("expected until = {} due to as_of = MAX"). The UP TO correctness
+# check below (no data at or past the bound, stream terminates) is implemented
+# and gated on this.
+SUBSCRIBE_UP_TO_ENABLED = False
+
+
 class FetchAction(Action):
     def __init__(self, rng: random.Random, composition: Composition | None):
         super().__init__(rng, composition)
@@ -816,11 +848,229 @@ class FetchAction(Action):
                     "does not exist",
                     "query could not complete because relation",
                     "query could not complete because cluster",
+                    "subscribe has been terminated because underlying relation",
                 ]
             )
         return result
 
+    def match_history(
+        self,
+        exe: Executor,
+        table: Table,
+        state: "Counter[tuple[Any, ...]]",
+        floor: int,
+        previous: "Counter[tuple[Any, ...]] | None",
+    ) -> int | None:
+        """Return the earliest matching version, or None to end verification."""
+        with table.lock:
+            history = list(table.history)
+        oldest = history[0][0]
+        closest = None
+        for version, candidates in history:
+            if version < floor:
+                continue
+            for candidate in candidates:
+                expected = Counter(
+                    normalize_rows(candidate, table.columns, tracked=True)
+                )
+                if state == expected:
+                    return version
+                extra = state - expected
+                missing = expected - state
+                distance = extra.total() + missing.total()
+                # SQL-457 leaves a previously verified row in the stream after
+                # its retraction. An extra copy of a unique key differs from it.
+                stale = (
+                    previous is not None
+                    and bool(extra)
+                    and not missing
+                    and all(state[row] == previous[row] == 1 for row in extra)
+                )
+                rank = (distance, not stale)
+                if closest is None or rank < closest[0]:
+                    closest = (rank, version, extra, missing)
+        if oldest > floor:
+            exe.log(f"subscribe verify on {table}: history evicted, stopping")
+            return None
+        assert closest is not None
+        (distance, unexpected), version, extra, missing = closest
+        if not unexpected:
+            exe.log(
+                f"SQL-457 on {table}: closest v{version}, stale rows "
+                f"{list(extra.elements())[:3]}, stopping subscribe verification"
+            )
+            return None
+        raise AssertionError(
+            f"SUBSCRIBE on {table} accumulated a state matching no tracked"
+            f" version >= {floor}. Closest is v{version} (symdiff={distance}),"
+            f" extra_in_subscribe={list(extra.elements())}"
+            f" missing_from_subscribe={list(missing.elements())}"
+        )
+
+    def run_subscribe_verify(self, exe: Executor) -> None:
+        """Check a table subscription against the sequence of tracked states."""
+        # SET TRANSACTION_ISOLATION must be the first statement in its transaction.
+        exe.commit(http=Http.NO)
+        # The snapshot must then reflect at least the version sampled below.
+        exe.set_isolation("STRICT SERIALIZABLE")
+        # Close the transaction the SET opened, the SUBSCRIBE must be the
+        # first statement of its transaction.
+        exe.commit(http=Http.NO)
+        tables = [table for table in exe.db.tables if not table.temp]
+        if not tables:
+            return
+        try:
+            self.walk_subscription(exe, self.rng.choice(tables))
+        except Exception:
+            # Preserve the original failure if the connection also died.
+            with contextlib.suppress(QueryError):
+                exe.rollback(http=Http.NO)
+            raise
+        # Ending the transaction closes its cursor, including after a skipped check.
+        exe.commit(http=Http.NO)
+
+    def walk_subscription(self, exe: Executor, table: Table) -> None:
+        columns = table.columns
+        projection = correctness_projection(columns)
+        self.i += 1
+        cursor = f"c{self.i}"
+        state: Counter[tuple[Any, ...]] = Counter()
+        prefetched: list[Any] | None = None
+        up_to = None
+        up_to_clause = ""
+        if SUBSCRIBE_UP_TO_ENABLED and self.rng.random() < 0.3:
+            # Bounded subscribe: no data at or past the bound may appear. The
+            # mz_now() read must not open the transaction the SUBSCRIBE has to
+            # be first in, so close it again.
+            rows = exe.execute(
+                "SELECT mz_now()::text", explainable=False, http=Http.NO, fetch=True
+            )
+            exe.commit(http=Http.NO)
+            if rows is not None:
+                up_to = int(rows[0][0]) + self.rng.randrange(1, 5000)
+                up_to_clause = f" UP TO {up_to}"
+        snapshot = self.rng.random() < 0.7
+        upsert_envelope = snapshot and self.rng.random() < 0.3
+        if not snapshot:
+            # The first FETCH fixes the portal's AS OF. Hold the write lock
+            # through that fetch to pin the starting state for SNAPSHOT=false.
+            with table.lock:
+                floor = table.version
+                states = table.current_states()
+                if len(states) == 1:
+                    exe.execute(
+                        f"DECLARE {cursor} CURSOR FOR SUBSCRIBE"
+                        f" (SELECT {projection} FROM {table})"
+                        f" WITH (PROGRESS, SNAPSHOT = false){up_to_clause}",
+                        http=Http.NO,
+                    )
+                    prefetched = exe.execute(
+                        f"FETCH ALL {cursor} WITH (timeout='10ms')",
+                        http=Http.NO,
+                        fetch=True,
+                    )
+                    state = Counter(normalize_rows(states[0], columns, tracked=True))
+                else:
+                    snapshot = True
+        if snapshot:
+            with table.lock:
+                floor = table.version
+            envelope = (
+                f" ENVELOPE UPSERT (KEY ({columns[0].name(True)}))"
+                if upsert_envelope
+                else ""
+            )
+            exe.execute(
+                f"DECLARE {cursor} CURSOR FOR SUBSCRIBE"
+                f" (SELECT {projection} FROM {table}){envelope}"
+                f" WITH (PROGRESS){up_to_clause}",
+                http=Http.NO,
+            )
+        last_ts = None
+        pending_ts = None
+        previous = None if snapshot else state.copy()
+        by_key: dict[Any, tuple[Any, ...]] = {}
+        changed_keys: set[Any] = set()
+        for i in range(self.rng.randint(2, 5)):
+            if i == 0 and not snapshot:
+                rows = prefetched
+            else:
+                rows = exe.execute(
+                    f"FETCH ALL {cursor} WITH (timeout='2s')", http=Http.NO, fetch=True
+                )
+            if rows is None:
+                # psycopg could not parse a value, give up on this stream.
+                return
+            for row in rows:
+                ts, progressed, update = row[:3]
+                if last_ts is None:
+                    assert progressed, f"SUBSCRIBE on {table} omitted initial progress"
+                    # The first progress row gives AS OF. A later timestamp
+                    # closes this snapshot even when no data rows arrived.
+                    if snapshot:
+                        pending_ts = ts
+                elif ts < last_ts:
+                    raise AssertionError(
+                        f"SUBSCRIBE on {table} moved backwards from {last_ts} to {ts}"
+                    )
+                last_ts = ts
+                if pending_ts is not None and pending_ts < ts:
+                    if upsert_envelope:
+                        state = Counter(by_key.values())
+                        changed_keys.clear()
+                    else:
+                        for key, count in state.items():
+                            assert count >= 0, (
+                                f"SUBSCRIBE on {table} produced multiplicity {count}"
+                                f" for row {key} at {pending_ts}"
+                            )
+                        state = +state
+                    matched = self.match_history(exe, table, state, floor, previous)
+                    if matched is None:
+                        return
+                    floor = matched
+                    previous = state.copy()
+                    pending_ts = None
+                if progressed:
+                    continue
+                if up_to is not None and int(ts) >= up_to:
+                    raise AssertionError(
+                        f"SUBSCRIBE UP TO {up_to} on {table} emitted data at {ts}"
+                    )
+                pending_ts = ts
+                values = tuple(
+                    normalize_value(v, col.data_type)
+                    for v, col in zip(row[3:], columns)
+                )
+                if upsert_envelope:
+                    key = values[0]
+                    if key in changed_keys:
+                        raise AssertionError(
+                            f"SUBSCRIBE ENVELOPE UPSERT on {table} emitted"
+                            f" two events for key {key} at {ts}"
+                        )
+                    changed_keys.add(key)
+                    if update == "upsert":
+                        by_key[key] = values
+                    elif update == "delete":
+                        if key not in by_key:
+                            raise AssertionError(
+                                f"SUBSCRIBE ENVELOPE UPSERT on {table}"
+                                f" deleted absent key {key} at {ts}"
+                            )
+                        del by_key[key]
+                    else:
+                        raise AssertionError(
+                            f"SUBSCRIBE ENVELOPE UPSERT on {table}"
+                            f" reported {update} at {ts}: {row}"
+                        )
+                else:
+                    state[values] += int(update)
+
     def run(self, exe: Executor) -> bool:
+        if correctness():
+            self.run_subscribe_verify(exe)
+            return True
         self.i += 1
         # Unsupported via this API
         # See https://github.com/MaterializeInc/database-issues/issues/6159
@@ -887,6 +1137,460 @@ class SelectOneAction(Action):
         return True
 
 
+# Range element types Materialize treats as discrete: on storage it rewrites the
+# bounds to inclusive-lower/exclusive-upper "[)" form and shifts the endpoints by
+# one step. Continuous types keep the bounds as written. daterange and tsrange
+# have identical generated strings, so canonicalizing needs the column type.
+_DISCRETE_RANGE_TYPES = (DateRange, Int4Range, Int8Range)
+_RANGE_TYPES = _DISCRETE_RANGE_TYPES + (NumRange, TsRange, TsTzRange)
+
+
+def _range_endpoint_key(value: Any) -> Any:
+    """Format a range endpoint so a value read back from Materialize (a typed
+    Python object) and the same value parsed from the generated string compare
+    equal."""
+    if value is None:
+        return None
+    if isinstance(value, datetime.datetime):
+        # tstzrange comes back tz-aware; the generators only use midnight and the
+        # session runs in UTC, so dropping the zone keeps both sides equal.
+        return value.replace(tzinfo=None).isoformat()
+    if isinstance(value, datetime.date):
+        return value.isoformat()
+    if isinstance(value, decimal.Decimal):
+        # Materialize strips trailing zeros from numrange endpoints (491688.0
+        # reads back as 491688), so normalize before formatting to compare equal.
+        return format(value.normalize(), "f")
+    return str(value)
+
+
+def _parse_range_endpoint(raw: str, data_type: type[DataType]) -> Any:
+    if raw == "":
+        return None
+    if data_type is DateRange:
+        year, month, day = (int(p) for p in raw.split("-"))
+        return datetime.date(year, month, day)
+    if data_type in (TsRange, TsTzRange):
+        year, month, day = (int(p) for p in raw.split("-"))
+        # Range comparisons discard time zones in _range_endpoint_key.
+        return datetime.datetime(year, month, day)  # noqa: DTZ001
+    if data_type in (Int4Range, Int8Range):
+        return int(raw)
+    return decimal.Decimal(raw)
+
+
+def canonicalize_range(value: Any, data_type: type[DataType]) -> Any:
+    """Reduce a range to a comparable tuple. Materialize returns ranges as psycopg
+    Range objects (already canonicalized), while the generator tracks them as the
+    string it inserted, so replicate Materialize's discrete-type canonicalization
+    on the tracked string."""
+    if isinstance(value, Range):
+        if value.isempty:
+            return ("range", "empty")
+        lower, upper = value.lower, value.upper
+        lower_inc, upper_inc = value.lower_inc, value.upper_inc
+    else:
+        # Tracked as a string, e.g. "(1000-6-24,1037-2-8]" or "(,)".
+        lower_inc = value.startswith("[")
+        upper_inc = value.endswith("]")
+        lower_raw, _, upper_raw = value[1:-1].partition(",")
+        lower = _parse_range_endpoint(lower_raw.strip(), data_type)
+        upper = _parse_range_endpoint(upper_raw.strip(), data_type)
+        if data_type in _DISCRETE_RANGE_TYPES:
+            step = datetime.timedelta(days=1) if data_type is DateRange else 1
+            if lower is not None and not lower_inc:
+                lower += step
+                lower_inc = True
+            if upper is not None and upper_inc:
+                upper += step
+                upper_inc = False
+            if lower is not None and lower == upper and lower_inc and not upper_inc:
+                return ("range", "empty")
+    if lower is None:
+        lower_inc = False
+    if upper is None:
+        upper_inc = False
+    return (
+        "range",
+        _range_endpoint_key(lower),
+        _range_endpoint_key(upper),
+        lower_inc,
+        upper_inc,
+    )
+
+
+_TEMPORAL_TYPES = (Date, Time, Timestamp, TimestampTz, MzTimestamp, Interval)
+
+
+def _days_from_civil(year: int, month: int, day: int) -> int:
+    """Days since 1970-01-01 in the proleptic Gregorian calendar, for any year.
+    datetime only covers years 1..9999, but the generators go far higher."""
+    year -= month <= 2
+    era = (year if year >= 0 else year - 399) // 400
+    yoe = year - era * 400
+    doy = (153 * (month + (-3 if month > 2 else 9)) + 2) // 5 + day - 1
+    doe = yoe * 365 + yoe // 4 - yoe // 100 + doy
+    return era * 146097 + doe - 719468
+
+
+def canonicalize_temporal(value: Any, data_type: type[DataType]) -> Any:
+    """Reduce a temporal value to a comparable tuple. Materialize returns these as
+    typed Python objects (or, for mz_timestamp, the epoch-millis digit string),
+    while the generator tracks the string it inserted, so parse both to integer
+    components. The generators use unpadded fractional seconds and years beyond
+    what datetime can hold, hence the manual parsing."""
+    if data_type is Interval:
+        # Read back via ::text (psycopg's timedelta cannot hold months and
+        # overflows), which round-trips losslessly. Both Materialize's text and
+        # the generated string parse to the same (months, days, microseconds).
+        months = days = micros = 0
+        tokens = str(value).split()
+        i = 0
+        while i < len(tokens):
+            token = tokens[i]
+            if ":" in token:
+                # HH:MM:SS[.ffffff] time part; the hours field may be huge.
+                negative = token.startswith("-")
+                hours, minutes, secs = token.lstrip("-").split(":")
+                sec, _, frac = secs.partition(".")
+                part = (int(hours) * 3600 + int(minutes) * 60 + int(sec)) * 1_000_000
+                part += int((frac + "000000")[:6]) if frac else 0
+                micros += -part if negative else part
+                i += 1
+            else:
+                amount = int(token)
+                unit = tokens[i + 1].lower().rstrip("s")
+                if unit == "year":
+                    months += amount * 12
+                elif unit in ("mon", "month"):
+                    months += amount
+                elif unit == "day":
+                    days += amount
+                elif unit == "hour":
+                    micros += amount * 3_600_000_000
+                elif unit == "minute":
+                    micros += amount * 60_000_000
+                elif unit == "second":
+                    micros += amount * 1_000_000
+                i += 2
+        return ("interval", months, days, micros)
+    if data_type is Time:
+        if isinstance(value, datetime.time):
+            return ("time", value.hour, value.minute, value.second, value.microsecond)
+        hour, minute, rest = str(value).split(":")
+        second, _, frac = rest.partition(".")
+        micros = int((frac + "000000")[:6]) if frac else 0
+        return ("time", int(hour), int(minute), int(second), micros)
+    if data_type is MzTimestamp:
+        text = str(value)
+        if "-" in text:
+            # Tracked as a "Y-M-D" date, stored as epoch millis at midnight UTC.
+            year, month, day = (int(p) for p in text.split("-"))
+            return ("mzts", _days_from_civil(year, month, day) * 86400000)
+        # Read back as the epoch-millis value.
+        return ("mzts", int(text))
+    # Date, Timestamp, TimestampTz.
+    if isinstance(value, datetime.datetime):
+        return (
+            "ts",
+            value.year,
+            value.month,
+            value.day,
+            value.hour,
+            value.minute,
+            value.second,
+            value.microsecond,
+        )
+    if isinstance(value, datetime.date):
+        return ("ts", value.year, value.month, value.day, 0, 0, 0, 0)
+    # Strings: tracked values are date-only "Y-M-D" (the generators only emit
+    # midnight), read-back values come in as ::text (psycopg cannot represent
+    # years past 9999) in the form "Y-M-D[ H:M:S[.f]][+00]".
+    text = str(value)
+    date_part, _, time_part = text.partition(" ")
+    year, month, day = (int(p) for p in date_part.split("-"))
+    hour = minute = second = micros = 0
+    if time_part:
+        # The session runs in UTC, so a timestamptz offset is always "+00".
+        time_part = time_part.split("+")[0]
+        hour_str, minute_str, rest = time_part.split(":")
+        sec_str, _, frac = rest.partition(".")
+        hour, minute, second = int(hour_str), int(minute_str), int(sec_str)
+        micros = int((frac + "000000")[:6]) if frac else 0
+    return ("ts", year, month, day, hour, minute, second, micros)
+
+
+def _row_sort_key(row: Any) -> Any:
+    """Order rows for the correctness comparison. A nullable column mixes None
+    (NULL) with strings/ints/tuples, which Python cannot order directly, so key
+    on (is-null, str) per element. The equality check runs on the real tuples,
+    so this only affects ordering, not what compares equal."""
+    return [(v is None, str(v)) for v in row]
+
+
+# Types read back as ::text in correctness mode: psycopg cannot represent
+# their full value range (years past 9999, intervals with months), while
+# Materialize's text form round-trips losslessly.
+_TEXT_READBACK_TYPES = (Interval, Date, Timestamp, TimestampTz)
+
+
+def correctness_projection(columns: list[Column]) -> str:
+    return ", ".join(
+        (
+            f"{col.name(True)}::text"
+            if col.data_type in _TEXT_READBACK_TYPES
+            else col.name(True)
+        )
+        for col in columns
+    )
+
+
+def correctness_projection_aliased(columns: list[Column], alias: str) -> str:
+    """Like correctness_projection, but with every column qualified by a table
+    alias, for queries where the table appears more than once."""
+    return ", ".join(
+        (
+            f"{alias}.{col.name(True)}::text"
+            if col.data_type in _TEXT_READBACK_TYPES
+            else f"{alias}.{col.name(True)}"
+        )
+        for col in columns
+    )
+
+
+def _canon_cell(value: Any) -> Any:
+    """Make a normalized value hashable and canonical under SQL equality:
+    NaNs group together and -0.0 equals 0.0 in SQL grouping/set semantics,
+    while Python's float breaks both (NaN != NaN, repr(-0.0) != repr(0.0))."""
+    if isinstance(value, float):
+        if math.isnan(value):
+            return "NaN"
+        if value == 0:
+            return 0.0
+    if isinstance(value, tuple):
+        return tuple(_canon_cell(v) for v in value)
+    return value
+
+
+def _canon_row(row: Any, columns: list[Column]) -> tuple[Any, ...]:
+    return tuple(
+        _canon_cell(normalize_value(v, col.data_type)) for v, col in zip(row, columns)
+    )
+
+
+def match_window_keys(
+    exe: Executor, table: Table, actual: "Counter[int]", lo: int, what: str
+) -> None:
+    """Window oracle over the key column only: the key multiset read by a
+    separate statement (its own timestamp) must equal the keys of one tracked
+    state committed between `lo` and the version sampled here. Sound for the
+    same reason as verify_table's window: writers hold table.lock across
+    statement and tracking, and the read ran under STRICT SERIALIZABLE."""
+    with table.lock:
+        hi = table.version
+        evicted = table.history[0][0] > lo
+        window = [
+            (version, states)
+            for version, states in table.history
+            if lo <= version <= hi
+        ]
+    if evicted:
+        exe.log(f"{what} on {table}: history evicted during read, skipping check")
+        return
+    for _version, states in window:
+        for state in states:
+            if Counter(row[0] for row in state) == actual:
+                return
+    versions = [version for version, _ in window]
+    raise AssertionError(
+        f"{what} on {table}: key multiset matches no tracked state of versions"
+        f" {versions}: got {sorted(actual.elements())}, newest tracked"
+        f" {sorted(row[0] for row in window[-1][1][-1])}"
+    )
+
+
+def _json_key(value: Any) -> Any:
+    if isinstance(value, dict):
+        return ("object", tuple(sorted((k, _json_key(v)) for k, v in value.items())))
+    if isinstance(value, list):
+        return ("array", tuple(_json_key(v) for v in value))
+    if isinstance(value, bool):
+        # Python booleans compare equal to the integers 0 and 1.
+        return ("boolean", value)
+    return value
+
+
+def normalize_value(value: Any, data_type: Any = None, *, tracked: bool = False) -> Any:
+    if value is None:
+        return None
+    if data_type is Jsonb:
+        # The generator stores serialized JSON. Psycopg already decoded the
+        # document, so a string received from it is itself a JSON string.
+        return _json_key(json.loads(value) if tracked else value)
+    if data_type is not None and data_type in _RANGE_TYPES:
+        return canonicalize_range(value, data_type)
+    if data_type is not None and data_type in _TEMPORAL_TYPES:
+        return canonicalize_temporal(value, data_type)
+    if isinstance(value, bytes):
+        # bytea comes back as bytes but is tracked as the text string.
+        return value.decode("utf-8", "replace")
+    if isinstance(value, uuid.UUID):
+        # uuid comes back as a UUID object but is tracked as its
+        # canonical string (the generator also emits UUID objects).
+        return str(value)
+    if isinstance(value, decimal.Decimal) or isinstance(value, float):
+        if data_type is Float:
+            # float4/real is lossy: Materialize stores 32 bits and reads back
+            # the shortest round-tripping decimal, while the tracked value is
+            # the generator's double. Collapse both sides to the same float4,
+            # which then compares exactly.
+            return struct.unpack("f", struct.pack("f", float(value)))[0]
+        if data_type is Double:
+            # float8 round-trips exactly: the INSERT sends repr() of the
+            # tracked double and the read-back parses to the same double.
+            return float(value)
+        # numeric: compare at full precision. The tracked value is a Python
+        # float whose str() is exactly what the INSERT sent, the read-back is
+        # a Decimal of Materialize's text output.
+        dec = (
+            value if isinstance(value, decimal.Decimal) else decimal.Decimal(str(value))
+        )
+        if data_type is Numeric383:
+            # numeric(38,3) rounds to 3 decimals on storage (half up, as
+            # Materialize does), so round the tracked value the same way.
+            dec = dec.quantize(decimal.Decimal("0.001"), rounding=decimal.ROUND_HALF_UP)
+        if dec == 0:
+            # Avoid Decimal("-0") comparing unequal to Decimal("0") in the
+            # formatted output.
+            return "0"
+        # normalize() strips trailing zeros, which Materialize's text output
+        # also does. Format without exponent so equal values format equally.
+        return format(dec.normalize(), "f")
+    if isinstance(value, datetime.date) or type(value) == int:
+        return str(value)
+    if isinstance(value, datetime.time):
+        return value.strftime("%H:%M:%S")
+    if isinstance(value, datetime.datetime):
+        return value.strftime("%Y-%m-%d %H:%M:%S")
+    if isinstance(value, list):
+        # Array. Element order is significant, so preserve it.
+        return tuple(normalize_value(v) for v in value)
+    if data_type in (IntArray, IntList, TextTextMap) and isinstance(value, str):
+        inner = value[1:-1].strip()
+        if not inner:
+            return ()
+        if data_type is TextTextMap:
+            # map[text=>text], "{k => v, ...}" as tracked or "{k=>v,...}"
+            # as read back. Unordered, so sort by key.
+            pairs = []
+            for item in inner.split(","):
+                key, _, val = item.partition("=>")
+                pairs.append((key.strip(), normalize_value(val.strip())))
+            return tuple(sorted(pairs))
+        # Array/list tracked as "{elem, ...}". Preserve order.
+        return tuple(normalize_value(v.strip()) for v in inner.split(","))
+    return value
+
+
+def normalize_rows(
+    rows: list[Any], columns: list[Column], *, tracked: bool = False
+) -> list[tuple[Any, ...]]:
+    """Bring query results or tracked rows into a canonical, comparable form."""
+    return sorted(
+        (
+            tuple(
+                normalize_value(v, col.data_type, tracked=tracked)
+                for v, col in zip(row, columns)
+            )
+            for row in rows
+        ),
+        key=_row_sort_key,
+    )
+
+
+# Errors after which a write has definitely not been applied, so the tracked
+# state must not fork into an "applied" candidate. Anything else failing in
+# the phase where the server may already have committed (the commit itself,
+# or the statement on an autocommit connection) leaves the outcome unknown.
+_WRITE_DEFINITELY_FAILED = [
+    "does not exist",
+    "unknown catalog item",
+    "unknown schema",
+    "unknown database",
+    # FlipFlagsAction poisons sessions with SET cluster = dont_exist.
+    "unknown cluster",
+    "cannot write in read-only mode",
+    "500: internal storage failure! ReadOnly",
+    "violates not-null constraint",
+    # Evaluation errors abort the transaction, sometimes only at COMMIT.
+    "out of range",
+    "invalid input syntax",
+    "division by zero",
+    "numeric field overflow",
+    "is only defined for finite arguments",
+    "permission denied for",
+    "must be owner of",
+]
+
+
+def _write_definitely_failed(e: QueryError) -> bool:
+    return any(f in e.msg for f in _WRITE_DEFINITELY_FAILED)
+
+
+def key_predicate(
+    rng: random.Random, table: Table
+) -> tuple[str, Callable[[int], bool]]:
+    """A random predicate over the harness-managed key column, as SQL and as
+    an equivalent Python function to replay it against the tracked states.
+    Caller must hold table.lock, this samples the currently tracked keys."""
+    key = table.columns[0].name(True)
+    kind = rng.randrange(3)
+    if kind == 0:
+        modulus = rng.randint(1, 5)
+        rest = rng.randrange(modulus)
+        return f"{key} % {modulus} = {rest}", lambda k: k % modulus == rest
+    if kind == 1:
+        existing = [row[0] for row in table.current_states()[0]]
+        chosen = set(rng.sample(existing, min(len(existing), rng.randint(1, 5))))
+        # Also target a key that may not exist (yet).
+        chosen.add(table.next_key + rng.randrange(5))
+        keys = ", ".join(str(k) for k in sorted(chosen))
+        return f"{key} IN ({keys})", lambda k: k in chosen
+    lower = rng.randrange(max(table.next_key, 1))
+    upper = lower + rng.randrange(11)
+    return f"{key} BETWEEN {lower} AND {upper}", lambda k: lower <= k <= upper
+
+
+def run_tracked_write(
+    exe: Executor,
+    table: Table,
+    transform: Callable[[list[list[Any]]], list[list[Any]]],
+    run_write: Callable[[], Any],
+) -> bool:
+    """Submit and track one mutation under the table lock."""
+    if table.pending_writer is not None:
+        return False
+    writer = exe.register_writer()
+    if writer is None:
+        return False
+    could_have_committed = exe.autocommit
+    try:
+        run_write()
+        if not exe.autocommit:
+            could_have_committed = True
+            exe.commit(http=Http.NO)
+    except QueryError as e:
+        if could_have_committed and not _write_definitely_failed(e):
+            table.commit_write(transform, pending_writer=writer)
+            # The worker closes this session on reconnect. Until it is gone
+            # the server can still apply the write after a successful read.
+            exe.reconnect_next = True
+            exe.log(f"ambiguous write on {table} from session {writer.id}: {e.msg}")
+        raise
+    table.commit_write(transform)
+    return True
+
+
 class SelectAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         result = super().errors_to_ignore(exe)
@@ -905,27 +1609,823 @@ class SelectAction(Action):
             )
         return result
 
-    def run(self, exe: Executor) -> bool:
-        query = self.generate_select_query(exe, ExprKind.ALL)
-        rtr = self.rng.choice([True, False])
-        if rtr:
-            exe.execute("SET REAL_TIME_RECENCY TO TRUE", explainable=False)
-        # The SET only applies to the pg session, so the RTR query has to run
-        # there too (http=Http.NO). If the query fails, the staged SET is
-        # discarded along with the worker's subsequent rollback, so no reset
-        # is needed on the error path.
-        if self.rng.choice([True, False]):
-            self.stmt_id += 1
-            self.exe_prepared(query, f"select{self.stmt_id}", exe)
+    def verify_table(
+        self, exe: Executor, table: Table, quiesced: bool, serializable: bool = False
+    ) -> list[Any] | None:
+        """Verify the table and its shadows and return the base rows for this snapshot.
+
+        A strict read must match a version between the two samples. Writers
+        hold the table lock through commit and publication, so the first sample
+        includes all earlier commits and the second waits for any write the
+        read could observe. A SERIALIZABLE read may match an earlier version.
+
+        To resolve an uncertain write, the caller must fence its session and
+        hold the table lock through a strict read with `quiesced=True`.
+        """
+        columns = table.columns
+        projection = correctness_projection(columns)
+        if quiesced:
+            lo = table.version
         else:
-            exe.execute(
-                query,
-                explainable=True,
-                http=Http.NO if rtr else Http.RANDOM,
+            with table.lock:
+                lo = table.version
+
+        # All reads run in one transaction, so they share a timestamp: the
+        # shadow objects must agree with the table exactly, no matter what
+        # commits concurrently. The table read is served from the default
+        # index on the quickstart cluster or from persist depending on the
+        # session's cluster, the view reads exercise dataflow-maintained
+        # persist shards.
+        table_rows = exe.execute(
+            f"SELECT {projection} FROM {table}",
+            explainable=False,
+            http=Http.NO,
+            fetch=True,
+        )
+        mv_rows = cnt_rows = nokey_rows = agg_rows = view_rows = refresh_rows = None
+        if not table.temp:
+            # Temp tables have no shadow objects, materialized views cannot
+            # depend on temporary items.
+            mv_rows = exe.execute(
+                f"SELECT {projection} FROM {table.shadow_mv()}",
+                explainable=False,
+                http=Http.NO,
                 fetch=True,
             )
-        if rtr:
-            exe.execute("SET REAL_TIME_RECENCY TO FALSE", explainable=False)
+            cnt_rows = exe.execute(
+                f"SELECT cnt FROM {table.shadow_cnt_mv()}",
+                explainable=False,
+                http=Http.NO,
+                fetch=True,
+            )
+            nokey_rows = exe.execute(
+                f"SELECT {correctness_projection(columns[1:])} FROM {table.shadow_nokey_mv()}",
+                explainable=False,
+                http=Http.NO,
+                fetch=True,
+            )
+            agg_rows = exe.execute(
+                f"SELECT cnt, mn, mx, sm FROM {table.shadow_agg_mv()}",
+                explainable=False,
+                http=Http.NO,
+                fetch=True,
+            )
+            view_rows = exe.execute(
+                f"SELECT {projection} FROM {table.shadow_view()}",
+                explainable=False,
+                http=Http.NO,
+                fetch=True,
+            )
+            refresh_rows = exe.execute(
+                f"SELECT {projection} FROM {table.shadow_refresh_mv()}",
+                explainable=False,
+                http=Http.NO,
+                fetch=True,
+            )
+
+        if quiesced:
+            window = [table.history[-1]]
+            evicted = False
+        else:
+            with table.lock:
+                hi = table.version
+                min_version = 0 if serializable else lo
+                evicted = table.history[0][0] > min_version
+                window = [
+                    (version, states)
+                    for version, states in table.history
+                    if min_version <= version <= hi
+                ]
+
+        if table_rows is None:
+            # execute returns None when psycopg cannot parse a value in the
+            # result. Materialize stored it fine, the client just cannot
+            # represent it, so skip the comparison rather than fail on a
+            # client-side limitation.
+            return None
+        actual = normalize_rows(table_rows, columns)
+
+        matched_state = None
+        for version, states in reversed(window):
+            for state in states:
+                if normalize_rows(state, columns, tracked=True) == actual:
+                    matched_state = state
+                    break
+            if matched_state is not None:
+                break
+        if matched_state is None and evicted:
+            # Eviction can hide the version the base read observed. The other
+            # reads still share its snapshot.
+            exe.log(f"{table} matches no retained state, read window incomplete")
+        elif matched_state is None:
+            newest = normalize_rows(window[-1][1][-1], columns, tracked=True)
+            diff = DeepDiff(
+                actual,
+                newest,
+                ignore_order=False,  # already sorted, so keep order stable
+                verbose_level=2,  # shows where inside the object things differ
+            )
+            versions = [version for version, _ in window]
+            raise AssertionError(
+                f"{table} matches none of the tracked states of versions"
+                f" {versions}, diff against the newest one:\n{diff.pretty()}"
+            )
+
+        if mv_rows is not None:
+            actual_mv = normalize_rows(mv_rows, columns)
+            if actual_mv != actual:
+                diff = DeepDiff(actual_mv, actual, ignore_order=False, verbose_level=2)
+                raise AssertionError(
+                    f"{table.shadow_mv()} disagrees with {table} at the same"
+                    f" timestamp:\n{diff.pretty()}"
+                )
+        if cnt_rows is not None:
+            assert len(cnt_rows) == 1 and cnt_rows[0][0] == len(
+                table_rows
+            ), f"{table.shadow_cnt_mv()} returned {cnt_rows}, expected {len(table_rows)} for {table} at the same timestamp"
+        if nokey_rows is not None:
+            actual_nokey = normalize_rows(nokey_rows, columns[1:])
+            expected_nokey = normalize_rows(
+                [row[1:] for row in table_rows], columns[1:]
+            )
+            if actual_nokey != expected_nokey:
+                diff = DeepDiff(
+                    actual_nokey, expected_nokey, ignore_order=False, verbose_level=2
+                )
+                raise AssertionError(
+                    f"{table.shadow_nokey_mv()} disagrees with {table} at the"
+                    f" same timestamp:\n{diff.pretty()}"
+                )
+        if agg_rows is not None:
+            # The reduce operator's output must match the aggregates computed
+            # directly from the table read at the same timestamp. The key is a
+            # unique bigint, so these are exact. sum(bigint) comes back as
+            # numeric (Decimal), the rest as bigint; empty table yields NULLs.
+            keys = [r[0] for r in table_rows]
+            expected_agg = (
+                len(keys),
+                min(keys) if keys else None,
+                max(keys) if keys else None,
+                sum(keys) if keys else None,
+            )
+            assert len(agg_rows) == 1
+            a_cnt, a_mn, a_mx, a_sm = agg_rows[0]
+            actual_agg = (a_cnt, a_mn, a_mx, int(a_sm) if a_sm is not None else None)
+            assert actual_agg == expected_agg, (
+                f"{table.shadow_agg_mv()} returned {actual_agg}, expected"
+                f" {expected_agg} for {table} at the same timestamp"
+            )
+        if view_rows is not None:
+            actual_view = normalize_rows(view_rows, columns)
+            if actual_view != actual:
+                diff = DeepDiff(
+                    actual_view, actual, ignore_order=False, verbose_level=2
+                )
+                raise AssertionError(
+                    f"{table.shadow_view()} disagrees with {table} at the same"
+                    f" timestamp:\n{diff.pretty()}"
+                )
+        if refresh_rows is not None:
+            # The REFRESH EVERY view serves the table as of its last refresh
+            # tick, which must be SOME committed state: match against the
+            # whole retained history. No match only proves a bug while the
+            # history is complete, the refresh may lag behind eviction.
+            actual_refresh = normalize_rows(refresh_rows, columns)
+            if quiesced:
+                full_history = list(table.history)
+            else:
+                with table.lock:
+                    full_history = list(table.history)
+            matched_refresh = any(
+                normalize_rows(state, columns, tracked=True) == actual_refresh
+                for _version, states in full_history
+                for state in states
+            )
+            if not matched_refresh:
+                if full_history[0][0] > 0:
+                    exe.log(
+                        f"{table.shadow_refresh_mv()} matches no retained"
+                        " state, history incomplete, skipping check"
+                    )
+                else:
+                    diff = DeepDiff(
+                        actual_refresh,
+                        normalize_rows(full_history[-1][1][-1], columns, tracked=True),
+                        ignore_order=False,
+                        verbose_level=2,
+                    )
+                    raise AssertionError(
+                        f"{table.shadow_refresh_mv()} matches no committed"
+                        f" state of {table} (versions"
+                        f" {[v for v, _ in full_history]}), diff against the"
+                        f" newest one:\n{diff.pretty()}"
+                    )
+
+        if quiesced:
+            assert matched_state is not None
+            table.collapse_to(matched_state)
+        return table_rows
+
+    def verify_tlp(self, exe: Executor, table: Table) -> None:
+        """Ternary-logic partitioning oracle. For any predicate `p`, every row
+        of the table falls in exactly one of `p` TRUE, `p` FALSE, `p` NULL, so
+        those three filtered reads must together reconstruct the unfiltered
+        read. All four run in one transaction (STRICT SERIALIZABLE), so they
+        share a timestamp and the comparison holds regardless of concurrent
+        writes. No tracked model is consulted, so this checks the filter and
+        index-lookup paths directly.
+
+        `p` is an arbitrary generated boolean expression: if it errors at
+        runtime it errors identically in all three filtered reads (the worker
+        tolerates the error via errors_to_ignore), so a partial partition can
+        never be observed."""
+        columns = table.columns
+        projection = correctness_projection(columns)
+        pred = expression(Boolean, columns, self.rng, kind=ExprKind.ALL)
+
+        def read(where: str) -> list[tuple[Any, ...]] | None:
+            rows = exe.execute(
+                f"SELECT {projection} FROM {table} WHERE {where}",
+                explainable=False,
+                http=Http.NO,
+                fetch=True,
+            )
+            if rows is None:
+                return None
+            return [
+                tuple(normalize_value(v, col.data_type) for v, col in zip(r, columns))
+                for r in rows
+            ]
+
+        whole = read("true")
+        part_true = read(f"({pred}) = true")
+        part_false = read(f"({pred}) = false")
+        part_null = read(f"({pred}) IS NULL")
+        if any(part is None for part in (whole, part_true, part_false, part_null)):
+            # A value the client cannot parse; skip rather than fail on a
+            # client-side limitation.
+            return
+        assert whole is not None
+        partitioned = Counter(part_true) + Counter(part_false) + Counter(part_null)
+        if partitioned != Counter(whole):
+            diff = DeepDiff(
+                sorted(partitioned.elements(), key=_row_sort_key),
+                sorted(whole, key=_row_sort_key),
+                ignore_order=False,
+                verbose_level=2,
+            )
+            raise AssertionError(
+                f"TLP mismatch on {table}: partitions of predicate `{pred}`"
+                f" do not reconstruct the table.\n{diff.pretty()}"
+            )
+
+    def verify_query_surface(
+        self, exe: Executor, table: Table, table_rows: list[Any]
+    ) -> None:
+        """Same-timestamp differential oracles over the SQL query surface.
+
+        `table_rows` is the raw base read of `table` from the still-open
+        transaction, so every derived query here shares its timestamp and must
+        agree with a Python evaluation over the base read, no matter what
+        commits concurrently. Each call runs a small random sample of the
+        oracles to bound the transaction's lifetime."""
+        columns = table.columns
+        projection = correctness_projection(columns)
+        key = columns[0].name(True)
+        keys = [row[0] for row in table_rows]
+        keyset = set(keys)
+        # The harness assigns unique keys, but stay sound if that ever
+        # changes: order/join/window oracles need a total order.
+        unique_keys = len(keys) == len(keyset)
+        base = Counter(_canon_row(row, columns) for row in table_rows)
+
+        def read_ms(
+            query: str, cols: list[Column]
+        ) -> "Counter[tuple[Any, ...]] | None":
+            rows = exe.execute(query, explainable=False, http=Http.NO, fetch=True)
+            if rows is None:
+                return None
+            return Counter(_canon_row(row, cols) for row in rows)
+
+        def check_ms(
+            what: str,
+            query: str,
+            expected: "Counter[tuple[Any, ...]]",
+            cols: list[Column] = columns,
+        ) -> None:
+            actual = read_ms(query, cols)
+            if actual is None:
+                return
+            if actual != expected:
+                diff = DeepDiff(
+                    sorted(actual.elements(), key=_row_sort_key),
+                    sorted(expected.elements(), key=_row_sort_key),
+                    ignore_order=False,
+                    verbose_level=2,
+                )
+                raise AssertionError(
+                    f"{what} oracle mismatch on {table} for `{query}`,"
+                    f" diff against expected:\n{diff.pretty()}"
+                )
+
+        def oracle_order_limit() -> None:
+            desc = self.rng.choice([True, False])
+            limit = self.rng.randint(0, len(table_rows) + 2)
+            offset = self.rng.randint(0, 3)
+            query = (
+                f"SELECT {projection} FROM {table} ORDER BY {key}"
+                f"{' DESC' if desc else ' ASC'} LIMIT {limit} OFFSET {offset}"
+            )
+            rows = exe.execute(query, explainable=False, http=Http.NO, fetch=True)
+            if rows is None:
+                return
+            actual = [_canon_row(row, columns) for row in rows]
+            ordered = sorted(table_rows, key=lambda row: row[0], reverse=desc)
+            expected = [
+                _canon_row(row, columns) for row in ordered[offset : offset + limit]
+            ]
+            if actual != expected:
+                raise AssertionError(
+                    f"ORDER BY/LIMIT oracle mismatch on {table} for `{query}`:"
+                    f"\ngot      {actual}\nexpected {expected}"
+                )
+
+        def oracle_distinct() -> None:
+            value_columns = columns[1:]
+            query = (
+                f"SELECT DISTINCT {correctness_projection(value_columns)}"
+                f" FROM {table}"
+            )
+            rows = exe.execute(query, explainable=False, http=Http.NO, fetch=True)
+            if rows is None:
+                return
+            actual = [_canon_row(row, value_columns) for row in rows]
+            actual_set = set(actual)
+            if len(actual) != len(actual_set):
+                raise AssertionError(
+                    f"DISTINCT oracle on {table}: `{query}` returned"
+                    f" duplicate rows: {sorted(actual, key=_row_sort_key)}"
+                )
+            expected_set = {_canon_row(row[1:], value_columns) for row in table_rows}
+            if actual_set != expected_set:
+                raise AssertionError(
+                    f"DISTINCT oracle mismatch on {table} for `{query}`:"
+                    f"\ngot      {sorted(actual_set, key=_row_sort_key)}"
+                    f"\nexpected {sorted(expected_set, key=_row_sort_key)}"
+                )
+
+        def oracle_group_by() -> None:
+            col_index = self.rng.randrange(1, len(columns))
+            col = columns[col_index]
+            colref = (
+                f"{col.name(True)}::text"
+                if col.data_type in _TEXT_READBACK_TYPES
+                else col.name(True)
+            )
+            having = self.rng.random() < 0.3
+            query = (
+                f"SELECT {colref}, count(*), min({key}), max({key}),"
+                f" sum({key}) FROM {table} GROUP BY 1"
+            )
+            if having:
+                query += " HAVING count(*) >= 2"
+            if self.rng.random() < 0.3:
+                # Hints must never change results.
+                size = self.rng.choice([1, 16, 256])
+                query += f" OPTIONS (AGGREGATE INPUT GROUP SIZE = {size})"
+            rows = exe.execute(query, explainable=False, http=Http.NO, fetch=True)
+            if rows is None:
+                return
+            groups: dict[Any, list[int]] = {}
+            for row in table_rows:
+                group = _canon_cell(normalize_value(row[col_index], col.data_type))
+                groups.setdefault(group, []).append(row[0])
+            expected = {
+                group: (len(ks), min(ks), max(ks), sum(ks))
+                for group, ks in groups.items()
+                if not having or len(ks) >= 2
+            }
+            actual = {}
+            for row in rows:
+                group = _canon_cell(normalize_value(row[0], col.data_type))
+                if group in actual:
+                    raise AssertionError(
+                        f"GROUP BY oracle on {table}: `{query}` returned"
+                        f" group {group!r} twice"
+                    )
+                actual[group] = (
+                    row[1],
+                    row[2],
+                    row[3],
+                    int(row[4]) if row[4] is not None else None,
+                )
+            if actual != expected:
+                diff = DeepDiff(actual, expected, verbose_level=2)
+                raise AssertionError(
+                    f"GROUP BY oracle mismatch on {table} for `{query}`,"
+                    f" diff against expected:\n{diff.pretty()}"
+                )
+
+        def oracle_filter_agg() -> None:
+            modulus = self.rng.randint(1, 5)
+            rest = self.rng.randrange(modulus)
+            pred = f"{key} % {modulus} = {rest}"
+            query = (
+                f"SELECT count(*), count(*) FILTER (WHERE {pred}),"
+                f" sum({key}) FILTER (WHERE {pred}) FROM {table}"
+            )
+            rows = exe.execute(query, explainable=False, http=Http.NO, fetch=True)
+            if rows is None:
+                return
+            matching = [k for k in keys if k % modulus == rest]
+            expected = (
+                len(keys),
+                len(matching),
+                sum(matching) if matching else None,
+            )
+            actual = (
+                rows[0][0],
+                rows[0][1],
+                int(rows[0][2]) if rows[0][2] is not None else None,
+            )
+            if actual != expected:
+                raise AssertionError(
+                    f"FILTER aggregate oracle mismatch on {table} for"
+                    f" `{query}`: got {actual}, expected {expected}"
+                )
+
+        def oracle_self_join() -> None:
+            join = self.rng.choice(["JOIN", "LEFT JOIN", "FULL JOIN"])
+            # Every key matches exactly itself, so any join type returns the
+            # base rows (outer joins add nothing, both sides always match).
+            query = (
+                f"SELECT {correctness_projection_aliased(columns, 'a')}"
+                f" FROM {table} AS a {join} {table} AS b ON a.{key} = b.{key}"
+            )
+            check_ms("self-join", query, base)
+
+        def oracle_mult_join() -> None:
+            modulus = self.rng.randint(1, 4)
+            query = (
+                f"SELECT a.{key}, b.{key} FROM {table} AS a"
+                f" JOIN {table} AS b ON a.{key} % {modulus} = b.{key} % {modulus}"
+            )
+            rows = exe.execute(query, explainable=False, http=Http.NO, fetch=True)
+            if rows is None:
+                return
+            actual = Counter((row[0], row[1]) for row in rows)
+            expected = Counter(
+                (k1, k2) for k1 in keys for k2 in keys if k1 % modulus == k2 % modulus
+            )
+            if actual != expected:
+                raise AssertionError(
+                    f"join-multiplicity oracle mismatch on {table} for"
+                    f" `{query}`: got {sorted(actual.elements())}, expected"
+                    f" {sorted(expected.elements())}"
+                )
+
+        def oracle_cross_join_series() -> None:
+            count = self.rng.randint(1, 3)
+            query = (
+                f"SELECT {projection}, gs FROM {table},"
+                f" generate_series(1, {count}) AS gs"
+            )
+            rows = exe.execute(query, explainable=False, http=Http.NO, fetch=True)
+            if rows is None:
+                return
+            actual = Counter(_canon_row(row[:-1], columns) + (row[-1],) for row in rows)
+            expected: Counter[tuple[Any, ...]] = Counter()
+            for row in table_rows:
+                for g in range(1, count + 1):
+                    expected[_canon_row(row, columns) + (g,)] += 1
+            if actual != expected:
+                raise AssertionError(
+                    f"CROSS JOIN generate_series oracle mismatch on {table}"
+                    f" for `{query}`: got {sorted(actual.elements(), key=_row_sort_key)},"
+                    f" expected {sorted(expected.elements(), key=_row_sort_key)}"
+                )
+
+        def oracle_set_ops() -> None:
+            op = self.rng.choice(
+                [
+                    "UNION ALL",
+                    "UNION",
+                    "INTERSECT ALL",
+                    "INTERSECT",
+                    "EXCEPT ALL",
+                    "EXCEPT",
+                ]
+            )
+            query = (
+                f"(SELECT {projection} FROM {table}) {op}"
+                f" (SELECT {projection} FROM {table})"
+            )
+            if op == "UNION ALL":
+                expected = base + base
+            elif op == "INTERSECT ALL":
+                expected = base
+            elif op in ("UNION", "INTERSECT"):
+                expected = Counter(set(base))
+            else:  # EXCEPT [ALL]: self-difference is empty
+                expected = Counter()
+            check_ms(f"set-operation {op}", query, expected)
+
+        def oracle_subquery() -> None:
+            variant = self.rng.randrange(3)
+            if variant == 0:
+                query = (
+                    f"SELECT {projection} FROM {table}"
+                    f" WHERE {key} IN (SELECT {key} FROM {table})"
+                )
+            elif variant == 1:
+                query = (
+                    f"SELECT {correctness_projection_aliased(columns, 'o')}"
+                    f" FROM {table} AS o WHERE EXISTS"
+                    f" (SELECT 1 FROM {table} AS i WHERE i.{key} = o.{key})"
+                )
+            else:
+                query = (
+                    f"SELECT {projection} FROM {table} WHERE {key} NOT IN"
+                    f" (SELECT {key} FROM {table} WHERE false)"
+                )
+            check_ms("subquery", query, base)
+
+        def oracle_cte() -> None:
+            query = (
+                f"WITH cte AS (SELECT {projection} FROM {table})" f" SELECT * FROM cte"
+            )
+            check_ms("CTE identity", query, base)
+
+        def oracle_wmr() -> None:
+            # Transitive closure of key -> key + 1 starting at the minimum:
+            # walks the run of consecutive keys, forcing one fixpoint
+            # iteration per step. The Python replay is exact. On an empty
+            # table min() is NULL and the closure stays {NULL}.
+            query = (
+                f"WITH MUTUALLY RECURSIVE reach (k int8) AS ("
+                f"(SELECT min({key}) FROM {table})"
+                f" UNION (SELECT k + 1 FROM reach"
+                f" WHERE k + 1 IN (SELECT {key} FROM {table}))"
+                f") SELECT k FROM reach"
+            )
+            rows = exe.execute(query, explainable=False, http=Http.NO, fetch=True)
+            if rows is None:
+                return
+            actual = sorted((row[0] for row in rows), key=lambda k: (k is None, k))
+            if not keys:
+                expected = [None]
+            else:
+                k = min(keys)
+                chain = [k]
+                while k + 1 in keyset:
+                    k += 1
+                    chain.append(k)
+                expected = chain
+            if actual != expected:
+                raise AssertionError(
+                    f"WITH MUTUALLY RECURSIVE oracle mismatch on {table} for"
+                    f" `{query}`: got {actual}, expected {expected}"
+                )
+
+        def oracle_window_fns() -> None:
+            query = (
+                f"SELECT {key}, row_number() OVER (ORDER BY {key}),"
+                f" rank() OVER (ORDER BY {key}),"
+                f" lag({key}) OVER (ORDER BY {key}),"
+                f" lead({key}) OVER (ORDER BY {key}) FROM {table}"
+            )
+            rows = exe.execute(query, explainable=False, http=Http.NO, fetch=True)
+            if rows is None:
+                return
+            actual = sorted(tuple(row) for row in rows)
+            ordered = sorted(keys)
+            expected = sorted(
+                (
+                    k,
+                    i + 1,
+                    i + 1,
+                    ordered[i - 1] if i > 0 else None,
+                    ordered[i + 1] if i + 1 < len(ordered) else None,
+                )
+                for i, k in enumerate(ordered)
+            )
+            if actual != expected:
+                raise AssertionError(
+                    f"window-function oracle mismatch on {table} for"
+                    f" `{query}`: got {actual}, expected {expected}"
+                )
+
+        def oracle_point_lookup() -> None:
+            if keys and self.rng.random() < 0.6:
+                probe = self.rng.choice(keys)
+            else:
+                # Likely-absent key. Racy read of next_key is fine, any
+                # bigint gives a valid probe.
+                probe = table.next_key + self.rng.randrange(100)
+            if self.rng.choice([True, False]):
+                where = f"{key} = {probe}"
+                pred = lambda k: k == probe
+            else:
+                span = self.rng.randrange(5)
+                where = f"{key} BETWEEN {probe} AND {probe + span}"
+                pred = lambda k: probe <= k <= probe + span
+            query = f"SELECT {projection} FROM {table} WHERE {where}"
+            expected = Counter(
+                _canon_row(row, columns) for row in table_rows if pred(row[0])
+            )
+            check_ms("key lookup", query, expected)
+
+        def oracle_table_kw() -> None:
+            # TABLE t returns raw (uncast) values; psycopg represents raw
+            # intervals as timedelta, which the normalizer cannot compare, so
+            # skip tables with interval columns.
+            if any(col.data_type is Interval for col in columns):
+                return
+            check_ms("TABLE keyword", f"TABLE {table}", base)
+
+        def oracle_prepared_bind() -> None:
+            modulus = self.rng.randint(1, 5)
+            rest = self.rng.randrange(modulus)
+            self.stmt_id += 1
+            name = f"vq{self.stmt_id}"
+            exe.execute(
+                f"PREPARE {name} AS SELECT {projection} FROM {table}"
+                f" WHERE {key} % $1 = $2",
+                explainable=False,
+                http=Http.NO,
+            )
+            rows = exe.execute(
+                f"EXECUTE {name} ({modulus}, {rest})",
+                explainable=False,
+                http=Http.NO,
+                fetch=True,
+            )
+            exe.execute(f"DEALLOCATE {name}", explainable=False, http=Http.NO)
+            if rows is None:
+                return
+            actual = Counter(_canon_row(row, columns) for row in rows)
+            expected = Counter(
+                _canon_row(row, columns)
+                for row in table_rows
+                if row[0] % modulus == rest
+            )
+            if actual != expected:
+                raise AssertionError(
+                    f"prepared-bind oracle mismatch on {table}"
+                    f" (EXECUTE {name}({modulus}, {rest})):"
+                    f" got {sorted(actual.elements(), key=_row_sort_key)},"
+                    f" expected {sorted(expected.elements(), key=_row_sort_key)}"
+                )
+
+        def oracle_repeat_read() -> None:
+            # Reads in one transaction share a timestamp, so re-reading the
+            # table must reproduce the base read exactly (repeatable reads /
+            # no phantoms), independent of any tracking.
+            check_ms("repeatable-read", f"SELECT {projection} FROM {table}", base)
+
+        oracles: list[tuple[Callable[[], None], bool]] = [
+            (oracle_order_limit, True),
+            (oracle_distinct, False),
+            (oracle_group_by, False),
+            (oracle_filter_agg, False),
+            (oracle_self_join, True),
+            (oracle_mult_join, False),
+            (oracle_cross_join_series, False),
+            (oracle_set_ops, False),
+            (oracle_subquery, False),
+            (oracle_cte, False),
+            (oracle_wmr, False),
+            (oracle_window_fns, True),
+            (oracle_point_lookup, False),
+            (oracle_table_kw, False),
+            (oracle_prepared_bind, False),
+            (oracle_repeat_read, False),
+        ]
+        candidates = [
+            oracle
+            for oracle, needs_unique in oracles
+            if unique_keys or not needs_unique
+        ]
+        for oracle in self.rng.sample(candidates, k=min(2, len(candidates))):
+            oracle()
+
+    def verify_http_read(self, exe: Executor, table: Table) -> None:
+        """Read the key column over the HTTP SQL API (its own session and
+        timestamp) and window-check the multiset against the tracked states.
+        Covers the HTTP result path end to end."""
+        if table.temp:
+            return
+        key = table.columns[0].name(True)
+        with table.lock:
+            lo = table.version
+        query = f"SELECT {key} FROM {table};"
+        try:
+            result = requests.post(
+                f"http://{exe.db.host}:{exe.db.ports['http' if exe.mz_service == 'materialized' else 'http2']}/api/sql",
+                data=json.dumps({"query": query}),
+                headers={"content-type": "application/json"},
+                timeout=30,
+            )
+        except requests.exceptions.ReadTimeout:
+            return
+        except requests.exceptions.ConnectionError:
+            if exe.db.scenario in (
+                Scenario.Kill,
+                Scenario.BackupRestore,
+                Scenario.ZeroDowntimeDeploy,
+            ):
+                return
+            raise
+        if result.status_code != 200:
+            raise QueryError(
+                f"{result.status_code}: {result.text}", f"HTTP query: {query}"
+            )
+        payload = result.json()["results"][0]
+        if "error" in payload:
+            raise QueryError(
+                f"HTTP {payload['error']['code']}: {payload['error']['message']}",
+                query,
+            )
+        actual = Counter(int(row[0]) for row in payload["rows"])
+        match_window_keys(exe, table, actual, lo, "HTTP read")
+
+    def run(self, exe: Executor) -> bool:
+        if correctness():
+            exe.commit()
+            table = self.rng.choice(exe.db.tables)
+
+            with table.lock:
+                writer = table.pending_writer
+            quiesce = writer is not None and exe.writer_finished(writer)
+            serializable = writer is None and self.rng.random() < 0.2
+            # NOTE: real_time_recency stays off here. It only holds a read
+            # back for external sources, and a table and its shadow objects
+            # have none, so it would resolve to the minimum timestamp. Being
+            # session state, it would also outlive this action and leave every
+            # later action on this worker blocking on source ingestion, failing
+            # with an RTR timeout that only this action tolerates.
+            exe.set_isolation("SERIALIZABLE" if serializable else "STRICT SERIALIZABLE")
+            if quiesce:
+                with table.lock:
+                    # A second reader may already have resolved this writer.
+                    quiesce = table.pending_writer == writer
+                    if quiesce:
+                        table_rows = self.verify_table(exe, table, quiesced=True)
+            if not quiesce:
+                # Read without the lock so verification races the writers.
+                table_rows = self.verify_table(
+                    exe, table, quiesced=False, serializable=serializable
+                )
+                # Ternary-logic partitioning: for a random predicate, the rows
+                # where it is true, false, and null must partition the table.
+                # Independent of the tracked model and of the row contents, so
+                # it catches filter/predicate/index-lookup bugs the row
+                # comparison above cannot.
+                if self.rng.choice([True, False]):
+                    self.verify_tlp(exe, table)
+            if table_rows is not None:
+                # Still inside the read transaction: derived queries share its
+                # timestamp and must agree with the base read.
+                self.verify_query_surface(exe, table, table_rows)
+            if self.rng.random() < 0.2:
+                # Separate HTTP session, window-checked against the tracked
+                # states rather than the open transaction.
+                self.verify_http_read(exe, table)
+        else:
+            query = self.generate_select_query(exe, ExprKind.ALL)
+            rtr = self.rng.choice([True, False])
+            if rtr:
+                exe.execute("SET REAL_TIME_RECENCY TO TRUE", explainable=False)
+            try:
+                # The SET only applies to the pg session, so the RTR query has
+                # to run there too (http=Http.NO).
+                if self.rng.choice([True, False]):
+                    self.stmt_id += 1
+                    self.exe_prepared(query, f"select{self.stmt_id}", exe)
+                else:
+                    exe.execute(
+                        query,
+                        explainable=True,
+                        http=Http.NO if rtr else Http.RANDOM,
+                        fetch=True,
+                    )
+            except QueryError:
+                # A transactional session only staged the SET, the worker's
+                # rollback discards it. An autocommit session committed it
+                # right away, so it has to be reset here or real-time recency
+                # stays on for the rest of the session, leaving every later
+                # action that reads a source blocking on its ingestion and
+                # failing with an RTR timeout that only this action tolerates.
+                # The reset can itself fail, e.g. on a killed session, and must
+                # not replace the read's error, so it forces a reconnect.
+                if rtr and exe.autocommit:
+                    try:
+                        exe.execute("SET REAL_TIME_RECENCY TO FALSE", explainable=False)
+                    except QueryError:
+                        exe.reconnect_next = True
+                raise
+            if rtr:
+                exe.execute("SET REAL_TIME_RECENCY TO FALSE", explainable=False)
         return True
 
 
@@ -1066,6 +2566,12 @@ class CopyToS3Action(Action):
 
 
 class CopyFromS3Action(Action):
+    def applicable(self, exe: Executor) -> bool:
+        # Correctness mode: the S3 file is a point-in-time dump whose exact
+        # contents the tracker cannot know (COPY TO ran lock-free), so loading
+        # it back is an untrackable write. See FINDINGS.md.
+        return not correctness()
+
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         result = super().errors_to_ignore(exe)
         result.extend(
@@ -1169,19 +2675,79 @@ class InsertAction(Action):
             return False
 
         column_names = ", ".join(column.name(True) for column in table.columns)
-        column_values = []
-        for i in range(num_rows):
-            column_values.append(
-                ", ".join(column.value(self.rng, True) for column in table.columns)
-            )
-        all_column_values = ", ".join(f"({v})" for v in column_values)
-        query = f"INSERT INTO {table} ({column_names}) VALUES {all_column_values}"
-        if self.rng.choice([True, False]):
+        prepared = self.rng.choice([True, False])
+        if prepared:
             self.stmt_id += 1
-            self.exe_prepared(query, f"insert{self.stmt_id}", exe)
+        if correctness():
+            # Value columns only, the key is assigned under the lock.
+            # Sometimes repeat an earlier row of this statement, so the table
+            # holds rows that differ only in the key: projected through the
+            # nokey shadow view they become true duplicates.
+            value_rows: list[list[DataValue]] = []
+            for _ in range(num_rows):
+                if value_rows and self.rng.random() < 0.25:
+                    value_rows.append(list(self.rng.choice(value_rows)))
+                else:
+                    value_rows.append(
+                        [column.value(self.rng) for column in table.columns[1:]]
+                    )
+
+            # Sometimes split the batch over several INSERT statements in one
+            # write-only transaction. They commit atomically at one timestamp,
+            # so they are tracked as ONE version: a concurrent reader that
+            # observes a prefix of the statements fails its window check.
+            multi = (
+                not exe.autocommit and len(value_rows) >= 2 and self.rng.random() < 0.3
+            )
+            if multi:
+                prepared = False
+
+            def run_write() -> None:
+                if prepared:
+                    self.exe_prepared(queries[0], f"insert{self.stmt_id}", exe)
+                else:
+                    # Stay on the main connection so the commit inside
+                    # run_tracked_write decides the write's outcome atomically
+                    # with the tracking update. An HTTP insert commits on a
+                    # separate session.
+                    for query in queries:
+                        exe.execute(query, http=Http.NO)
+
+            with table.lock:
+                rows = []
+                for v in value_rows:
+                    rows.append([DataValue(table.next_key, str(table.next_key))] + v)
+                    table.next_key += 1
+                if multi:
+                    cut = self.rng.randint(1, len(rows) - 1)
+                    chunks = [rows[:cut], rows[cut:]]
+                else:
+                    chunks = [rows]
+                queries = [
+                    f"INSERT INTO {table} ({column_names}) VALUES "
+                    + ", ".join(f"({', '.join(c.inquery for c in v)})" for v in chunk)
+                    for chunk in chunks
+                ]
+                values = [[c.value for c in v] for v in rows]
+                applied = run_tracked_write(
+                    exe,
+                    table,
+                    lambda state: state + [list(v) for v in values],
+                    run_write,
+                )
+            if not applied:
+                return False
         else:
-            exe.execute(query, http=Http.RANDOM)
-        table.num_rows += num_rows
+            rows = []
+            for i in range(num_rows):
+                rows.append([column.value(self.rng) for column in table.columns])
+            all_rows = ", ".join(f"({', '.join([c.inquery for c in v])})" for v in rows)
+            query = f"INSERT INTO {table} ({column_names}) VALUES {all_rows}"
+            if prepared:
+                self.exe_prepared(query, f"insert{self.stmt_id}", exe)
+            else:
+                exe.execute(query, http=Http.RANDOM)
+            table.num_rows += num_rows
         exe.insert_table = table.table_id
         return True
 
@@ -1213,7 +2779,77 @@ class InsertSelectAction(Action):
             )
         return result
 
+    def run_tracked(self, exe: Executor) -> bool:
+        """Correctness mode: INSERT .. SELECT with constant value columns and
+        sequentially assigned keys. Holding both table locks makes the write
+        replayable: the source's tracked state cannot change, so the inserted
+        row count is exactly min(LIMIT, source rows)."""
+        tables = [
+            table
+            for table in exe.db.tables
+            if not table.temp or table in exe.temp_objects
+        ]
+        writable = [table for table in tables if table.num_rows < MAX_ROWS]
+        if not writable:
+            return False
+        target = self.rng.choice(writable)
+        source = self.rng.choice(tables)
+        column_names = ", ".join(column.name(True) for column in target.columns)
+        literals = [column.value(self.rng) for column in target.columns[1:]]
+        # The statement's read of the source must see exactly the tracked
+        # state, so pin linearizability (another action may have weakened the
+        # session's isolation).
+        exe.set_isolation("STRICT SERIALIZABLE")
+        # Deduplicate (self-insert) and order by table_id: every multi-lock
+        # acquisition must use the same order or two of these deadlock.
+        ordered = sorted(
+            {t.table_id: t for t in (target, source)}.values(),
+            key=lambda t: t.table_id,
+        )
+        with contextlib.ExitStack() as stack:
+            for t in ordered:
+                stack.enter_context(t.lock)
+            available = MAX_ROWS - target.num_rows
+            if available <= 0:
+                return False
+            source_states = source.current_states()
+            if len(source_states) > 1:
+                # An earlier write's outcome is unknown, so the source row
+                # count (and thus the insert) is not replayable.
+                return False
+            limit = self.rng.randint(0, min(10, available))
+            num_rows = min(limit, len(source_states[0]))
+            key_expr = f"{target.next_key} + row_number() OVER () - 1"
+            select_exprs = ", ".join(
+                [key_expr]
+                + [
+                    f"({literal.inquery})::{column.data_type.name()}"
+                    for literal, column in zip(literals, target.columns[1:])
+                ]
+            )
+            query = (
+                f"INSERT INTO {target} ({column_names})"
+                f" SELECT {select_exprs} FROM (SELECT 1 FROM {source} LIMIT {limit}) AS input"
+            )
+            new_rows = [
+                [target.next_key + i] + [literal.value for literal in literals]
+                for i in range(num_rows)
+            ]
+            target.next_key += num_rows
+
+            def run_write() -> None:
+                exe.execute(query, http=Http.NO)
+
+            return run_tracked_write(
+                exe,
+                target,
+                lambda state: state + [list(row) for row in new_rows],
+                run_write,
+            )
+
     def run(self, exe: Executor) -> bool:
+        if correctness():
+            return self.run_tracked(exe)
         # Temp tables can only be read and written by their creating session
         tables = [
             table
@@ -1313,12 +2949,37 @@ class CopyFromStdinAction(Action):
         if not num_rows:
             return False
 
-        values = []
-        for i in range(num_rows):
-            values.append([column.value(self.rng, False) for column in table.columns])
         query = f"COPY INTO {table} FROM STDIN"
-        exe.copy(query, values)
-        table.num_rows += num_rows
+        if correctness():
+            value_rows = []
+            for _ in range(num_rows):
+                if value_rows and self.rng.random() < 0.25:
+                    value_rows.append(list(self.rng.choice(value_rows)))
+                else:
+                    value_rows.append(
+                        [column.value(self.rng).value for column in table.columns[1:]]
+                    )
+            with table.lock:
+                values = []
+                for v in value_rows:
+                    values.append([table.next_key] + v)
+                    table.next_key += 1
+                applied = run_tracked_write(
+                    exe,
+                    table,
+                    lambda state: state + [list(v) for v in values],
+                    lambda: exe.copy(query, values),
+                )
+            if not applied:
+                return False
+        else:
+            values = []
+            for i in range(num_rows):
+                values.append(
+                    [column.value(self.rng).value for column in table.columns]
+                )
+            exe.copy(query, values)
+            table.num_rows += num_rows
         exe.insert_table = table.table_id
         return True
 
@@ -1371,13 +3032,6 @@ class InsertReturningAction(Action):
             return False
 
         column_names = ", ".join(column.name(True) for column in table.columns)
-        column_values = []
-        for i in range(num_rows):
-            column_values.append(
-                ", ".join(column.value(self.rng, True) for column in table.columns)
-            )
-        all_column_values = ", ".join(f"({v})" for v in column_values)
-        query = f"INSERT INTO {table} ({column_names}) VALUES {all_column_values}"
         returning_exprs = []
         if self.rng.random() < 0.5:
             returning_exprs += [
@@ -1391,14 +3045,66 @@ class InsertReturningAction(Action):
             ]
         elif self.rng.choice([True, False]):
             returning_exprs.append("*")
-        if returning_exprs:
-            query += f" RETURNING {', '.join(returning_exprs)}"
-        if self.rng.choice([True, False]):
+        returning = (
+            f" RETURNING {', '.join(returning_exprs)}" if returning_exprs else ""
+        )
+        prepared = self.rng.choice([True, False])
+        if prepared:
             self.stmt_id += 1
-            self.exe_prepared(query, f"insert_returning{self.stmt_id}", exe)
+        if correctness():
+            value_rows: list[list[DataValue]] = []
+            for _ in range(num_rows):
+                if value_rows and self.rng.random() < 0.25:
+                    value_rows.append(list(self.rng.choice(value_rows)))
+                else:
+                    value_rows.append(
+                        [column.value(self.rng) for column in table.columns[1:]]
+                    )
+
+            def run_write() -> None:
+                if prepared:
+                    self.exe_prepared(query, f"insert_returning{self.stmt_id}", exe)
+                else:
+                    # Keep the write on the main connection, as in InsertAction.
+                    exe.execute(query, http=Http.NO)
+
+            with table.lock:
+                rows = []
+                for v in value_rows:
+                    rows.append([DataValue(table.next_key, str(table.next_key))] + v)
+                    table.next_key += 1
+                all_column_values = ", ".join(
+                    f"({', '.join(c.inquery for c in v)})" for v in rows
+                )
+                query = (
+                    f"INSERT INTO {table} ({column_names})"
+                    f" VALUES {all_column_values}{returning}"
+                )
+                values = [[c.value for c in v] for v in rows]
+                applied = run_tracked_write(
+                    exe,
+                    table,
+                    lambda state: state + [list(v) for v in values],
+                    run_write,
+                )
+            if not applied:
+                return False
         else:
-            exe.execute(query, http=Http.RANDOM)
-        table.num_rows += num_rows
+            rows = []
+            for i in range(num_rows):
+                rows.append([column.value(self.rng) for column in table.columns])
+            all_column_values = ", ".join(
+                f"({', '.join(c.inquery for c in v)})" for v in rows
+            )
+            query = (
+                f"INSERT INTO {table} ({column_names})"
+                f" VALUES {all_column_values}{returning}"
+            )
+            if prepared:
+                self.exe_prepared(query, f"insert_returning{self.stmt_id}", exe)
+            else:
+                exe.execute(query, http=Http.RANDOM)
+            table.num_rows += num_rows
         exe.insert_table = table.table_id
         return True
 
@@ -1427,6 +3133,33 @@ class CopyToStdoutAction(Action):
         return result
 
     def run(self, exe: Executor) -> bool:
+        if correctness():
+            # Window-check the COPY TO STDOUT encoder path. Only the key
+            # column is exported: bigints round-trip through the text and csv
+            # encodings without canonicalization pitfalls.
+            tables = [
+                table
+                for table in exe.db.tables
+                if not table.temp or table in exe.temp_objects
+            ]
+            if not tables:
+                return False
+            table = self.rng.choice(tables)
+            key = table.columns[0].name(True)
+            # The window below is only sound for a fresh linearizable read:
+            # close any open transaction (its timestamp may predate `lo`) and
+            # pin the isolation another action may have weakened.
+            exe.commit(http=Http.NO)
+            exe.set_isolation("STRICT SERIALIZABLE")
+            with table.lock:
+                lo = table.version
+            format = self.rng.choice(["TEXT", "CSV"])
+            query = f"COPY (SELECT {key} FROM {table}) TO STDOUT WITH (FORMAT {format})"
+            output = bytearray()
+            exe.copy_to_stdout(query, output)
+            actual = Counter(int(line) for line in output.splitlines())
+            match_window_keys(exe, table, actual, lo, f"COPY TO STDOUT ({format})")
+            return True
         obj = self.rng.choice(exe.db.db_objects())
         query = f"COPY (SELECT * FROM {obj} LIMIT {self.rng.randint(0, 100)}) TO STDOUT"
         if self.rng.choice([True, False]):
@@ -1450,6 +3183,11 @@ class SourceInsertAction(Action):
     run. A workload that grows without bound would need a different mechanism,
     not a row count, since `MySqlSource.prepopulate_rows` already puts up to
     30,000 rows upstream before the source is even created."""
+
+    def applicable(self, exe: Executor) -> bool:
+        # TODO: Sources are not part of the table comparison, so inserting
+        # into them cannot be verified yet; skip until it covers sources.
+        return not correctness()
 
     def run(self, exe: Executor) -> bool:
         with exe.db.lock:
@@ -1501,42 +3239,73 @@ class UpdateAction(Action):
         return result
 
     def run(self, exe: Executor) -> bool:
-        table = None
-        if exe.insert_table is not None:
-            for t in exe.db.tables:
-                if t.table_id == exe.insert_table:
-                    table = t
-                    break
-        if not table:
-            # Temp tables can only be written by their creating session
-            tables = [
-                table
-                for table in exe.db.tables
-                if not table.temp or table in exe.temp_objects
-            ]
-            if not tables:
-                return False
-            table = self.rng.choice(tables)
+        if correctness():
+            table = self.rng.choice(exe.db.tables)
+            # Never SET the key column, the tracking relies on its uniqueness.
+            col_index = self.rng.randrange(1, len(table.columns))
+            column = table.columns[col_index]
+            new_value = column.value(self.rng)
+            with table.lock:
+                # An arbitrary SET expression or WHERE clause cannot be
+                # replayed against the tracked rows, so set one column to a
+                # literal for the rows matching a replayable key predicate.
+                query = f"UPDATE {table} SET {column.name(True)} = {new_value.inquery}"
+                if self.rng.random() < 0.8:
+                    pred_sql, pred_fn = key_predicate(self.rng, table)
+                    query += f" WHERE {pred_sql}"
+                else:
+                    pred_fn = lambda k: True
 
-        set_columns = self.rng.sample(
-            table.columns, self.rng.randint(1, len(table.columns))
-        )
-        set_clause = ", ".join(
-            f"{c.name(True)} = {expression(c.data_type, table.columns, self.rng, kind=ExprKind.WRITE)}"
-            for c in set_columns
-        )
-        predicate = expression(Boolean, table.columns, self.rng, kind=ExprKind.WRITE)
-        if self.rng.random() < 0.2:
-            view_predicate = self.view_predicate(exe, table)
-            if view_predicate:
-                predicate = f"({predicate}) AND {view_predicate}"
-        query = f"UPDATE {table} SET {set_clause} WHERE {predicate}"
-        if self.rng.choice([True, False]):
-            self.stmt_id += 1
-            self.exe_prepared(query, f"update{self.stmt_id}", exe)
+                def transform(state: list[list[Any]]) -> list[list[Any]]:
+                    for row in state:
+                        if pred_fn(row[0]):
+                            row[col_index] = new_value.value
+                    return state
+
+                applied = run_tracked_write(
+                    exe, table, transform, lambda: exe.execute(query, http=Http.NO)
+                )
+            if not applied:
+                return False
         else:
-            exe.execute(query, http=Http.RANDOM)
-        exe.insert_table = table.table_id
+            table = None
+            if exe.insert_table is not None:
+                for t in exe.db.tables:
+                    if t.table_id == exe.insert_table:
+                        table = t
+                        break
+            if not table:
+                # Temp tables can only be written by their creating session
+                tables = [
+                    table
+                    for table in exe.db.tables
+                    if not table.temp or table in exe.temp_objects
+                ]
+                if not tables:
+                    return False
+                table = self.rng.choice(tables)
+
+            set_columns = self.rng.sample(
+                table.columns, self.rng.randint(1, len(table.columns))
+            )
+            set_clause = ", ".join(
+                f"{c.name(True)} = {expression(c.data_type, table.columns, self.rng, kind=ExprKind.WRITE)}"
+                for c in set_columns
+            )
+            predicate = expression(
+                Boolean, table.columns, self.rng, kind=ExprKind.WRITE
+            )
+            if self.rng.random() < 0.2:
+                view_predicate = self.view_predicate(exe, table)
+                if view_predicate:
+                    predicate = f"({predicate}) AND {view_predicate}"
+            query = f"UPDATE {table} SET {set_clause} WHERE {predicate}"
+            if self.rng.choice([True, False]):
+                self.stmt_id += 1
+                self.exe_prepared(query, f"update{self.stmt_id}", exe)
+            else:
+                exe.execute(query, http=Http.RANDOM)
+            exe.insert_table = table.table_id
         return True
 
 
@@ -1588,6 +3357,30 @@ class DeleteAction(Action):
         return errors
 
     def run(self, exe: Executor) -> bool:
+        if correctness():
+            table = self.rng.choice(exe.db.tables)
+            with table.lock:
+                # An arbitrary WHERE clause cannot be replayed against the
+                # tracked rows, so delete either everything or the rows
+                # matching a replayable key predicate.
+                query = f"DELETE FROM {table}"
+                if self.rng.random() < 0.8:
+                    pred_sql, pred_fn = key_predicate(self.rng, table)
+                    query += f" WHERE {pred_sql}"
+
+                    def transform(state: list[list[Any]]) -> list[list[Any]]:
+                        return [row for row in state if not pred_fn(row[0])]
+
+                else:
+                    transform = lambda state: []
+                applied = run_tracked_write(
+                    exe,
+                    table,
+                    transform,
+                    lambda: exe.execute(query, http=Http.NO),
+                )
+            return applied
+
         # Temp tables can only be written by their creating session
         tables = [
             table
@@ -1719,7 +3512,7 @@ class CommentAction(Action):
             return False
         kind, name = self.rng.choice(candidates)
 
-        comment = self.rng.choice([f"'{Text.random_value(self.rng)}'", "NULL"])
+        comment = self.rng.choice([Text.random_value(self.rng).inquery, "NULL"])
         query = f"COMMENT ON {kind} {name} IS {comment}"
         exe.execute(query, http=Http.RANDOM)
         return True
@@ -1789,38 +3582,50 @@ class DropIndexAction(Action):
             return True
 
 
-class CreateTableAction(Action):
-    def run(self, exe: Executor) -> bool:
-        temp = self.rng.choice([True, False])
-        if (
-            not temp
-            and len([table for table in exe.db.tables if not table.temp]) >= MAX_TABLES
-        ):
-            return False
+def create_table(
+    exe: Executor,
+    rng: random.Random,
+    *,
+    temp: bool = False,
+    transactional: bool = False,
+) -> bool:
+    if correctness() and not temp and not exe.db.cleanup_incomplete_tables(exe):
+        return False
+    with exe.db.lock:
+        if temp:
+            if not exe.db.dbs:
+                return False
+            schema: Schema = MzTempSchema(rng.choice(exe.db.dbs))
+        else:
+            if (
+                not exe.db.schemas
+                or sum(not t.temp for t in exe.db.tables) >= MAX_TABLES
+            ):
+                return False
+            schema = rng.choice(exe.db.schemas)
         table_id = exe.db.table_id
         exe.db.table_id += 1
-        if temp:
-            schema = MzTempSchema(self.rng.choice(exe.db.dbs))
-            table = Table(self.rng, table_id, schema, temp=True)
-            table.create(exe)
-        else:
-            try:
-                schema = self.rng.choice(exe.db.schemas)
-            except IndexError:
-                # We mostly prevent index errors, but we don't want to lock too
-                # much since that would reduce our chance of finding race
-                # conditions in production code, so ignore the rare case where
-                # we accidentally removed all objects.
-                return False
-            with schema.lock:
-                if schema not in exe.db.schemas:
-                    return False
-                table = Table(self.rng, table_id, schema)
-                table.create(exe)
-        exe.db.tables.append(table)
+
+    table = Table(rng, table_id, schema, temp=temp)
+    # A correctness-mode retry must find the same table after a schema swap.
+    # The single-statement DDL stress path otherwise races schema changes.
+    with (
+        schema.lock if not transactional or correctness() else contextlib.nullcontext()
+    ):
+        if not temp and schema not in exe.db.schemas:
+            return False
+        if not table.try_create(exe, transactional=transactional):
+            return False
+        with exe.db.lock:
+            exe.db.tables.append(table)
         if temp:
             exe.temp_objects.append(table)
-        return True
+    return True
+
+
+class CreateTableAction(Action):
+    def run(self, exe: Executor) -> bool:
+        return create_table(exe, self.rng, temp=self.rng.choice([True, False]))
 
 
 class DropTableAction(Action):
@@ -1848,13 +3653,29 @@ class DropTableAction(Action):
                 return False
 
             query = f"DROP TABLE {table}"
+            if correctness():
+                # The shadow objects depend on the table and must go with it.
+                query += " CASCADE"
             exe.execute(query, http=Http.RANDOM)
-            # A concurrent CASCADE drop's untrack_objects_in_schemas may have
-            # already filtered this table out of the list, tolerate that.
-            try:
-                exe.db.tables.remove(table)
-            except ValueError:
-                pass
+            with exe.db.lock:
+                if table in exe.db.tables:
+                    exe.db.tables.remove(table)
+                dependents = [
+                    sink
+                    for sink in exe.db.kafka_sinks + exe.db.iceberg_sinks
+                    if sink.base_object is table
+                ]
+
+        # ALTER SINK holds sink.lock before locking its old input. Release
+        # table.lock first, then check whether each in-flight ALTER succeeded.
+        for sink in dependents:
+            with sink.lock, exe.db.lock:
+                if sink.base_object is table:
+                    if isinstance(sink, KafkaSink):
+                        if sink in exe.db.kafka_sinks:
+                            exe.db.kafka_sinks.remove(sink)
+                    elif sink in exe.db.iceberg_sinks:
+                        exe.db.iceberg_sinks.remove(sink)
         return True
 
 
@@ -1889,6 +3710,12 @@ class RenameTableAction(Action):
 
 class AlterTableAddColumnAction(Action):
     def run(self, exe: Executor) -> bool:
+        if correctness():
+            # NOTE: The shadow materialized view pins SELECT * at creation, so
+            # it would not contain the added column and the comparison against
+            # the table would break. Skip until the shadow objects are
+            # recreated on schema changes.
+            return False
         with exe.db.lock:
             if not exe.db.tables:
                 return False
@@ -2771,8 +4598,7 @@ class ParameterizedQueryAction(Action):
         # assignment cast on EXECUTE always succeeds (e.g. a bytea parameter
         # rejects a bare text literal).
         values = ", ".join(
-            f"({t.random_value(self.rng, in_query=True)})::{t.name()}"
-            for t in param_types
+            f"({t.random_value(self.rng).inquery})::{t.name()}" for t in param_types
         )
         # Run sequentially, not in a try/finally: if EXECUTE fails it aborts
         # the transaction, and a DEALLOCATE in a finally would then fail with
@@ -2889,6 +4715,31 @@ class ReadOnlyTransactionAction(Action):
         return True
 
 
+class ShadowMvReplaceAction(Action):
+    """Correctness mode: CREATE OR REPLACE a table's shadow materialized view
+    with the identical definition. The coordinator tears down and rebuilds the
+    dataflow while SelectAction keeps comparing the view against the table at
+    shared timestamps, racing rehydration against the equality oracle."""
+
+    def applicable(self, exe: Executor) -> bool:
+        return correctness() and exe.db.complexity in (
+            Complexity.DDL,
+            Complexity.DDLOnly,
+        )
+
+    def run(self, exe: Executor) -> bool:
+        tables = [table for table in exe.db.tables if not table.temp]
+        if not tables:
+            return False
+        table = self.rng.choice(tables)
+        exe.execute(
+            f"CREATE OR REPLACE MATERIALIZED VIEW {table.shadow_mv()} IN CLUSTER"
+            f" quickstart AS SELECT * FROM {table}",
+            http=Http.NO,
+        )
+        return True
+
+
 class DDLTransactionAction(Action):
     """Race concurrent catalog changes against CREATE TABLE deferred until COMMIT."""
 
@@ -2901,28 +4752,7 @@ class DDLTransactionAction(Action):
         ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> bool:
-        if len([t for t in exe.db.tables if not t.temp]) >= MAX_TABLES:
-            return False
-        try:
-            schema = self.rng.choice(exe.db.schemas)
-        except IndexError:
-            return False
-        table_id = exe.db.table_id
-        exe.db.table_id += 1
-        table = Table(self.rng, table_id, schema)
-        exe.execute("BEGIN", http=Http.NO)
-        try:
-            table.create(exe)
-            exe.execute("COMMIT", http=Http.NO)
-        except QueryError:
-            try:
-                exe.execute("ROLLBACK", http=Http.NO)
-            except QueryError:
-                pass
-            raise
-        with exe.db.lock:
-            exe.db.tables.append(table)
-        return True
+        return create_table(exe, self.rng, transactional=True)
 
 
 class CommitRollbackAction(Action):
@@ -3701,6 +5531,12 @@ class CreateViewAction(Action):
             "unknown cluster replica",
         ]
         return errors
+
+    def applicable(self, exe: Executor) -> bool:
+        # Correctness mode: random views are unverifiable (their bodies are
+        # arbitrary expressions) and would be CASCADE-dropped silently with
+        # their base table; the per-table shadow views cover view coverage.
+        return not correctness()
 
     def run(self, exe: Executor) -> bool:
         temp = self.rng.choice([True, False])
@@ -4982,6 +6818,7 @@ class ReconnectAction(Action):
                 )
                 cur = conn.cursor()
                 exe.cur = cur
+                exe.writer_session = None
                 # Reapply the session settings from Worker.run, they don't
                 # survive the reconnect. They must be applied in autocommit
                 # mode: a value set inside a transaction is only staged, and
@@ -5184,6 +7021,7 @@ class ZeroDowntimeDeployAction(Action):
                     "materialized2" if mz_service == "materialized" else "materialized"
                 ),
             )
+            exe.db.deployment = (self.deploy_generation, mz_service)
 
         time.sleep(self.rng.uniform(60, 120))
         return True
@@ -5839,7 +7677,9 @@ class CreateIcebergSinkAction(Action):
                 self.rng,
             )
             sink.create(exe)
-            exe.db.iceberg_sinks.append(sink)
+            with exe.db.lock:
+                if sink.base_object in exe.db.db_objects_for_sinks():
+                    exe.db.iceberg_sinks.append(sink)
         return True
 
 
@@ -5868,7 +7708,9 @@ class DropIcebergSinkAction(Action):
 
             query = f"DROP SINK {sink}"
             exe.execute(query, http=Http.RANDOM)
-            exe.db.iceberg_sinks.remove(sink)
+            with exe.db.lock:
+                if sink in exe.db.iceberg_sinks:
+                    exe.db.iceberg_sinks.remove(sink)
         return True
 
 
@@ -5907,7 +7749,9 @@ class CreateKafkaSinkAction(Action):
                 self.rng,
             )
             sink.create(exe)
-            exe.db.kafka_sinks.append(sink)
+            with exe.db.lock:
+                if sink.base_object in exe.db.db_objects_for_sinks():
+                    exe.db.kafka_sinks.append(sink)
         return True
 
 
@@ -5936,7 +7780,9 @@ class DropKafkaSinkAction(Action):
 
             query = f"DROP SINK {sink}"
             exe.execute(query, http=Http.RANDOM)
-            exe.db.kafka_sinks.remove(sink)
+            with exe.db.lock:
+                if sink in exe.db.kafka_sinks:
+                    exe.db.kafka_sinks.remove(sink)
         return True
 
 
@@ -5972,7 +7818,7 @@ class HttpPostAction(Action):
 
             url = f"http://{exe.db.host}:{exe.db.ports['http' if exe.mz_service == 'materialized' else 'http2']}/api/webhook/{urllib.parse.quote(source.schema.db.name(), safe='')}/{urllib.parse.quote(source.schema.name(), safe='')}/{urllib.parse.quote(source.name(), safe='')}"
 
-            payload = source.body_format.to_data_type().random_value(self.rng)
+            payload = source.body_format.to_data_type().random_value(self.rng).value
 
             # Copy, extending the source's list would grow it on every post.
             header_fields = list(source.explicit_include_headers)
@@ -5983,7 +7829,7 @@ class HttpPostAction(Action):
                 header: (
                     f"{datetime.datetime.now(datetime.UTC)}"
                     if header == "timestamp"
-                    else f'"{Text.random_value(self.rng)}"'.encode()
+                    else f'"{Text.random_value(self.rng).value}"'.encode()
                 )
                 for header in self.rng.sample(header_fields, len(header_fields))
             }
@@ -6682,6 +8528,7 @@ ddl_action_list = ActionList(
         # TODO: Reenable when SQL-952 is fixed
         # (CreateOrReplaceReplacementMaterializedViewAction, 5),
         (SealedCollectionCheckAction, 2),
+        (ShadowMvReplaceAction, 5),
         (TransactionIsolationAction, 1),
         (BoundedStalenessReadAction, 2),
         (ReadOnlyTransactionAction, 3),
