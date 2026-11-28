@@ -838,6 +838,47 @@ async fn test_role_command_preserves_rbac_warning() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+async fn test_semantic_drop_cluster_status_cleanup() {
+    use mz_postgres_util::{Sql, batch_execute};
+
+    let server = test_util::TestHarness::default().start().await;
+    let client = server.connect().await.expect("connect DDL client");
+    let http = reqwest::Client::new();
+    for sql in [
+        "CREATE CLUSTER drop_status_cluster REPLICAS (r1 (SIZE 'scale=1,workers=1'), r2 (SIZE 'scale=1,workers=1'))",
+        "DROP CLUSTER REPLICA drop_status_cluster.r1",
+        "DROP CLUSTER REPLICA IF EXISTS drop_status_cluster.r1",
+        "DROP CLUSTER drop_status_cluster",
+        "CREATE CLUSTER drop_status_cluster REPLICAS (r1 (SIZE 'scale=1,workers=1'))",
+        "DROP CLUSTER drop_status_cluster",
+        "DROP CLUSTER IF EXISTS drop_status_cluster",
+    ] {
+        batch_execute(&client, Sql::new(sql))
+            .await
+            .expect("cluster status cleanup preserves coordinator consistency");
+        let consistency: serde_json::Value = http
+            .get(format!(
+                "http://{}/api/coordinator/check",
+                server.internal_http_local_addr()
+            ))
+            .header("x-materialize-user", "mz_system")
+            .send()
+            .await
+            .expect("request consistency check")
+            .error_for_status()
+            .expect("consistency endpoint succeeds")
+            .json()
+            .await
+            .expect("decode consistency result");
+        assert_eq!(
+            consistency,
+            serde_json::Value::String(String::new()),
+            "coordinator state after {sql}"
+        );
+    }
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
 async fn test_drop_preserves_notice_delivery() {
     use mz_postgres_util::{PostgresError, Sql, batch_execute};
 

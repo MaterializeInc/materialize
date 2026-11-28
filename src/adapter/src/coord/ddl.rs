@@ -1508,8 +1508,6 @@ impl Coordinator {
         let phase_seconds = self.metrics.catalog_transact_phase_seconds.clone();
         let phase_start = Instant::now();
 
-        let mut clusters_to_drop = vec![];
-        let mut cluster_replicas_to_drop = vec![];
         let mut clusters_to_create = vec![];
         let mut cluster_replicas_to_create = vec![];
         let mut update_metrics_config = false;
@@ -1528,31 +1526,6 @@ impl Coordinator {
 
         for op in &ops {
             match op {
-                catalog::Op::DropObjects {
-                    objects: drop_object_infos,
-                    ..
-                } => {
-                    for drop_object_info in drop_object_infos {
-                        match &drop_object_info {
-                            catalog::DropObjectInfo::Item(_) => {
-                                // Nothing to do, these will be handled by
-                                // applying the side effects that we return.
-                            }
-                            catalog::DropObjectInfo::Cluster(id) => {
-                                clusters_to_drop.push(*id);
-                            }
-                            catalog::DropObjectInfo::ClusterReplica((
-                                cluster_id,
-                                replica_id,
-                                _reason,
-                            )) => {
-                                // Drop the cluster replica itself.
-                                cluster_replicas_to_drop.push((*cluster_id, *replica_id));
-                            }
-                            _ => (),
-                        }
-                    }
-                }
                 catalog::Op::ResetSystemConfiguration { name }
                 | catalog::Op::UpdateSystemConfiguration { name, .. } => {
                     update_metrics_config |= self
@@ -1691,12 +1664,6 @@ impl Coordinator {
             .observe(phase_seconds.with_label_values(&["transact"]))
             .await?;
 
-        for (cluster_id, replica_id) in &cluster_replicas_to_drop {
-            cluster_replica_statuses.remove_cluster_replica_statuses(cluster_id, replica_id);
-        }
-        for cluster_id in &clusters_to_drop {
-            cluster_replica_statuses.remove_cluster_statuses(cluster_id);
-        }
         for cluster_id in clusters_to_create {
             cluster_replica_statuses.initialize_cluster_statuses(cluster_id);
         }
