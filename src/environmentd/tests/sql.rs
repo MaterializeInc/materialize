@@ -677,7 +677,7 @@ async fn test_semantic_view_index_execution_routes() {
             "CREATE INDEX routed_index ON routed_view (a)",
             "BEGIN; CREATE VIEW deferred_view AS SELECT 2 AS a; COMMIT",
             "BEGIN; CREATE INDEX deferred_index ON deferred_view (a); COMMIT",
-            "EXPLAIN PLAN FOR CREATE VIEW explain_only_view AS SELECT 3 AS a",
+            "EXPLAIN LOCALLY OPTIMIZED PLAN FOR CREATE VIEW explain_only_view AS SELECT 3 AS a",
             "EXPLAIN PLAN FOR CREATE INDEX explain_only_index ON routed_view (a)",
         ] {
             batch_execute(&client, Sql::new(sql)).await.unwrap();
