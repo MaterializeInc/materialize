@@ -407,26 +407,27 @@ impl<'a> Parser<'a> {
 
     fn parse_statements(&mut self) -> Result<Vec<StatementParseResult<'a>>, ParserStatementError> {
         let mut stmts = Vec::new();
-        let mut expecting_statement_delimiter = false;
         loop {
-            // ignore empty statements (between successive statement delimiters)
-            while self.consume_token(&Token::Semicolon) {
-                expecting_statement_delimiter = false;
+            while self.consume_token(&Token::Semicolon) {}
+            if self.peek_token().is_none() {
+                return Ok(stmts);
             }
 
-            if self.peek_token().is_none() {
-                break;
-            } else if expecting_statement_delimiter {
+            let stmt = self.parse_statement()?;
+            if let Some(next) = self.peek_token()
+                && next != Token::Semicolon
+            {
                 return self
-                    .expected(self.peek_pos(), "end of statement", self.peek_token())
+                    .expected(self.peek_pos(), "end of statement", Some(next))
                     .map_no_statement_parser_err();
             }
 
-            let s = self.parse_statement()?;
-            stmts.push(s);
-            expecting_statement_delimiter = true;
+            if stmts.is_empty() {
+                // Most batches contain one statement, and each spare slot is a full AST node.
+                stmts.reserve_exact(1);
+            }
+            stmts.push(stmt);
         }
-        Ok(stmts)
     }
     /// Parse a single top-level statement (such as SELECT, INSERT, CREATE, etc.),
     /// stopping before the statement separator, if any. Returns the parsed statement and the SQL
@@ -543,22 +544,19 @@ impl<'a> Parser<'a> {
                     // a top-level `Statement::Show`. Unwrap the degenerate
                     // wrapper so the AST is independent of redundant parens
                     // and the parse + display + reparse round trip is stable.
-                    if let Query {
-                        ctes: CteBlock::Simple(ctes),
-                        body: SetExpr::Show(show),
-                        order_by,
-                        limit: None,
-                        offset: None,
-                    } = &query
-                    {
-                        if ctes.is_empty() && order_by.is_empty() {
-                            return Ok(Statement::Show(show.clone()));
-                        }
-                    }
-                    Ok(Statement::Select(SelectStatement {
-                        query,
-                        as_of: None, // Only the outermost SELECT may have an AS OF clause.
-                    }))
+                    Ok(match query {
+                        Query {
+                            ctes: CteBlock::Simple(ctes),
+                            body: SetExpr::Show(show),
+                            order_by,
+                            limit: None,
+                            offset: None,
+                        } if ctes.is_empty() && order_by.is_empty() => Statement::Show(*show),
+                        query => Statement::Select(SelectStatement {
+                            query,
+                            as_of: None, // Only the outermost SELECT may have an AS OF clause.
+                        }),
+                    })
                 }
                 unexpected => self
                     .expected(
@@ -916,13 +914,13 @@ impl<'a> Parser<'a> {
                     None
                 };
 
-                Some(WindowSpec {
+                Some(Box::new(WindowSpec {
                     partition_by,
                     order_by,
                     window_frame,
                     ignore_nulls,
                     respect_nulls,
-                })
+                }))
             } else {
                 None
             };
@@ -8145,7 +8143,7 @@ impl<'a> Parser<'a> {
         } else if self.parse_keyword(VALUES) {
             SetExpr::Values(self.parse_values()?)
         } else if self.parse_keyword(SHOW) {
-            SetExpr::Show(self.parse_show()?)
+            SetExpr::Show(Box::new(self.parse_show()?))
         } else if self.parse_keyword(TABLE) {
             SetExpr::Table(self.parse_raw_name()?)
         } else {

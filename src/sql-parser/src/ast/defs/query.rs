@@ -128,7 +128,7 @@ pub enum SetExpr<T: AstInfo> {
         right: Box<SetExpr<T>>,
     },
     Values(Values<T>),
-    Show(ShowStatement<T>),
+    Show(Box<ShowStatement<T>>),
     Table(T::ItemName),
 }
 

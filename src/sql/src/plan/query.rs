@@ -2044,7 +2044,7 @@ fn plan_set_expr(
                 Ok((expr, scope))
             }
 
-            match stmt.clone() {
+            match stmt.as_ref().clone() {
                 ShowStatement::ShowColumns(stmt) => {
                     show::show_columns(qcx.scx, stmt)?.plan_hir(qcx)
                 }
@@ -5717,7 +5717,7 @@ fn plan_function<'a>(
                 }
             } else {
                 let (ignore_nulls, order_by_exprs, col_orders, window_frame, partition_by) =
-                    plan_window_function_common(ecx, &f.name, &f.over)?;
+                    plan_window_function_common(ecx, &f.name, f.over.as_deref())?;
 
                 // https://github.com/MaterializeInc/database-issues/issues/6720
                 match (&window_frame.start_bound, &window_frame.end_bound) {
@@ -6011,7 +6011,7 @@ fn plan_window_function_non_aggr<'a>(
     PlanError,
 > {
     let (ignore_nulls, order_by_exprs, col_orders, window_frame, partition) =
-        plan_window_function_common(ecx, name, over)?;
+        plan_window_function_common(ecx, name, over.as_deref())?;
 
     if *distinct {
         sql_bail!(
@@ -6053,7 +6053,7 @@ fn plan_window_function_non_aggr<'a>(
 fn plan_window_function_common(
     ecx: &ExprContext,
     name: &<Aug as AstInfo>::ItemName,
-    over: &Option<WindowSpec<Aug>>,
+    over: Option<&WindowSpec<Aug>>,
 ) -> Result<
     (
         bool,
@@ -6072,7 +6072,7 @@ fn plan_window_function_common(
         );
     }
 
-    let window_spec = match over.as_ref() {
+    let window_spec = match over {
         Some(over) => over,
         None => sql_bail!("window function {} requires an OVER clause", name),
     };

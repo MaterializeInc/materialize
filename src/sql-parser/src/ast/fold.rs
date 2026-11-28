@@ -50,7 +50,7 @@
 //!         name: folder.fold_item_name(node.name),
 //!         args: folder.fold_function_args(node.args),
 //!         filter: node.filter.map(|filter| Box::new(folder.fold_expr(*filter))),
-//!         over: node.over.map(|over| folder.fold_window_spec(over)),
+//!         over: node.over.map(|over| Box::new(folder.fold_window_spec(*over))),
 //!         distinct: node.distinct,
 //!    }
 //! }
