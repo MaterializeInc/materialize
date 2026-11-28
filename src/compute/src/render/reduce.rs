@@ -1199,47 +1199,88 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         RowRowArrangement<'s, T>,
         VecCollection<'s, T, DataflowErrorSer, Diff>,
     ) {
-        let aggregations = aggr_funcs.len();
-        // Gather the relevant values into a vec of rows ordered by aggregation_index
-        let collection = collection
-            .map(move |(key, row)| {
-                let mut row_builder = SharedRow::get();
-                let mut values = Vec::with_capacity(aggregations);
-                values.extend(
-                    row.iter()
-                        .take(aggregations)
-                        .map(|v| row_builder.pack_using(std::iter::once(v))),
-                );
+        fn to_monoids(
+            rows: impl IntoIterator<Item = Row>,
+            funcs: &[AggregateFunc],
+        ) -> Vec<ReductionMonoid> {
+            let mut output = Vec::with_capacity(funcs.len());
+            for (row, func) in rows.into_iter().zip_eq(funcs) {
+                output.push(monoids::get_monoid(row, func).expect(
+                    "hierarchical aggregations are expected to have monoid implementations",
+                ));
+            }
+            output
+        }
 
-                (key, values)
-            })
-            .consolidate_named_if::<ConsolidateBatcher<_, _, _>>(
-                must_consolidate,
-                "Consolidated ReduceMonotonic input",
-            );
-
-        // It should be now possible to ensure that we have a monotonic collection.
         let error_logger = self.error_logger();
-        let (partial, validation_errs) = collection.ensure_monotonic(move |data, diff| {
+        let invalid = move |data: &dyn std::fmt::Debug, diff: Diff| {
             error_logger.log(
                 "Non-monotonic input to ReduceMonotonic",
                 &format!("data={data:?}, diff={diff}"),
             );
             let m = "tried to build a monotonic reduction on non-monotonic input".into();
             (EvalError::Internal(m).into(), Diff::ONE)
-        });
-        // We can place our rows directly into the diff field, and
-        // only keep the relevant one corresponding to evaluating our
-        // aggregate, instead of having to do a hierarchical reduction.
-        let partial = partial.explode_one(move |(key, values)| {
-            let mut output = Vec::new();
-            for (row, func) in values.into_iter().zip_eq(aggr_funcs.iter()) {
-                output.push(monoids::get_monoid(row, func).expect(
-                    "hierarchical aggregations are expected to have monoid implementations",
-                ));
-            }
-            (key, output)
-        });
+        };
+
+        // Consolidation hashes and sorts its input, which can decide which of two
+        // equal extrema survives. Signed zero, for example, is visible in text.
+        let use_singletons = must_consolidate
+            && !aggr_funcs.iter().all(|func| {
+                use AggregateFunc::*;
+                matches!(
+                    func,
+                    MinInt16
+                        | MaxInt16
+                        | MinInt32
+                        | MaxInt32
+                        | MinInt64
+                        | MaxInt64
+                        | MinUInt16
+                        | MaxUInt16
+                        | MinUInt32
+                        | MaxUInt32
+                        | MinUInt64
+                        | MaxUInt64
+                        | MinBool
+                        | MaxBool
+                        | MinString
+                        | MaxString
+                        | MinMzTimestamp
+                        | MaxMzTimestamp
+                )
+            });
+        let name = "Consolidated ReduceMonotonic input";
+        let (partial, validation_errs) = if use_singletons {
+            let aggregations = aggr_funcs.len();
+            let (valid, errs) = collection
+                .map(move |(key, values)| {
+                    let mut row_builder = SharedRow::get();
+                    let mut rows = Vec::with_capacity(aggregations);
+                    rows.extend(
+                        values
+                            .iter()
+                            .take(aggregations)
+                            .map(|v| row_builder.pack_using([v])),
+                    );
+                    (key, rows)
+                })
+                .consolidate_named_if::<ConsolidateBatcher<_, _, _>>(true, name)
+                .ensure_monotonic(move |data, diff| invalid(&data, diff));
+            let partial =
+                valid.explode_one(move |(key, rows)| (key, to_monoids(rows, &aggr_funcs)));
+            (partial, errs)
+        } else {
+            let (valid, errs) = collection
+                .consolidate_named_if::<ConsolidateBatcher<_, _, _>>(must_consolidate, name)
+                .ensure_monotonic(move |data, diff| invalid(&data, diff));
+            let partial = valid.explode_one(move |(key, values)| {
+                (
+                    key,
+                    to_monoids(values.iter().map(|v| Row::pack([v])), &aggr_funcs),
+                )
+            });
+            (partial, errs)
+        };
 
         // Allocations for the two closures.
         let mut datums1 = DatumVec::new();
